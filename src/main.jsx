@@ -114,6 +114,8 @@ const TEXT = {
     saveHomeCountry: "Save home country",
     selectHomeCountryRequired: "Select a home country to continue.",
     countryNotFound: "Country not found on the map.",
+    databaseSetupRequired:
+      "Database setup required: run supabase/migrations/006_profiles_home_country_guard.sql in Supabase SQL Editor, then refresh this page.",
     removeVisited: "Remove from visited",
     badges: "Badges",
     unlocked: "Unlocked",
@@ -211,6 +213,8 @@ const TEXT = {
     saveHomeCountry: "홈 국가 저장",
     selectHomeCountryRequired: "계속하려면 홈 국가를 선택해 주세요.",
     countryNotFound: "지도에서 해당 국가를 찾지 못했습니다.",
+    databaseSetupRequired:
+      "데이터베이스 설정이 필요합니다: Supabase SQL Editor에서 supabase/migrations/006_profiles_home_country_guard.sql을 실행한 뒤 새로고침해 주세요.",
     removeVisited: "방문 기록에서 제거",
     badges: "배지",
     unlocked: "해제됨",
@@ -326,6 +330,12 @@ function formatText(language, key, values = {}) {
     (text, [name, value]) => text.replace(`{${name}}`, value),
     t(language, key),
   );
+}
+
+function isMissingHomeCountryColumnError(error) {
+  return String(error?.message || error || "")
+    .toLowerCase()
+    .includes("home_country_code");
 }
 
 function percent(value, total) {
@@ -1737,11 +1747,14 @@ function App() {
     const userId = session?.user?.id;
     if (!supabase || !userId) return;
 
-    const [{ data: profileRows }, { count: totalVisitRecords }, { data: visitRows }] = await Promise.all([
+    const [{ data: profileRows, error: profileStatsError }, { count: totalVisitRecords }, { data: visitRows }] = await Promise.all([
       supabase.from("profiles").select("id, home_country_code"),
       supabase.from("visited_countries").select("id", { count: "exact", head: true }),
       supabase.from("visited_countries").select("user_id, country_code"),
     ]);
+    if (isMissingHomeCountryColumnError(profileStatsError)) {
+      setNotice(t(language, "databaseSetupRequired"));
+    }
 
     let totalLandmarkVisits = landmarkVisits.length;
     const { count: landmarkCount, error: landmarkCountError } = await supabase
@@ -2012,7 +2025,11 @@ function App() {
       .select("*")
       .single();
 
-    if (error && String(error.message || "").includes("home_country_code")) {
+    if (error && isMissingHomeCountryColumnError(error) && shouldUpdateHomeCountry) {
+      return { error: t(language, "databaseSetupRequired") };
+    }
+
+    if (error && isMissingHomeCountryColumnError(error)) {
       const fallback = await supabase
         .from("profiles")
         .update({ username, language: nextLanguage || language })
@@ -2076,7 +2093,9 @@ function App() {
       .single();
 
     if (error) {
-      return { error: error.message };
+      return {
+        error: isMissingHomeCountryColumnError(error) ? t(language, "databaseSetupRequired") : error.message,
+      };
     }
 
     setProfile((current) => ({

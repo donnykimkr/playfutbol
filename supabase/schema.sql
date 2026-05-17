@@ -6,6 +6,7 @@ create table if not exists public.profiles (
   avatar_url text,
   is_admin boolean default false,
   language text default 'en',
+  home_country_code text,
   friend_code text not null unique,
   constraint profiles_id_fkey foreign key (id) references auth.users(id) on delete cascade
 );
