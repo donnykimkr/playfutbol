@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { GeoJSON, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
-import { Check, Globe2, Home, ImagePlus, Landmark, LogOut, Medal, Plus, RefreshCw, Search, Settings, X } from "lucide-react";
+import { Check, Globe2, ImagePlus, Landmark, LogOut, Medal, MessageCircle, Plus, RefreshCw, Search, Settings, X } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./styles.css";
@@ -57,6 +57,16 @@ const TEXT = {
     collection: "Collection",
     collected: "Collected",
     close: "Close",
+    community: "Community",
+    communityBody: "Body",
+    communityBodyPlaceholder: "Share a quick note for this country board.",
+    communityEmpty: "No posts yet. Start the board.",
+    communityLoadError: "Could not load community posts.",
+    communityPost: "Post",
+    communitySetupRequired:
+      "Database setup required: run supabase/migrations/007_community_posts.sql in Supabase SQL Editor, then refresh this page.",
+    communityTitle: "Title",
+    communityTitlePlaceholder: "What should travelers know?",
     continueWithGoogle: "Continue with Google",
     countryCollection: "Country Collection",
     countryDetailsPrompt: "Country details, your visit status, and friend visits will appear here.",
@@ -76,6 +86,7 @@ const TEXT = {
     globalPercentileTop: "You are in the top {percent}% of travelers",
     globalTotal: "Global total",
     go: "Go",
+    guest: "Guest",
     language: "Language",
     landmarkCollection: "Landmark Collection",
     leaderboard: "Leaderboard",
@@ -108,6 +119,7 @@ const TEXT = {
     uploadAvatar: "Upload avatar",
     username: "Username",
     homeCountry: "Home country",
+    homeRole: "Home",
     noHomeCountry: "No home country set",
     chooseHomeCountry: "Choose your home country",
     chooseHomeCountryCopy: "Your home country is tracked separately and does not count as a normal visited country.",
@@ -156,6 +168,16 @@ const TEXT = {
     collection: "컬렉션",
     collected: "수집 완료",
     close: "닫기",
+    community: "커뮤니티",
+    communityBody: "내용",
+    communityBodyPlaceholder: "이 나라 게시판에 짧은 글을 남겨보세요.",
+    communityEmpty: "아직 글이 없습니다. 첫 글을 올려보세요.",
+    communityLoadError: "커뮤니티 글을 불러오지 못했습니다.",
+    communityPost: "게시",
+    communitySetupRequired:
+      "데이터베이스 설정이 필요합니다: Supabase SQL Editor에서 supabase/migrations/007_community_posts.sql을 실행한 뒤 새로고침해 주세요.",
+    communityTitle: "제목",
+    communityTitlePlaceholder: "여행자들이 알면 좋은 내용은?",
     continueWithGoogle: "Google로 계속하기",
     countryCollection: "국가 컬렉션",
     countryDetailsPrompt: "국가 상세 정보, 방문 상태, 친구 방문 기록이 여기에 표시됩니다.",
@@ -175,6 +197,7 @@ const TEXT = {
     globalPercentileTop: "여행자 상위 {percent}%입니다",
     globalTotal: "전체 진행률",
     go: "이동",
+    guest: "방문자",
     language: "언어",
     landmarkCollection: "랜드마크 컬렉션",
     leaderboard: "리더보드",
@@ -207,6 +230,7 @@ const TEXT = {
     uploadAvatar: "아바타 업로드",
     username: "사용자명",
     homeCountry: "홈 국가",
+    homeRole: "홈",
     noHomeCountry: "홈 국가 미설정",
     chooseHomeCountry: "홈 국가를 선택하세요",
     chooseHomeCountryCopy: "홈 국가는 일반 방문 국가와 별도로 저장됩니다.",
@@ -338,9 +362,47 @@ function isMissingHomeCountryColumnError(error) {
     .includes("home_country_code");
 }
 
+function isMissingCommunityPostsError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return message.includes("community_posts") || message.includes("schema cache");
+}
+
 function percent(value, total) {
   if (!total) return 0;
   return Math.round((value / total) * 100);
+}
+
+function getHomeCountryDisplay(profile, language) {
+  const code = normalizeCountryCode(profile?.home_country_code);
+  if (!code) return "";
+  return `${countryFlag(code)} ${getCountryName(code, language)}`;
+}
+
+function getCommunityRole({ countryCode, homeCountryCode, visitedSet }) {
+  const boardCode = normalizeCountryCode(countryCode);
+  if (boardCode && normalizeCountryCode(homeCountryCode) === boardCode) return "home";
+  if (visitedSet?.has?.(boardCode)) return "visited";
+  return "guest";
+}
+
+function getRoleLabel(role, language) {
+  if (role === "home") return t(language, "homeRole");
+  if (role === "visited") return t(language, "visited");
+  return t(language, "guest");
+}
+
+function formatTimestamp(value, language) {
+  if (!value) return "";
+  try {
+    return new Intl.DateTimeFormat(language === "ko" ? "ko-KR" : "en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return "";
+  }
 }
 
 function escapeHtml(value) {
@@ -975,7 +1037,17 @@ function TravelMap({
   );
 }
 
-function CountryPanel({ country, mineSet, friendVisitMap, language, homeCountryCode, onMarkVisited, onRemoveVisited, isSaving }) {
+function CountryPanel({
+  country,
+  mineSet,
+  friendVisitMap,
+  language,
+  homeCountryCode,
+  onMarkVisited,
+  onRemoveVisited,
+  onOpenCommunity,
+  isSaving,
+}) {
   const friends = country ? friendVisitMap.get(country.code) || [] : [];
   const isHome = Boolean(country && homeCountryCode && country.code === homeCountryCode);
   const mine = country ? mineSet.has(country.code) : false;
@@ -1000,6 +1072,10 @@ function CountryPanel({ country, mineSet, friendVisitMap, language, homeCountryC
           >
             <Check size={17} />
             {isHome ? t(language, "homeCountry") : mine ? t(language, "removeVisited") : t(language, "countryVisited")}
+          </button>
+          <button className="secondary-action" onClick={() => onOpenCommunity(country)}>
+            <MessageCircle size={17} />
+            {t(language, "community")}
           </button>
           <div>
             <h3>{t(language, "friendsVisited")}</h3>
@@ -1064,7 +1140,7 @@ function FriendPanel({ friends, friendQuery, setFriendQuery, language, onAddFrie
 }
 
 function ProfilePanel({ profile, language }) {
-  const homeCountryName = getCountryName(profile?.home_country_code, language);
+  const homeCountryDisplay = getHomeCountryDisplay(profile, language);
   return (
     <aside className="side-panel profile-card">
       <div className="panel-heading">
@@ -1076,7 +1152,7 @@ function ProfilePanel({ profile, language }) {
             </h2>
             <p>{profile?.username || t(language, "profileLoading")}</p>
             <p className="profile-home-line">
-              <Home size={13} /> {homeCountryName || t(language, "noHomeCountry")}
+              {homeCountryDisplay || `🏳 ${t(language, "noHomeCountry")}`}
             </p>
           </div>
         </div>
@@ -1167,6 +1243,10 @@ function ProfileSettingsModal({ profile, language, countryOptions = [], onClose,
   const [isUploading, setIsUploading] = useState(false);
 
   const normalized = normalizeUsername(username);
+  const homeCountryDisplay = getHomeCountryDisplay(
+    { ...profile, home_country_code: homeCountryCode || profile?.home_country_code },
+    language,
+  );
 
   const handleSave = async (event) => {
     event.preventDefault();
@@ -1236,6 +1316,7 @@ function ProfileSettingsModal({ profile, language, countryOptions = [], onClose,
           <div className="profile-summary">
             <span>{t(language, "currentUsername")}</span>
             <strong>{profile.username || t(language, "notSet")}</strong>
+            <small>{homeCountryDisplay || t(language, "noHomeCountry")}</small>
           </div>
           <label className="secondary-action">
             <ImagePlus size={17} />
@@ -1451,6 +1532,184 @@ function CountryCollectionModal({ countriesByContinent, mineSet, homeCountryCode
   );
 }
 
+function RoleBadge({ role, language }) {
+  return <span className={`role-badge role-${role}`}>{getRoleLabel(role, language)}</span>;
+}
+
+function CommunityModal({
+  countries,
+  selectedCountry,
+  posts,
+  isLoading,
+  isPosting,
+  language,
+  homeCountryCode,
+  mineSet,
+  authorVisitedMap,
+  onSelectCountry,
+  onCreatePost,
+  onClose,
+}) {
+  const [query, setQuery] = useState("");
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [error, setError] = useState("");
+
+  const boardCountry = selectedCountry || countries[0];
+  const boardCode = normalizeCountryCode(boardCountry?.code);
+  const myRole = getCommunityRole({ countryCode: boardCode, homeCountryCode, visitedSet: mineSet });
+
+  const matches = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return countries.slice(0, 8);
+    return countries
+      .filter(
+        (country) =>
+          country.name.toLowerCase().includes(normalized) || country.code.toLowerCase() === normalized,
+      )
+      .slice(0, 8);
+  }, [countries, query]);
+
+  const handleCountrySubmit = (event) => {
+    event.preventDefault();
+    const typed = query.trim().toLowerCase();
+    const nextCountry =
+      matches[0] ||
+      countries.find((country) => country.name.toLowerCase() === typed) ||
+      countries.find((country) => country.code.toLowerCase() === typed);
+    if (nextCountry) {
+      onSelectCountry(nextCountry);
+      setQuery("");
+    }
+  };
+
+  const handlePostSubmit = async (event) => {
+    event.preventDefault();
+    setError("");
+
+    const cleanTitle = title.trim();
+    const cleanBody = body.trim();
+    if (!cleanTitle || !cleanBody) {
+      setError(t(language, "communityTitlePlaceholder"));
+      return;
+    }
+
+    const result = await onCreatePost({ countryCode: boardCode, title: cleanTitle, body: cleanBody });
+    if (result?.error) {
+      setError(result.error);
+      return;
+    }
+
+    setTitle("");
+    setBody("");
+  };
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="community-title">
+      <section className="collection-modal community-modal">
+        <div className="modal-title-row">
+          <div>
+            <p className="eyebrow">{t(language, "community")}</p>
+            <h2 id="community-title">
+              {countryFlag(boardCode)} {getCountryName(boardCode, language)}
+            </h2>
+            <RoleBadge role={myRole} language={language} />
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} title={t(language, "close")} aria-label={t(language, "close")}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <form className="community-search" onSubmit={handleCountrySubmit}>
+          <Search size={16} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t(language, "searchCountry")}
+            aria-label={t(language, "searchCountry")}
+            list="community-country-options"
+          />
+          <datalist id="community-country-options">
+            {countries.map((country) => (
+              <option key={country.code} value={country.name} />
+            ))}
+          </datalist>
+          <button className="search-button">{t(language, "go")}</button>
+        </form>
+
+        <div className="community-country-strip">
+          {matches.map((country) => (
+            <button
+              type="button"
+              className={`country-chip ${country.code === boardCode ? "is-visited" : ""}`}
+              key={country.code}
+              onClick={() => onSelectCountry(country)}
+            >
+              {country.flag} {country.name}
+            </button>
+          ))}
+        </div>
+
+        <form className="community-compose" onSubmit={handlePostSubmit}>
+          <label className="field-label">
+            {t(language, "communityTitle")}
+            <input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder={t(language, "communityTitlePlaceholder")}
+              maxLength={120}
+            />
+          </label>
+          <label className="field-label">
+            {t(language, "communityBody")}
+            <textarea
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+              placeholder={t(language, "communityBodyPlaceholder")}
+              rows={4}
+              maxLength={2000}
+            />
+          </label>
+          {error && <p className="form-error">{error}</p>}
+          <button className="primary-action" disabled={isPosting || !boardCode}>
+            {isPosting ? t(language, "saving") : t(language, "communityPost")}
+          </button>
+        </form>
+
+        <div className="community-post-list">
+          {isLoading ? (
+            <p className="empty-text">{t(language, "loadingMap")}</p>
+          ) : posts.length ? (
+            posts.map((post) => {
+              const author = post.profiles || {};
+              const authorVisits = authorVisitedMap.get(post.user_id) || new Set();
+              const role = getCommunityRole({
+                countryCode: boardCode,
+                homeCountryCode: author.home_country_code,
+                visitedSet: authorVisits,
+              });
+              return (
+                <article className="community-post" key={post.id}>
+                  <div className="community-post-meta">
+                    <Avatar user={author} size="sm" />
+                    <strong>{author.username || t(language, "friendFallback")}</strong>
+                    <RoleBadge role={role} language={language} />
+                    <span>{formatTimestamp(post.created_at, language)}</span>
+                  </div>
+                  <h3>{post.title}</h3>
+                  <p>{post.body}</p>
+                </article>
+              );
+            })
+          ) : (
+            <p className="empty-text">{t(language, "communityEmpty")}</p>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function GlobalPercentilePanel({ stats, language }) {
   return (
     <aside className="side-panel">
@@ -1536,6 +1795,12 @@ function App() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isLandmarkOpen, setIsLandmarkOpen] = useState(false);
   const [isCountryCollectionOpen, setIsCountryCollectionOpen] = useState(false);
+  const [isCommunityOpen, setIsCommunityOpen] = useState(false);
+  const [communityCountry, setCommunityCountry] = useState(null);
+  const [communityPosts, setCommunityPosts] = useState([]);
+  const [communityAuthorVisits, setCommunityAuthorVisits] = useState(new Map());
+  const [isCommunityLoading, setIsCommunityLoading] = useState(false);
+  const [isPostingCommunity, setIsPostingCommunity] = useState(false);
   const [landmarkVisits, setLandmarkVisits] = useState([]);
   const [globalStats, setGlobalStats] = useState(null);
   const [animatedCountryCode, setAnimatedCountryCode] = useState("");
@@ -1577,6 +1842,15 @@ function App() {
       ]),
     );
   }, [countryOptions, language]);
+
+  const defaultCommunityCountry = useMemo(() => {
+    return (
+      countryOptions.find((country) => country.code === homeCountryCode) ||
+      countryOptions.find((country) => country.code === selectedCountry?.code) ||
+      countryOptions[0] ||
+      null
+    );
+  }, [countryOptions, homeCountryCode, selectedCountry?.code]);
 
   const visitState = useMemo(() => {
     const mineSet = new Set(
@@ -1991,6 +2265,126 @@ function App() {
     setIsAddingFriend(false);
   };
 
+  const openCommunity = useCallback(
+    (country) => {
+      const code = normalizeCountryCode(country?.code);
+      const resolvedCountry =
+        countryOptions.find((option) => option.code === code) ||
+        (code
+          ? {
+              code,
+              name: getCountryName(code, language),
+              flag: countryFlag(code),
+            }
+          : defaultCommunityCountry);
+      setCommunityCountry(resolvedCountry);
+      setIsCommunityOpen(true);
+    },
+    [countryOptions, defaultCommunityCountry, language],
+  );
+
+  const refreshCommunityPosts = useCallback(
+    async (countryCode) => {
+      const boardCode = normalizeCountryCode(countryCode);
+      if (!supabase || !boardCode) return;
+
+      setIsCommunityLoading(true);
+      const { data, error } = await supabase
+        .from("community_posts")
+        .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code)")
+        .eq("country_code", boardCode)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (error) {
+        setNotice(isMissingCommunityPostsError(error) ? t(language, "communitySetupRequired") : t(language, "communityLoadError"));
+        setCommunityPosts([]);
+        setCommunityAuthorVisits(new Map());
+        setIsCommunityLoading(false);
+        return;
+      }
+
+      const posts = data || [];
+      setCommunityPosts(posts);
+      const authorIds = [...new Set(posts.map((post) => post.user_id).filter(Boolean))];
+
+      if (!authorIds.length) {
+        setCommunityAuthorVisits(new Map());
+        setIsCommunityLoading(false);
+        return;
+      }
+
+      const { data: visitsForAuthors } = await supabase
+        .from("visited_countries")
+        .select("user_id, country_code")
+        .in("user_id", authorIds)
+        .eq("country_code", boardCode);
+
+      const visitMap = new Map(authorIds.map((id) => [id, new Set()]));
+      (visitsForAuthors || []).forEach((visit) => {
+        const current = visitMap.get(visit.user_id) || new Set();
+        current.add(normalizeCountryCode(visit.country_code));
+        visitMap.set(visit.user_id, current);
+      });
+
+      setCommunityAuthorVisits(visitMap);
+      setIsCommunityLoading(false);
+    },
+    [language],
+  );
+
+  const handleCreateCommunityPost = useCallback(
+    async ({ countryCode, title, body }) => {
+      const userId = session?.user?.id;
+      const boardCode = normalizeCountryCode(countryCode);
+      if (!supabase || !userId) return { error: t(language, "profileStillLoading") };
+      if (!boardCode) return { error: t(language, "countryNotFound") };
+
+      setIsPostingCommunity(true);
+      const { data, error } = await supabase
+        .from("community_posts")
+        .insert({
+          country_code: boardCode,
+          user_id: userId,
+          title,
+          body,
+        })
+        .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code)")
+        .single();
+
+      setIsPostingCommunity(false);
+
+      if (error) {
+        return {
+          error: isMissingCommunityPostsError(error) ? t(language, "communitySetupRequired") : error.message,
+        };
+      }
+
+      if (data) {
+        setCommunityPosts((current) => [data, ...current]);
+        setCommunityAuthorVisits((current) => {
+          const next = new Map(current);
+          next.set(userId, new Set(visitState.mineSet));
+          return next;
+        });
+      }
+
+      return { data };
+    },
+    [language, session?.user?.id, visitState.mineSet],
+  );
+
+  useEffect(() => {
+    if (!isCommunityOpen) return;
+    const board = communityCountry || defaultCommunityCountry;
+    if (!communityCountry && board) {
+      setCommunityCountry(board);
+    }
+    if (board?.code) {
+      refreshCommunityPosts(board.code);
+    }
+  }, [communityCountry, defaultCommunityCountry, isCommunityOpen, refreshCommunityPosts]);
+
   const handleSaveUsername = async (username, nextLanguage, nextHomeCountryCode) => {
     const userId = session?.user?.id;
     if (!supabase || !userId) return { error: t(language, "profileStillLoading") };
@@ -2234,6 +2628,10 @@ function App() {
               {t(language, "landmarkCollection")} {landmarkProgress}
             </span>
           </button>
+          <button className="landmark-button" onClick={() => openCommunity(selectedCountry || defaultCommunityCountry)}>
+            <MessageCircle size={17} />
+            <span>{t(language, "community")}</span>
+          </button>
           <button className="icon-button" onClick={refreshSocialData} title={t(language, "refresh")} aria-label={t(language, "refresh")}>
             <RefreshCw size={18} />
           </button>
@@ -2308,6 +2706,23 @@ function App() {
         />
       )}
 
+      {isCommunityOpen && (
+        <CommunityModal
+          countries={countryOptions}
+          selectedCountry={communityCountry || defaultCommunityCountry}
+          posts={communityPosts}
+          isLoading={isCommunityLoading}
+          isPosting={isPostingCommunity}
+          language={language}
+          homeCountryCode={homeCountryCode}
+          mineSet={visitState.mineSet}
+          authorVisitedMap={communityAuthorVisits}
+          onSelectCountry={setCommunityCountry}
+          onCreatePost={handleCreateCommunityPost}
+          onClose={() => setIsCommunityOpen(false)}
+        />
+      )}
+
       <section className="workspace">
         <div className="map-wrap">
           {countryOptions.length > 0 && (
@@ -2355,6 +2770,7 @@ function App() {
             homeCountryCode={homeCountryCode}
             onMarkVisited={handleMarkVisited}
             onRemoveVisited={handleRemoveVisited}
+            onOpenCommunity={openCommunity}
             isSaving={isSavingVisit}
           />
           {profile && (

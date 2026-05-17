@@ -48,11 +48,21 @@ create table if not exists public.landmark_visits (
   constraint landmark_visits_user_id_fkey foreign key (user_id) references public.profiles(id) on delete cascade
 );
 
+create table if not exists public.community_posts (
+  id uuid primary key default gen_random_uuid(),
+  country_code text not null,
+  user_id uuid references public.profiles(id) on delete cascade,
+  title text not null,
+  body text not null,
+  created_at timestamptz default now()
+);
+
 alter table public.profiles enable row level security;
 alter table public.visited_countries enable row level security;
 alter table public.friends enable row level security;
 alter table public.activities enable row level security;
 alter table public.landmark_visits enable row level security;
+alter table public.community_posts enable row level security;
 
 create policy "Authenticated users can read profiles"
   on public.profiles for select
@@ -124,3 +134,19 @@ create policy "Users can delete own landmark visits"
   on public.landmark_visits for delete
   to authenticated
   using (user_id = auth.uid());
+
+create policy "community posts readable"
+  on public.community_posts for select
+  using (true);
+
+create policy "authenticated users can create posts"
+  on public.community_posts for insert
+  with check (auth.uid() = user_id);
+
+create policy "users can update own posts"
+  on public.community_posts for update
+  using (auth.uid() = user_id);
+
+create policy "users can delete own posts"
+  on public.community_posts for delete
+  using (auth.uid() = user_id);
