@@ -18,6 +18,7 @@ import {
 
 const WORLD_GEOJSON_URL = "/countries.geojson";
 const MAX_AVATAR_SIZE = 2 * 1024 * 1024;
+const MAX_COMMUNITY_IMAGE_SIZE = 5 * 1024 * 1024;
 const LANDMARK_ZOOM_THRESHOLD = 8;
 const DEFAULT_LANGUAGE = "en";
 const LANGUAGE_OPTIONS = [
@@ -61,8 +62,13 @@ const TEXT = {
     communityBody: "Body",
     communityBodyPlaceholder: "Share a quick note for this country board.",
     communityEmpty: "No posts yet. Start the board.",
+    communityImageTooLarge: "Community images must be 5MB or smaller.",
+    communityImageSetupRequired:
+      "Community image upload is not set up yet. In Supabase Storage, create a public bucket named exactly \"community-images\", then run supabase/migrations/008_community_replies_images.sql.",
     communityLoadError: "Could not load community posts.",
     communityPost: "Post",
+    communityReply: "Reply",
+    communityReplyPlaceholder: "Write a reply...",
     communitySetupRequired:
       "Database setup required: run supabase/migrations/007_community_posts.sql in Supabase SQL Editor, then refresh this page.",
     communityTitle: "Title",
@@ -117,6 +123,7 @@ const TEXT = {
     totalUsers: "Total users",
     totalVisitRecords: "Total visited country records",
     uploadAvatar: "Upload avatar",
+    uploadImage: "Upload image",
     username: "Username",
     homeCountry: "Home country",
     homeRole: "Home",
@@ -172,8 +179,13 @@ const TEXT = {
     communityBody: "내용",
     communityBodyPlaceholder: "이 나라 게시판에 짧은 글을 남겨보세요.",
     communityEmpty: "아직 글이 없습니다. 첫 글을 올려보세요.",
+    communityImageTooLarge: "커뮤니티 이미지는 5MB 이하여야 합니다.",
+    communityImageSetupRequired:
+      "커뮤니티 이미지 업로드 설정이 필요합니다. Supabase Storage에서 public bucket 이름을 정확히 \"community-images\"로 만들고 supabase/migrations/008_community_replies_images.sql을 실행해 주세요.",
     communityLoadError: "커뮤니티 글을 불러오지 못했습니다.",
     communityPost: "게시",
+    communityReply: "답글",
+    communityReplyPlaceholder: "답글을 입력하세요...",
     communitySetupRequired:
       "데이터베이스 설정이 필요합니다: Supabase SQL Editor에서 supabase/migrations/007_community_posts.sql을 실행한 뒤 새로고침해 주세요.",
     communityTitle: "제목",
@@ -228,6 +240,7 @@ const TEXT = {
     totalUsers: "전체 사용자",
     totalVisitRecords: "전체 국가 방문 기록",
     uploadAvatar: "아바타 업로드",
+    uploadImage: "이미지 업로드",
     username: "사용자명",
     homeCountry: "홈 국가",
     homeRole: "홈",
@@ -364,7 +377,12 @@ function isMissingHomeCountryColumnError(error) {
 
 function isMissingCommunityPostsError(error) {
   const message = String(error?.message || error || "").toLowerCase();
-  return message.includes("community_posts") || message.includes("schema cache");
+  return message.includes("community_posts") || message.includes("community_replies") || message.includes("image_url") || message.includes("schema cache");
+}
+
+function isMissingCommunityImageBucketError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return message.includes("bucket not found") || error?.statusCode === "404" || error?.error === "Bucket not found";
 }
 
 function percent(value, total) {
@@ -1540,19 +1558,24 @@ function CommunityModal({
   countries,
   selectedCountry,
   posts,
+  repliesByPost,
   isLoading,
   isPosting,
+  replyingPostId,
   language,
   homeCountryCode,
   mineSet,
   authorVisitedMap,
   onSelectCountry,
   onCreatePost,
+  onCreateReply,
   onClose,
 }) {
   const [query, setQuery] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState("");
   const [error, setError] = useState("");
 
   const boardCountry = selectedCountry || countries[0];
@@ -1569,6 +1592,16 @@ function CommunityModal({
       )
       .slice(0, 8);
   }, [countries, query]);
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreview("");
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(imageFile);
+    setImagePreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [imageFile]);
 
   const handleCountrySubmit = (event) => {
     event.preventDefault();
@@ -1594,7 +1627,7 @@ function CommunityModal({
       return;
     }
 
-    const result = await onCreatePost({ countryCode: boardCode, title: cleanTitle, body: cleanBody });
+    const result = await onCreatePost({ countryCode: boardCode, title: cleanTitle, body: cleanBody, imageFile });
     if (result?.error) {
       setError(result.error);
       return;
@@ -1602,6 +1635,7 @@ function CommunityModal({
 
     setTitle("");
     setBody("");
+    setImageFile(null);
   };
 
   return (
@@ -1670,6 +1704,37 @@ function CommunityModal({
               maxLength={2000}
             />
           </label>
+          <label className="secondary-action community-image-upload">
+            <ImagePlus size={17} />
+            {t(language, "uploadImage")}
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                setError("");
+                if (!file) return;
+                if (!file.type.startsWith("image/")) {
+                  setError(t(language, "selectImageFile"));
+                  return;
+                }
+                if (file.size > MAX_COMMUNITY_IMAGE_SIZE) {
+                  setError(t(language, "communityImageTooLarge"));
+                  return;
+                }
+                setImageFile(file);
+              }}
+            />
+          </label>
+          {imagePreview && (
+            <div className="community-image-preview">
+              <img src={imagePreview} alt="" />
+              <button type="button" className="icon-button" onClick={() => setImageFile(null)} aria-label={t(language, "close")}>
+                <X size={16} />
+              </button>
+            </div>
+          )}
           {error && <p className="form-error">{error}</p>}
           <button className="primary-action" disabled={isPosting || !boardCode}>
             {isPosting ? t(language, "saving") : t(language, "communityPost")}
@@ -1698,6 +1763,14 @@ function CommunityModal({
                   </div>
                   <h3>{post.title}</h3>
                   <p>{post.body}</p>
+                  {post.image_url && <img className="community-post-image" src={post.image_url} alt="" />}
+                  <ReplyList
+                    post={post}
+                    replies={repliesByPost.get(post.id) || []}
+                    language={language}
+                    isSaving={replyingPostId === post.id}
+                    onCreateReply={onCreateReply}
+                  />
                 </article>
               );
             })
@@ -1706,6 +1779,58 @@ function CommunityModal({
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function ReplyList({ post, replies, language, isSaving, onCreateReply }) {
+  const [body, setBody] = useState("");
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    const cleanBody = body.trim();
+    setError("");
+    if (!cleanBody) return;
+
+    const result = await onCreateReply(post.id, cleanBody);
+    if (result?.error) {
+      setError(result.error);
+      return;
+    }
+    setBody("");
+  };
+
+  return (
+    <div className="reply-block">
+      {replies.length > 0 && (
+        <ul className="reply-list">
+          {replies.map((reply) => (
+            <li key={reply.id}>
+              <Avatar user={reply.profiles} size="sm" />
+              <div>
+                <div className="reply-meta">
+                  <strong>{reply.profiles?.username || t(language, "friendFallback")}</strong>
+                  <span>{formatTimestamp(reply.created_at, language)}</span>
+                </div>
+                <p>{reply.body}</p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form className="reply-form" onSubmit={handleSubmit}>
+        <input
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          placeholder={t(language, "communityReplyPlaceholder")}
+          maxLength={800}
+        />
+        <button className="secondary-action" disabled={isSaving || !body.trim()}>
+          {isSaving ? t(language, "saving") : t(language, "communityReply")}
+        </button>
+      </form>
+      {error && <p className="form-error">{error}</p>}
     </div>
   );
 }
@@ -1798,9 +1923,11 @@ function App() {
   const [isCommunityOpen, setIsCommunityOpen] = useState(false);
   const [communityCountry, setCommunityCountry] = useState(null);
   const [communityPosts, setCommunityPosts] = useState([]);
+  const [communityReplies, setCommunityReplies] = useState([]);
   const [communityAuthorVisits, setCommunityAuthorVisits] = useState(new Map());
   const [isCommunityLoading, setIsCommunityLoading] = useState(false);
   const [isPostingCommunity, setIsPostingCommunity] = useState(false);
+  const [replyingPostId, setReplyingPostId] = useState("");
   const [landmarkVisits, setLandmarkVisits] = useState([]);
   const [globalStats, setGlobalStats] = useState(null);
   const [animatedCountryCode, setAnimatedCountryCode] = useState("");
@@ -1917,6 +2044,16 @@ function App() {
         .map((visit) => visit.landmark_id),
     );
   }, [landmarkVisits, session?.user?.id]);
+
+  const communityRepliesByPost = useMemo(() => {
+    const map = new Map();
+    communityReplies.forEach((reply) => {
+      const current = map.get(reply.post_id) || [];
+      current.push(reply);
+      map.set(reply.post_id, current);
+    });
+    return map;
+  }, [communityReplies]);
 
   const hydrateProfile = useCallback(async (activeSession) => {
     if (!supabase || !activeSession?.user) {
@@ -2299,6 +2436,7 @@ function App() {
       if (error) {
         setNotice(isMissingCommunityPostsError(error) ? t(language, "communitySetupRequired") : t(language, "communityLoadError"));
         setCommunityPosts([]);
+        setCommunityReplies([]);
         setCommunityAuthorVisits(new Map());
         setIsCommunityLoading(false);
         return;
@@ -2306,6 +2444,24 @@ function App() {
 
       const posts = data || [];
       setCommunityPosts(posts);
+      const postIds = posts.map((post) => post.id).filter(Boolean);
+      if (postIds.length) {
+        const { data: replyRows, error: replyError } = await supabase
+          .from("community_replies")
+          .select("*, profiles!community_replies_user_id_fkey(id, username, avatar_url)")
+          .in("post_id", postIds)
+          .order("created_at", { ascending: true });
+
+        if (replyError) {
+          setNotice(isMissingCommunityPostsError(replyError) ? t(language, "communitySetupRequired") : t(language, "communityLoadError"));
+          setCommunityReplies([]);
+        } else {
+          setCommunityReplies(replyRows || []);
+        }
+      } else {
+        setCommunityReplies([]);
+      }
+
       const authorIds = [...new Set(posts.map((post) => post.user_id).filter(Boolean))];
 
       if (!authorIds.length) {
@@ -2334,13 +2490,46 @@ function App() {
   );
 
   const handleCreateCommunityPost = useCallback(
-    async ({ countryCode, title, body }) => {
+    async ({ countryCode, title, body, imageFile }) => {
       const userId = session?.user?.id;
       const boardCode = normalizeCountryCode(countryCode);
       if (!supabase || !userId) return { error: t(language, "profileStillLoading") };
       if (!boardCode) return { error: t(language, "countryNotFound") };
 
       setIsPostingCommunity(true);
+      let imageUrl = null;
+
+      if (imageFile) {
+        if (!imageFile.type.startsWith("image/")) {
+          setIsPostingCommunity(false);
+          return { error: t(language, "selectImageFile") };
+        }
+        if (imageFile.size > MAX_COMMUNITY_IMAGE_SIZE) {
+          setIsPostingCommunity(false);
+          return { error: t(language, "communityImageTooLarge") };
+        }
+
+        const extension = imageFile.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+        const path = `${userId}/${Date.now()}_${crypto.randomUUID()}.${extension}`;
+        const { error: uploadError } = await supabase.storage.from("community-images").upload(path, imageFile, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: imageFile.type,
+        });
+
+        if (uploadError) {
+          setIsPostingCommunity(false);
+          return {
+            error: isMissingCommunityImageBucketError(uploadError)
+              ? t(language, "communityImageSetupRequired")
+              : uploadError.message,
+          };
+        }
+
+        const { data: publicData } = supabase.storage.from("community-images").getPublicUrl(path);
+        imageUrl = publicData?.publicUrl || null;
+      }
+
       const { data, error } = await supabase
         .from("community_posts")
         .insert({
@@ -2348,6 +2537,7 @@ function App() {
           user_id: userId,
           title,
           body,
+          image_url: imageUrl,
         })
         .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code)")
         .single();
@@ -2372,6 +2562,39 @@ function App() {
       return { data };
     },
     [language, session?.user?.id, visitState.mineSet],
+  );
+
+  const handleCreateCommunityReply = useCallback(
+    async (postId, body) => {
+      const userId = session?.user?.id;
+      if (!supabase || !userId) return { error: t(language, "profileStillLoading") };
+      if (!postId || !body.trim()) return { error: t(language, "communityReplyPlaceholder") };
+
+      setReplyingPostId(postId);
+      const { data, error } = await supabase
+        .from("community_replies")
+        .insert({
+          post_id: postId,
+          user_id: userId,
+          body: body.trim(),
+        })
+        .select("*, profiles!community_replies_user_id_fkey(id, username, avatar_url)")
+        .single();
+      setReplyingPostId("");
+
+      if (error) {
+        return {
+          error: isMissingCommunityPostsError(error) ? t(language, "communitySetupRequired") : error.message,
+        };
+      }
+
+      if (data) {
+        setCommunityReplies((current) => [...current, data]);
+      }
+
+      return { data };
+    },
+    [language, session?.user?.id],
   );
 
   useEffect(() => {
@@ -2711,14 +2934,17 @@ function App() {
           countries={countryOptions}
           selectedCountry={communityCountry || defaultCommunityCountry}
           posts={communityPosts}
+          repliesByPost={communityRepliesByPost}
           isLoading={isCommunityLoading}
           isPosting={isPostingCommunity}
+          replyingPostId={replyingPostId}
           language={language}
           homeCountryCode={homeCountryCode}
           mineSet={visitState.mineSet}
           authorVisitedMap={communityAuthorVisits}
           onSelectCountry={setCommunityCountry}
           onCreatePost={handleCreateCommunityPost}
+          onCreateReply={handleCreateCommunityReply}
           onClose={() => setIsCommunityOpen(false)}
         />
       )}

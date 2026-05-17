@@ -54,6 +54,15 @@ create table if not exists public.community_posts (
   user_id uuid references public.profiles(id) on delete cascade,
   title text not null,
   body text not null,
+  image_url text,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.community_replies (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid references public.community_posts(id) on delete cascade,
+  user_id uuid references public.profiles(id) on delete cascade,
+  body text not null,
   created_at timestamptz default now()
 );
 
@@ -63,6 +72,7 @@ alter table public.friends enable row level security;
 alter table public.activities enable row level security;
 alter table public.landmark_visits enable row level security;
 alter table public.community_posts enable row level security;
+alter table public.community_replies enable row level security;
 
 create policy "Authenticated users can read profiles"
   on public.profiles for select
@@ -149,4 +159,20 @@ create policy "users can update own posts"
 
 create policy "users can delete own posts"
   on public.community_posts for delete
+  using (auth.uid() = user_id);
+
+create policy "community replies readable"
+  on public.community_replies for select
+  using (true);
+
+create policy "authenticated users can create replies"
+  on public.community_replies for insert
+  with check (auth.uid() = user_id);
+
+create policy "users can update own replies"
+  on public.community_replies for update
+  using (auth.uid() = user_id);
+
+create policy "users can delete own replies"
+  on public.community_replies for delete
   using (auth.uid() = user_id);
