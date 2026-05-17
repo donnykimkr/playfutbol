@@ -186,6 +186,27 @@ button:disabled {
   background: #f8fafc;
 }
 
+.instagram-top-link {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  color: #64748b;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 0.9rem;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.instagram-top-link:hover {
+  border-color: #f9a8d4;
+  color: #be185d;
+  background: #fdf2f8;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
@@ -385,29 +406,6 @@ button:disabled {
 .profile-card {
   border-color: #99f6e4;
   background: #f0fdfa;
-}
-
-.instagram-panel {
-  padding: 12px 14px;
-}
-
-.instagram-panel a {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #475569;
-  text-decoration: none;
-  font-weight: 900;
-}
-
-.instagram-panel a:hover {
-  color: #be185d;
-}
-
-.instagram-panel small {
-  margin-left: auto;
-  color: #94a3b8;
-  font-size: 0.76rem;
 }
 
 .profile-card-user {
@@ -1000,9 +998,22 @@ button:disabled {
   font-weight: 900;
 }
 
+.post-owner-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
 .post-edit-button:hover {
   border-color: #94a3b8;
   background: #f8fafc;
+}
+
+.post-edit-button.danger {
+  color: #991b1b;
+  border-color: #fecaca;
+  background: #fff1f2;
 }
 
 .community-post h3 {

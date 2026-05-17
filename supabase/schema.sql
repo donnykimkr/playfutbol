@@ -55,7 +55,8 @@ create table if not exists public.community_posts (
   title text not null,
   body text not null,
   image_url text,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  updated_at timestamptz
 );
 
 create table if not exists public.community_replies (

@@ -61,15 +61,19 @@ const TEXT = {
     community: "Community",
     communityBody: "Body",
     communityBodyPlaceholder: "Share a quick note for this country board.",
+    communityDeletePost: "Delete",
+    communityDeleteConfirm: "Delete this post?",
     communityEditPost: "Edit",
     communityEmpty: "No posts yet. Start the board.",
     communityImageTooLarge: "Community images must be 5MB or smaller.",
     communityImageSetupRequired:
       "Community image upload is not set up yet. In Supabase Storage, create a public bucket named exactly \"community-images\", then run supabase/migrations/008_community_replies_images.sql.",
     communityLoadError: "Could not load community posts.",
+    communityOpen: "Open community",
     communityPost: "Post",
     communityReply: "Reply",
     communityReplyPlaceholder: "Write a reply...",
+    communityRemoveImage: "Remove image",
     communitySavePost: "Save post",
     communitySetupRequired:
       "Database setup required: run the latest community migrations in Supabase SQL Editor, then refresh this page.",
@@ -80,6 +84,7 @@ const TEXT = {
     countryDetailsPrompt: "Country details, your visit status, and friend visits will appear here.",
     countryVisited: "I visited this country",
     countryVisitPercent: "{percent}% of users visited {country}",
+    countryVisitPercentShort: "{percent}% of people visited this country",
     countriesVisited: "countries visited",
     currentUsername: "Current username",
     europe: "Europe",
@@ -163,6 +168,7 @@ const TEXT = {
     friendAdded: "{username} added.",
     avatarTooLarge: "Avatar image must be 2MB or smaller.",
     avatarUrlError: "Could not get avatar URL.",
+    edited: "(edited)",
   },
   ko: {
     activity: "활동",
@@ -182,15 +188,19 @@ const TEXT = {
     community: "커뮤니티",
     communityBody: "내용",
     communityBodyPlaceholder: "이 나라 게시판에 짧은 글을 남겨보세요.",
+    communityDeletePost: "삭제",
+    communityDeleteConfirm: "이 게시글을 삭제할까요?",
     communityEditPost: "수정",
     communityEmpty: "아직 글이 없습니다. 첫 글을 올려보세요.",
     communityImageTooLarge: "커뮤니티 이미지는 5MB 이하여야 합니다.",
     communityImageSetupRequired:
       "커뮤니티 이미지 업로드 설정이 필요합니다. Supabase Storage에서 public bucket 이름을 정확히 \"community-images\"로 만들고 supabase/migrations/008_community_replies_images.sql을 실행해 주세요.",
     communityLoadError: "커뮤니티 글을 불러오지 못했습니다.",
+    communityOpen: "커뮤니티 열기",
     communityPost: "게시",
     communityReply: "답글",
     communityReplyPlaceholder: "답글을 입력하세요...",
+    communityRemoveImage: "이미지 제거",
     communitySavePost: "글 저장",
     communitySetupRequired:
       "데이터베이스 설정이 필요합니다: Supabase SQL Editor에서 최신 community migration을 실행한 뒤 새로고침해 주세요.",
@@ -201,6 +211,7 @@ const TEXT = {
     countryDetailsPrompt: "국가 상세 정보, 방문 상태, 친구 방문 기록이 여기에 표시됩니다.",
     countryVisited: "이 나라를 방문했어요",
     countryVisitPercent: "사용자 {percent}%가 {country}을/를 방문했습니다",
+    countryVisitPercentShort: "사람들 중 {percent}%가 이 나라를 방문했습니다",
     countriesVisited: "개국 방문",
     currentUsername: "현재 사용자명",
     europe: "유럽",
@@ -284,6 +295,7 @@ const TEXT = {
     friendAdded: "{username}님을 추가했습니다.",
     avatarTooLarge: "아바타 이미지는 2MB 이하여야 합니다.",
     avatarUrlError: "아바타 URL을 가져오지 못했습니다.",
+    edited: "(수정됨)",
   },
 };
 const LANDMARKS = [
@@ -346,6 +358,27 @@ function ZoomObserver({ onZoomChange }) {
   return null;
 }
 
+function VerticalBoundsClamp() {
+  const map = useMapEvents({
+    drag() {
+      const center = map.getCenter();
+      const clampedLat = Math.max(-85, Math.min(85, center.lat));
+      if (clampedLat !== center.lat) {
+        map.panTo([clampedLat, center.lng], { animate: false });
+      }
+    },
+    moveend() {
+      const center = map.getCenter();
+      const clampedLat = Math.max(-85, Math.min(85, center.lat));
+      if (clampedLat !== center.lat) {
+        map.panTo([clampedLat, center.lng], { animate: false });
+      }
+    },
+  });
+
+  return null;
+}
+
 function makeFriendCode() {
   return `TRIP-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 }
@@ -390,6 +423,7 @@ function isMissingCommunityPostsError(error) {
     message.includes("community_replies") ||
     message.includes("community_votes") ||
     message.includes("image_url") ||
+    message.includes("updated_at") ||
     message.includes("schema cache")
   );
 }
@@ -397,6 +431,18 @@ function isMissingCommunityPostsError(error) {
 function isMissingCommunityImageBucketError(error) {
   const message = String(error?.message || error || "").toLowerCase();
   return message.includes("bucket not found") || error?.statusCode === "404" || error?.error === "Bucket not found";
+}
+
+function communityImagePathFromUrl(url) {
+  const marker = "/storage/v1/object/public/community-images/";
+  const index = String(url || "").indexOf(marker);
+  if (index === -1) return "";
+  return decodeURIComponent(String(url).slice(index + marker.length).split("?")[0]);
+}
+
+function isEditedPost(post) {
+  if (!post?.updated_at || !post?.created_at) return false;
+  return new Date(post.updated_at).getTime() > new Date(post.created_at).getTime() + 1000;
 }
 
 function percent(value, total) {
@@ -1036,6 +1082,7 @@ function TravelMap({
     >
       <FitWorld />
       <ZoomObserver onZoomChange={handleZoomChange} />
+      <VerticalBoundsClamp />
       <TileLayer
         key="terrain-map"
         attribution={tileLayer.attribution}
@@ -1075,6 +1122,8 @@ function CountryPanel({
   friendVisitMap,
   language,
   homeCountryCode,
+  countryVisitStats,
+  totalUserCount,
   onMarkVisited,
   onRemoveVisited,
   onOpenCommunity,
@@ -1084,6 +1133,14 @@ function CountryPanel({
   const isHome = Boolean(country && homeCountryCode && country.code === homeCountryCode);
   const mine = country ? mineSet.has(country.code) : false;
   const displayName = country ? getCountryName(country.code, language) || country.name : "";
+  const visitStats = country
+    ? countryVisitStats?.get?.(country.code) || {
+        hasData: Boolean(totalUserCount),
+        totalUsers: totalUserCount || 0,
+        visitedUsers: 0,
+        percent: 0,
+      }
+    : null;
 
   return (
     <aside className="side-panel country-panel">
@@ -1096,6 +1153,11 @@ function CountryPanel({
             <p>
               {isHome ? t(language, "homeCountry") : `${t(language, "youVisited")}: ${mine ? t(language, "yes") : t(language, "no")}`}
             </p>
+            {visitStats?.hasData ? (
+              <p>{formatText(language, "countryVisitPercentShort", { percent: visitStats.percent })}</p>
+            ) : (
+              <p>{t(language, "globalPercentileEmpty")}</p>
+            )}
           </div>
           <button
             className={mine ? "secondary-action danger-action" : "primary-action"}
@@ -1107,7 +1169,7 @@ function CountryPanel({
           </button>
           <button className="secondary-action" onClick={() => onOpenCommunity(country)}>
             <MessageCircle size={17} />
-            {t(language, "community")}
+            {t(language, "communityOpen")}
           </button>
           <div>
             <h3>{t(language, "friendsVisited")}</h3>
@@ -1189,18 +1251,6 @@ function ProfilePanel({ profile, language }) {
           </div>
         </div>
       </div>
-    </aside>
-  );
-}
-
-function InstagramPanel({ language }) {
-  return (
-    <aside className="side-panel instagram-panel">
-      <a href="https://www.instagram.com/gafl.ai" target="_blank" rel="noreferrer">
-        <Instagram size={17} />
-        <span>@gafl.ai</span>
-        <small>{t(language, "instagram")}</small>
-      </a>
     </aside>
   );
 }
@@ -1598,6 +1648,7 @@ function CommunityModal({
   onSelectCountry,
   onCreatePost,
   onUpdatePost,
+  onDeletePost,
   onCreateReply,
   onVote,
   onClose,
@@ -1802,6 +1853,7 @@ function CommunityModal({
                   currentUserId={currentUserId}
                   language={language}
                   onUpdatePost={onUpdatePost}
+                  onDeletePost={onDeletePost}
                   onVote={onVote}
                 >
                   <ReplyList
@@ -1831,6 +1883,7 @@ function CommunityPostCard({
   currentUserId,
   language,
   onUpdatePost,
+  onDeletePost,
   onVote,
   children,
 }) {
@@ -1839,6 +1892,7 @@ function CommunityPostCard({
   const [body, setBody] = useState(post.body || "");
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState("");
+  const [removeImage, setRemoveImage] = useState(false);
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const canEdit = Boolean(currentUserId && post.user_id === currentUserId);
@@ -1858,6 +1912,7 @@ function CommunityPostCard({
       setTitle(post.title || "");
       setBody(post.body || "");
       setImageFile(null);
+      setRemoveImage(false);
       setError("");
     }
   }, [isEditing, post.body, post.title]);
@@ -1874,7 +1929,7 @@ function CommunityPostCard({
     }
 
     setIsSaving(true);
-    const result = await onUpdatePost(post, { title: cleanTitle, body: cleanBody, imageFile });
+    const result = await onUpdatePost(post, { title: cleanTitle, body: cleanBody, imageFile, removeImage });
     setIsSaving(false);
 
     if (result?.error) {
@@ -1884,6 +1939,16 @@ function CommunityPostCard({
 
     setIsEditing(false);
   };
+
+  const handleDelete = async () => {
+    if (!window.confirm(t(language, "communityDeleteConfirm"))) return;
+    const result = await onDeletePost(post);
+    if (result?.error) {
+      setError(result.error);
+    }
+  };
+
+  const editImageSrc = imagePreview || (!removeImage ? post.image_url : "");
 
   return (
     <article className="community-post">
@@ -1912,11 +1977,17 @@ function CommunityPostCard({
             <strong>{author.username || t(language, "friendFallback")}</strong>
             <RoleBadge role={role} language={language} />
             <span>{formatTimestamp(post.created_at, language)}</span>
+            {isEditedPost(post) && <span>{t(language, "edited")}</span>}
             {canEdit && (
-              <button className="post-edit-button" onClick={() => setIsEditing((current) => !current)}>
-                <Edit3 size={14} />
-                {t(language, "communityEditPost")}
-              </button>
+              <span className="post-owner-actions">
+                <button className="post-edit-button" onClick={() => setIsEditing((current) => !current)}>
+                  <Edit3 size={14} />
+                  {t(language, "communityEditPost")}
+                </button>
+                <button className="post-edit-button danger" onClick={handleDelete}>
+                  {t(language, "communityDeletePost")}
+                </button>
+              </span>
             )}
           </div>
 
@@ -1943,18 +2014,26 @@ function CommunityPostCard({
                       setError(t(language, "communityImageTooLarge"));
                       return;
                     }
+                    setRemoveImage(false);
                     setImageFile(file);
                   }}
                 />
               </label>
-              {(imagePreview || post.image_url) && (
+              {editImageSrc && (
                 <div className="community-image-preview">
-                  <img src={imagePreview || post.image_url} alt="" />
-                  {imagePreview && (
-                    <button type="button" className="icon-button" onClick={() => setImageFile(null)} aria-label={t(language, "close")}>
-                      <X size={16} />
-                    </button>
-                  )}
+                  <img src={editImageSrc} alt="" />
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => {
+                      setImageFile(null);
+                      setRemoveImage(true);
+                    }}
+                    aria-label={t(language, "communityRemoveImage")}
+                    title={t(language, "communityRemoveImage")}
+                  >
+                    <X size={16} />
+                  </button>
                 </div>
               )}
               {error && <p className="form-error">{error}</p>}
@@ -2402,6 +2481,22 @@ function App() {
       userVisitCounts.set(visit.user_id, current);
     });
 
+    const countryUsers = new Map();
+    (profileRows || []).forEach((profileRow) => {
+      const homeCode = normalizeCountryCode(profileRow.home_country_code);
+      if (!homeCode) return;
+      const current = countryUsers.get(homeCode) || new Set();
+      current.add(profileRow.id);
+      countryUsers.set(homeCode, current);
+    });
+    (visitRows || []).forEach((visit) => {
+      const code = normalizeCountryCode(visit.country_code);
+      if (!code) return;
+      const current = countryUsers.get(code) || new Set();
+      current.add(visit.user_id);
+      countryUsers.set(code, current);
+    });
+
     const allCounts = Array.from(userVisitCounts.values()).map((codes) => codes.size);
     const myCount = userVisitCounts.get(userId)?.size || 0;
     const usersWithVisits = allCounts.length;
@@ -2426,6 +2521,17 @@ function App() {
       totalVisitRecords: totalVisitRecords || 0,
       totalLandmarkVisits,
       badgeRarities,
+      countryVisitStats: new Map(
+        Array.from(countryUsers.entries()).map(([code, users]) => [
+          code,
+          {
+            hasData: totalUserCount > 0,
+            totalUsers: totalUserCount,
+            visitedUsers: users.size,
+            percent: totalUserCount ? Math.round((users.size / totalUserCount) * 100) : 0,
+          },
+        ]),
+      ),
     });
   }, [landmarkVisits.length, session?.user?.id]);
 
@@ -2815,6 +2921,7 @@ function App() {
       if (!post?.id || post.user_id !== userId) return { error: t(language, "profileStillLoading") };
 
       let imageUrl = post.image_url || null;
+      const oldImagePath = communityImagePathFromUrl(post.image_url);
       if (updates.imageFile) {
         if (!updates.imageFile.type.startsWith("image/")) {
           return { error: t(language, "selectImageFile") };
@@ -2843,12 +2950,17 @@ function App() {
         imageUrl = publicData?.publicUrl || imageUrl;
       }
 
+      if (updates.removeImage && !updates.imageFile) {
+        imageUrl = null;
+      }
+
       const { data, error } = await supabase
         .from("community_posts")
         .update({
           title: updates.title,
           body: updates.body,
           image_url: imageUrl,
+          updated_at: new Date().toISOString(),
         })
         .eq("id", post.id)
         .eq("user_id", userId)
@@ -2863,11 +2975,52 @@ function App() {
 
       if (data) {
         setCommunityPosts((current) => current.map((item) => (item.id === data.id ? data : item)));
+        if ((updates.removeImage || updates.imageFile) && oldImagePath) {
+          await supabase.storage.from("community-images").remove([oldImagePath]);
+        }
       }
 
       return { data };
     },
     [language, session?.user?.id],
+  );
+
+  const handleDeleteCommunityPost = useCallback(
+    async (post) => {
+      const userId = session?.user?.id;
+      if (!supabase || !userId) return { error: t(language, "profileStillLoading") };
+      if (!post?.id || post.user_id !== userId) return { error: t(language, "profileStillLoading") };
+
+      const previousPosts = communityPosts;
+      const previousReplies = communityReplies;
+      const previousVotes = communityVotes;
+      setCommunityPosts((current) => current.filter((item) => item.id !== post.id));
+      setCommunityReplies((current) => current.filter((reply) => reply.post_id !== post.id));
+      setCommunityVotes((current) => current.filter((vote) => vote.post_id !== post.id));
+
+      const { error } = await supabase
+        .from("community_posts")
+        .delete()
+        .eq("id", post.id)
+        .eq("user_id", userId);
+
+      if (error) {
+        setCommunityPosts(previousPosts);
+        setCommunityReplies(previousReplies);
+        setCommunityVotes(previousVotes);
+        return {
+          error: isMissingCommunityPostsError(error) ? t(language, "communitySetupRequired") : error.message,
+        };
+      }
+
+      const oldImagePath = communityImagePathFromUrl(post.image_url);
+      if (oldImagePath) {
+        await supabase.storage.from("community-images").remove([oldImagePath]);
+      }
+
+      return { data: true };
+    },
+    [communityPosts, communityReplies, communityVotes, language, session?.user?.id],
   );
 
   const handleCommunityVote = useCallback(
@@ -3220,6 +3373,10 @@ function App() {
             <MessageCircle size={17} />
             <span>{t(language, "community")}</span>
           </button>
+          <a className="instagram-top-link" href="https://www.instagram.com/gafl.ai" target="_blank" rel="noreferrer">
+            <Instagram size={17} />
+            <span>@gafl.ai</span>
+          </a>
           <button className="icon-button" onClick={refreshSocialData} title={t(language, "refresh")} aria-label={t(language, "refresh")}>
             <RefreshCw size={18} />
           </button>
@@ -3313,6 +3470,7 @@ function App() {
           onSelectCountry={setCommunityCountry}
           onCreatePost={handleCreateCommunityPost}
           onUpdatePost={handleUpdateCommunityPost}
+          onDeletePost={handleDeleteCommunityPost}
           onCreateReply={handleCreateCommunityReply}
           onVote={handleCommunityVote}
           onClose={() => setIsCommunityOpen(false)}
@@ -3355,7 +3513,6 @@ function App() {
         </div>
         <div className="panel-stack">
           <ProfilePanel profile={profile} language={language} />
-          <InstagramPanel language={language} />
           <GlobalPercentilePanel stats={globalStats} language={language} />
           <BadgesPanel visitCount={displayedVisitCount} stats={globalStats} language={language} />
           {profile?.is_admin && <AdminStatsPanel stats={globalStats} language={language} />}
@@ -3365,6 +3522,8 @@ function App() {
             friendVisitMap={friendVisitMap}
             language={language}
             homeCountryCode={homeCountryCode}
+            countryVisitStats={globalStats?.countryVisitStats}
+            totalUserCount={globalStats?.totalUsers}
             onMarkVisited={handleMarkVisited}
             onRemoveVisited={handleRemoveVisited}
             onOpenCommunity={openCommunity}
