@@ -51,7 +51,9 @@ const TEXT = {
     added: "added",
     addSupabaseEnvVars: "Add Supabase env vars",
     admin: "Admin",
+    adminPanel: "Admin Panel",
     adminStats: "Admin stats",
+    adminUsers: "Users",
     africa: "Africa",
     antarctica: "Antarctica",
     asia: "Asia",
@@ -95,6 +97,10 @@ const TEXT = {
     friendClearSelection: "All friends",
     friendFallback: "A friend",
     friendMapTitle: "Travelers",
+    friendRequestAccept: "Accept",
+    friendRequestReject: "Reject",
+    friendRequestSent: "Request sent",
+    friendRequests: "Friend requests",
     friendSelected: "Selected friend",
     friendVisitNone: "Friends: none",
     friendVisits: "Friends",
@@ -170,6 +176,10 @@ const TEXT = {
     noRecentActivity: "No recent activity",
     noTravelerFound: "No traveler found for that username.",
     ownUsername: "That is your own username.",
+    alreadyFriends: "Already friends.",
+    makeAdmin: "Make Admin",
+    removeAdmin: "Remove Admin",
+    confirmRemoveOwnAdmin: "Remove your own admin access?",
     validUsernameRequired: "Enter a valid username.",
     usernameTaken: "Username already taken",
     friendAdded: "{username} added.",
@@ -185,7 +195,9 @@ const TEXT = {
     added: "명 추가됨",
     addSupabaseEnvVars: "Supabase 환경 변수 추가",
     admin: "관리자",
+    adminPanel: "관리자 패널",
     adminStats: "관리자 통계",
+    adminUsers: "사용자",
     africa: "아프리카",
     antarctica: "남극",
     asia: "아시아",
@@ -229,6 +241,10 @@ const TEXT = {
     friendClearSelection: "전체 친구",
     friendFallback: "친구",
     friendMapTitle: "여행자",
+    friendRequestAccept: "수락",
+    friendRequestReject: "거절",
+    friendRequestSent: "요청을 보냈습니다",
+    friendRequests: "친구 요청",
     friendSelected: "선택한 친구",
     friendVisitNone: "친구: 없음",
     friendVisits: "친구",
@@ -304,6 +320,10 @@ const TEXT = {
     noRecentActivity: "최근 활동이 없습니다",
     noTravelerFound: "해당 사용자명을 찾을 수 없습니다.",
     ownUsername: "내 사용자명은 추가할 수 없습니다.",
+    alreadyFriends: "이미 친구입니다.",
+    makeAdmin: "관리자로 지정",
+    removeAdmin: "관리자 해제",
+    confirmRemoveOwnAdmin: "본인의 관리자 권한을 해제할까요?",
     validUsernameRequired: "올바른 사용자명을 입력해 주세요.",
     usernameTaken: "이미 사용 중인 사용자명입니다",
     friendAdded: "{username}님을 추가했습니다.",
@@ -583,6 +603,53 @@ function getFeatureBoundsCenter(feature) {
   return [lat, Math.max(-179.5, Math.min(179.5, lng))];
 }
 
+function ringArea(ring) {
+  if (!Array.isArray(ring) || ring.length < 3) return 0;
+  let area = 0;
+  for (let index = 0; index < ring.length; index += 1) {
+    const current = ring[index];
+    const next = ring[(index + 1) % ring.length];
+    area += current[0] * next[1] - next[0] * current[1];
+  }
+  return Math.abs(area / 2);
+}
+
+function ringCentroid(ring) {
+  if (!Array.isArray(ring) || !ring.length) return null;
+  const sum = ring.reduce(
+    (acc, point) => {
+      acc.lng += point[0];
+      acc.lat += point[1];
+      return acc;
+    },
+    { lat: 0, lng: 0 },
+  );
+  return [sum.lat / ring.length, Math.max(-179.5, Math.min(179.5, sum.lng / ring.length))];
+}
+
+function getFeatureDisplayCenter(feature) {
+  const geometry = feature?.geometry;
+  const polygons =
+    geometry?.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry?.type === "MultiPolygon"
+        ? geometry.coordinates
+        : [];
+  let largestRing = null;
+  let largestArea = 0;
+
+  polygons.forEach((polygon) => {
+    const outerRing = polygon?.[0];
+    const area = ringArea(outerRing);
+    if (area > largestArea) {
+      largestArea = area;
+      largestRing = outerRing;
+    }
+  });
+
+  return ringCentroid(largestRing) || getFeatureBoundsCenter(feature);
+}
+
 function getIsoA2FromFeature(feature) {
   const props = feature?.properties || {};
   const iso = props.ISO_A2 || props.iso_a2 || props["ISO3166-1-Alpha-2"];
@@ -826,20 +893,31 @@ function HomeCountrySetupModal({ countryOptions, language, onSave }) {
 
 function FriendAvatarMarkers({ geojson, friendVisitMap, onSelectCountry }) {
   const markers = useMemo(() => {
-    return (geojson?.features || [])
-      .map((feature) => {
-        const code = countryCodeFromFeature(feature);
-        const friends = friendVisitMap.get(code) || [];
-        if (!friends.length) return null;
+    const featureByCode = new Map();
+    (geojson?.features || []).forEach((feature) => {
+      const code = getIsoA2FromFeature(feature);
+      if (code && !featureByCode.has(code)) {
+        featureByCode.set(code, feature);
+      }
+    });
+    if (featureByCode.has("FR")) {
+      console.log("[travel-map] FR avatar centroid", getFeatureDisplayCenter(featureByCode.get("FR")));
+    }
 
-        const position = getFeatureBoundsCenter(feature);
+    return Array.from(friendVisitMap.entries())
+      .map(([rawCode, friendsForCountry]) => {
+        const code = normalizeCountryCode(rawCode);
+        const feature = featureByCode.get(code);
+        if (!feature || !friendsForCountry.length) return null;
+
+        const position = getFeatureDisplayCenter(feature);
         if (!position) return null;
 
         return {
           code,
           name: countryNameFromFeature(feature),
           flag: countryFlag(code),
-          friends,
+          friends: friendsForCountry,
           position,
         };
       })
@@ -1262,6 +1340,38 @@ function FriendPanel({ friends, friendQuery, setFriendQuery, language, onAddFrie
   );
 }
 
+function FriendRequestList({ requests, language, onAccept, onReject }) {
+  if (!requests.length) {
+    return <p className="empty-text">{t(language, "noRecentActivity")}</p>;
+  }
+
+  return (
+    <div className="friend-request-list">
+      <h3>{t(language, "friendRequests")}</h3>
+      {requests.map((request) => {
+        const sender = request.sender || {};
+        return (
+          <article className="friend-request-item" key={request.id}>
+            <Avatar user={sender} size="sm" />
+            <div>
+              <strong>{sender.username || t(language, "friendFallback")}</strong>
+              <span>{formatTimestamp(request.created_at, language)}</span>
+            </div>
+            <div className="friend-request-actions">
+              <button className="secondary-action compact-action" onClick={() => onReject(request)}>
+                {t(language, "friendRequestReject")}
+              </button>
+              <button className="primary-action compact-action" onClick={() => onAccept(request)}>
+                {t(language, "friendRequestAccept")}
+              </button>
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 function FriendMapRow({ profile, friends, selectedFriendId, language, onSelectFriend, onClearSelection }) {
   return (
     <div className="friend-map-row" aria-label={t(language, "friendMapTitle")}>
@@ -1616,7 +1726,8 @@ function AccountMenu({ profile, language, isOpen, onToggle, onProfileSettings, o
   );
 }
 
-function NotificationMenu({ activities, language, isOpen, onToggle }) {
+function NotificationMenu({ activities, friendRequests, language, isOpen, onToggle, onAcceptRequest, onRejectRequest }) {
+  const hasItems = activities.length > 0 || friendRequests.length > 0;
   return (
     <div className="account-menu-wrap">
       <button
@@ -1627,10 +1738,18 @@ function NotificationMenu({ activities, language, isOpen, onToggle }) {
         aria-expanded={isOpen}
       >
         <Bell size={18} />
-        {activities.length > 0 && <span className="notification-dot" />}
+        {hasItems && <span className="notification-dot" />}
       </button>
       {isOpen && (
         <div className="top-dropdown notification-dropdown">
+          {friendRequests.length > 0 && (
+            <FriendRequestList
+              requests={friendRequests}
+              language={language}
+              onAccept={onAcceptRequest}
+              onReject={onRejectRequest}
+            />
+          )}
           <ActivityFeed activities={activities} language={language} compact />
         </div>
       )}
@@ -2140,6 +2259,7 @@ function CommunityPostCard({
           <div className="community-post-meta">
             <Avatar user={author} size="sm" />
             <strong>{author.username || t(language, "friendFallback")}</strong>
+            {author.is_admin && <span className="admin-badge compact-badge">{t(language, "admin")}</span>}
             <RoleBadge role={role} language={language} />
             <span>{formatTimestamp(post.created_at, language)}</span>
             {isEditedPost(post) && <span>{t(language, "edited")}</span>}
@@ -2381,6 +2501,7 @@ function ReplyItem({ reply, currentUserId, language, onUpdateReply, onDeleteRepl
       <div>
         <div className="reply-meta">
           <strong>{reply.profiles?.username || t(language, "friendFallback")}</strong>
+          {reply.profiles?.is_admin && <span className="admin-badge compact-badge">{t(language, "admin")}</span>}
           <span>{formatTimestamp(reply.created_at, language)}</span>
           {isEditedPost(reply) && <span>{t(language, "edited")}</span>}
           {canEdit && (
@@ -2478,6 +2599,54 @@ function AdminStatsPanel({ stats, language }) {
   );
 }
 
+function AdminManagementModal({ users, currentUserId, language, isLoading, onToggleAdmin, onClose }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="admin-panel-title">
+      <section className="collection-modal admin-management-modal">
+        <div className="modal-title-row">
+          <div>
+            <p className="eyebrow">{t(language, "admin")}</p>
+            <h2 id="admin-panel-title">{t(language, "adminPanel")}</h2>
+            <p>{t(language, "adminUsers")}</p>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} title={t(language, "close")} aria-label={t(language, "close")}>
+            <X size={18} />
+          </button>
+        </div>
+
+        {isLoading ? (
+          <p className="empty-text">{t(language, "loadingMap")}</p>
+        ) : (
+          <div className="admin-user-list">
+            {users.map((user) => (
+              <article className="admin-user-row" key={user.id}>
+                <Avatar user={user} size="sm" />
+                <div>
+                  <strong>
+                    {user.username || t(language, "friendFallback")}{" "}
+                    {user.is_admin && <span className="admin-badge compact-badge">{t(language, "admin")}</span>}
+                  </strong>
+                  <span>{getHomeCountryDisplay(user, language) || `🏳 ${t(language, "noHomeCountry")}`}</span>
+                </div>
+                <span className="admin-visit-count">
+                  {user.visitCount} {t(language, "countriesVisited")}
+                </span>
+                <button
+                  className={user.is_admin ? "secondary-action danger-action compact-action" : "primary-action compact-action"}
+                  onClick={() => onToggleAdmin(user)}
+                >
+                  {user.is_admin ? t(language, "removeAdmin") : t(language, "makeAdmin")}
+                </button>
+                {user.id === currentUserId && <span className="empty-text">{t(language, "you")}</span>}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -2486,6 +2655,7 @@ function App() {
   const [mineVisits, setMineVisits] = useState([]);
   const [friendVisits, setFriendVisits] = useState([]);
   const [friends, setFriends] = useState([]);
+  const [friendRequests, setFriendRequests] = useState([]);
   const [selectedFriendId, setSelectedFriendId] = useState("");
   const [activities, setActivities] = useState([]);
   const [selectedCountry, setSelectedCountry] = useState(null);
@@ -2498,6 +2668,7 @@ function App() {
   const [isLandmarkOpen, setIsLandmarkOpen] = useState(false);
   const [isCountryCollectionOpen, setIsCountryCollectionOpen] = useState(false);
   const [isBadgesOpen, setIsBadgesOpen] = useState(false);
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isNotificationMenuOpen, setIsNotificationMenuOpen] = useState(false);
   const [isCommunityOpen, setIsCommunityOpen] = useState(false);
@@ -2512,6 +2683,8 @@ function App() {
   const [replyingPostId, setReplyingPostId] = useState("");
   const [landmarkVisits, setLandmarkVisits] = useState([]);
   const [globalStats, setGlobalStats] = useState(null);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [isLoadingAdminUsers, setIsLoadingAdminUsers] = useState(false);
   const [animatedCountryCode, setAnimatedCountryCode] = useState("");
   const hoverHideTimer = useRef(null);
 
@@ -2725,12 +2898,18 @@ function App() {
 
     console.log("[travel-map] authenticated user id", userId);
 
-    const [{ data: myData }, { data: friendRows }] = await Promise.all([
+    const [{ data: myData }, { data: friendRows }, { data: requestRows, error: requestError }] = await Promise.all([
       supabase.from("visited_countries").select("*").eq("user_id", userId),
       supabase
         .from("friends")
-        .select("friend_id, friend:profiles!friends_friend_id_fkey(id, username, avatar_url, home_country_code)")
+        .select("friend_id, friend:profiles!friends_friend_id_fkey(id, username, avatar_url, home_country_code, is_admin)")
         .eq("user_id", userId),
+      supabase
+        .from("friend_requests")
+        .select("*, sender:profiles!friend_requests_sender_id_fkey(id, username, avatar_url, home_country_code, is_admin), receiver:profiles!friend_requests_receiver_id_fkey(id, username, avatar_url, home_country_code, is_admin)")
+        .eq("receiver_id", userId)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false }),
     ]);
 
     const friendProfiles = (friendRows || []).map((row) => row.friend).filter(Boolean);
@@ -2740,6 +2919,7 @@ function App() {
     console.log("[travel-map] fetched friends count", friendProfiles.length);
     setMineVisits(myData || []);
     setFriends(friendProfiles);
+    setFriendRequests(requestError ? [] : requestRows || []);
 
     if (!friendIds.length) {
       setFriendVisits([]);
@@ -3039,21 +3219,164 @@ function App() {
       return;
     }
 
-    const { error } = await supabase.from("friends").insert({
-      user_id: userId,
-      friend_id: friend.id,
+    if (friends.some((currentFriend) => currentFriend.id === friend.id)) {
+      setNotice(t(language, "alreadyFriends"));
+      setIsAddingFriend(false);
+      return;
+    }
+
+    const { data: existingRequests } = await supabase
+      .from("friend_requests")
+      .select("id, status")
+      .or(`and(sender_id.eq.${userId},receiver_id.eq.${friend.id}),and(sender_id.eq.${friend.id},receiver_id.eq.${userId})`)
+      .in("status", ["pending", "accepted"])
+      .limit(1);
+    const existingRequest = existingRequests?.[0];
+
+    if (existingRequest?.status === "accepted") {
+      setNotice(t(language, "alreadyFriends"));
+      setIsAddingFriend(false);
+      return;
+    }
+
+    if (existingRequest?.status === "pending") {
+      setNotice(t(language, "friendRequestSent"));
+      setFriendQuery("");
+      setIsAddingFriend(false);
+      return;
+    }
+
+    const { error } = await supabase.from("friend_requests").insert({
+      sender_id: userId,
+      receiver_id: friend.id,
+      status: "pending",
     });
 
     if (error && error.code !== "23505") {
       setNotice(error.message);
     } else {
       setFriendQuery("");
-      setNotice(formatText(language, "friendAdded", { username: friend.username }));
+      setNotice(t(language, "friendRequestSent"));
       refreshSocialData();
     }
 
     setIsAddingFriend(false);
   };
+
+  const handleAcceptFriendRequest = async (request) => {
+    const userId = session?.user?.id;
+    if (!supabase || !userId || request?.receiver_id !== userId) return;
+
+    const { error: updateError } = await supabase
+      .from("friend_requests")
+      .update({ status: "accepted" })
+      .eq("id", request.id)
+      .eq("receiver_id", userId);
+
+    if (updateError) {
+      setNotice(updateError.message);
+      return;
+    }
+
+    const { error: friendError } = await supabase.from("friends").upsert(
+      [
+        { user_id: request.sender_id, friend_id: request.receiver_id },
+        { user_id: request.receiver_id, friend_id: request.sender_id },
+      ],
+      { onConflict: "user_id,friend_id" },
+    );
+
+    if (friendError) {
+      setNotice(friendError.message);
+      return;
+    }
+
+    setFriendRequests((current) => current.filter((item) => item.id !== request.id));
+    refreshSocialData();
+  };
+
+  const handleRejectFriendRequest = async (request) => {
+    const userId = session?.user?.id;
+    if (!supabase || !userId || request?.receiver_id !== userId) return;
+
+    const { error } = await supabase
+      .from("friend_requests")
+      .update({ status: "rejected" })
+      .eq("id", request.id)
+      .eq("receiver_id", userId);
+
+    if (error) {
+      setNotice(error.message);
+      return;
+    }
+
+    setFriendRequests((current) => current.filter((item) => item.id !== request.id));
+  };
+
+  const loadAdminUsers = useCallback(async () => {
+    if (!supabase || !profile?.is_admin) return;
+    setIsLoadingAdminUsers(true);
+    const [{ data: userRows, error: userError }, { data: visitRows }] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("id, username, avatar_url, home_country_code, is_admin")
+        .order("username", { ascending: true }),
+      supabase.from("visited_countries").select("user_id, country_code"),
+    ]);
+
+    if (userError) {
+      setNotice(userError.message);
+      setIsLoadingAdminUsers(false);
+      return;
+    }
+
+    const visitCounts = new Map();
+    (visitRows || []).forEach((visit) => {
+      const current = visitCounts.get(visit.user_id) || new Set();
+      current.add(normalizeCountryCode(visit.country_code));
+      visitCounts.set(visit.user_id, current);
+    });
+
+    setAdminUsers(
+      (userRows || []).map((user) => ({
+        ...user,
+        visitCount: (visitCounts.get(user.id) || new Set()).size + (user.home_country_code ? 1 : 0),
+      })),
+    );
+    setIsLoadingAdminUsers(false);
+  }, [profile?.is_admin]);
+
+  const handleToggleAdmin = async (user) => {
+    const userId = session?.user?.id;
+    if (!supabase || !profile?.is_admin || !user?.id || !userId) return;
+    if (user.id === userId && user.is_admin && !window.confirm(t(language, "confirmRemoveOwnAdmin"))) {
+      return;
+    }
+
+    const nextIsAdmin = !user.is_admin;
+    setAdminUsers((current) =>
+      current.map((item) => (item.id === user.id ? { ...item, is_admin: nextIsAdmin } : item)),
+    );
+
+    const { error } = await supabase.from("profiles").update({ is_admin: nextIsAdmin }).eq("id", user.id);
+    if (error) {
+      setNotice(error.message);
+      setAdminUsers((current) =>
+        current.map((item) => (item.id === user.id ? { ...item, is_admin: user.is_admin } : item)),
+      );
+      return;
+    }
+
+    if (user.id === userId) {
+      setProfile((current) => ({ ...(current || {}), is_admin: nextIsAdmin }));
+    }
+  };
+
+  useEffect(() => {
+    if (isAdminPanelOpen) {
+      loadAdminUsers();
+    }
+  }, [isAdminPanelOpen, loadAdminUsers]);
 
   const openCommunity = useCallback(
     (country) => {
@@ -3106,7 +3429,7 @@ function App() {
       setIsCommunityLoading(true);
       const { data, error } = await supabase
         .from("community_posts")
-        .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code)")
+        .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code, is_admin)")
         .eq("country_code", boardCode)
         .order("created_at", { ascending: false })
         .limit(50);
@@ -3129,7 +3452,7 @@ function App() {
         const [{ data: replyRows, error: replyError }, { data: voteRows, error: voteError }] = await Promise.all([
           supabase
             .from("community_replies")
-            .select("*, profiles!community_replies_user_id_fkey(id, username, avatar_url)")
+            .select("*, profiles!community_replies_user_id_fkey(id, username, avatar_url, is_admin)")
             .in("post_id", postIds)
             .order("created_at", { ascending: true }),
           supabase.from("community_votes").select("*").in("post_id", postIds),
@@ -3248,7 +3571,7 @@ function App() {
           body,
           image_url: imageUrl,
         })
-        .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code)")
+        .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code, is_admin)")
         .single();
 
       setIsPostingCommunity(false);
@@ -3324,7 +3647,7 @@ function App() {
         })
         .eq("id", post.id)
         .eq("user_id", userId)
-        .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code)")
+        .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code, is_admin)")
         .single();
 
       if (error && isMissingCommunityPostsError(error)) {
@@ -3337,7 +3660,7 @@ function App() {
           })
           .eq("id", post.id)
           .eq("user_id", userId)
-          .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code)")
+          .select("*, profiles!community_posts_user_id_fkey(id, username, avatar_url, home_country_code, is_admin)")
           .single();
         data = fallback.data ? { ...fallback.data, updated_at: updatedAt } : fallback.data;
         error = fallback.error;
@@ -3472,7 +3795,7 @@ function App() {
           user_id: userId,
           body: body.trim(),
         })
-        .select("*, profiles!community_replies_user_id_fkey(id, username, avatar_url)")
+        .select("*, profiles!community_replies_user_id_fkey(id, username, avatar_url, is_admin)")
         .single();
       setReplyingPostId("");
 
@@ -3509,7 +3832,7 @@ function App() {
         .update({ body, updated_at: optimisticUpdatedAt })
         .eq("id", reply.id)
         .eq("user_id", userId)
-        .select("*, profiles!community_replies_user_id_fkey(id, username, avatar_url)")
+        .select("*, profiles!community_replies_user_id_fkey(id, username, avatar_url, is_admin)")
         .single();
 
       if (error && isMissingCommunityPostsError(error)) {
@@ -3518,7 +3841,7 @@ function App() {
           .update({ body })
           .eq("id", reply.id)
           .eq("user_id", userId)
-          .select("*, profiles!community_replies_user_id_fkey(id, username, avatar_url)")
+          .select("*, profiles!community_replies_user_id_fkey(id, username, avatar_url, is_admin)")
           .single();
         data = fallback.data ? { ...fallback.data, updated_at: optimisticUpdatedAt } : fallback.data;
         error = fallback.error;
@@ -3825,6 +4148,12 @@ function App() {
             <MessageCircle size={17} />
             <span>{t(language, "community")}</span>
           </button>
+          {profile?.is_admin && (
+            <button className="landmark-button" onClick={() => setIsAdminPanelOpen(true)}>
+              <Settings size={17} />
+              <span>{t(language, "adminPanel")}</span>
+            </button>
+          )}
           <a className="instagram-top-link" href="https://www.instagram.com/gafl.ai" target="_blank" rel="noreferrer">
             <Instagram size={17} />
             <span>@gafl.ai</span>
@@ -3834,12 +4163,15 @@ function App() {
           </button>
           <NotificationMenu
             activities={activities}
+            friendRequests={friendRequests}
             language={language}
             isOpen={isNotificationMenuOpen}
             onToggle={() => {
               setIsNotificationMenuOpen((current) => !current);
               setIsAccountMenuOpen(false);
             }}
+            onAcceptRequest={handleAcceptFriendRequest}
+            onRejectRequest={handleRejectFriendRequest}
           />
           <AccountMenu
             profile={profile}
@@ -3933,6 +4265,17 @@ function App() {
             <BadgesPanel visitCount={displayedVisitCount} stats={globalStats} language={language} compact />
           </section>
         </div>
+      )}
+
+      {profile?.is_admin && isAdminPanelOpen && (
+        <AdminManagementModal
+          users={adminUsers}
+          currentUserId={session?.user?.id}
+          language={language}
+          isLoading={isLoadingAdminUsers}
+          onToggleAdmin={handleToggleAdmin}
+          onClose={() => setIsAdminPanelOpen(false)}
+        />
       )}
 
       {isCommunityOpen && (
