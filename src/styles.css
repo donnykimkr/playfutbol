@@ -290,7 +290,7 @@ button:disabled {
   gap: 12px;
 }
 
-.landmark-button {
+.nav-action {
   display: inline-flex;
   min-height: 40px;
   align-items: center;
@@ -303,7 +303,7 @@ button:disabled {
   font-weight: 800;
 }
 
-.landmark-button:hover {
+.nav-action:hover {
   border-color: #94a3b8;
   background: #f8fafc;
 }
@@ -620,44 +620,6 @@ button:disabled {
   color: #334155;
   font-size: 0.86rem;
   font-weight: 800;
-}
-
-.landmark-marker {
-  border: 0;
-  background: transparent;
-}
-
-.landmark-marker-photo {
-  display: block;
-  width: 46px;
-  height: 46px;
-  overflow: hidden;
-  border: 0;
-  border-radius: 10px;
-  background: #ffffff;
-  object-fit: cover;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.22);
-  transition:
-    box-shadow 140ms ease,
-    transform 140ms ease;
-}
-
-.landmark-marker-photo:hover {
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.28);
-  transform: scale(1.12) translateY(-1px);
-}
-
-.landmark-marker-photo.is-collected {
-  box-shadow:
-    0 0 0 2px rgba(20, 184, 166, 0.5),
-    0 8px 18px rgba(15, 23, 42, 0.22);
-}
-
-.landmark-marker-fallback {
-  display: inline-grid;
-  place-items: center;
-  color: #0f766e;
-  font-weight: 900;
 }
 
 .swatch {
@@ -1003,6 +965,12 @@ button:disabled {
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   background: #fff;
+  cursor: pointer;
+}
+
+.admin-user-row.is-selected {
+  border-color: #14b8a6;
+  background: #f0fdfa;
 }
 
 .admin-user-row strong,
@@ -1018,6 +986,29 @@ button:disabled {
 
 .admin-visit-count {
   white-space: nowrap;
+}
+
+.admin-user-detail {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #dbe3ed;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.admin-user-detail h3,
+.admin-user-detail p {
+  margin: 0;
+}
+
+.admin-country-grid {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.country-rank-flag {
+  font-size: 1.05rem;
 }
 
 .stat-grid {
@@ -1071,42 +1062,6 @@ button:disabled {
   color: #ffffff;
   background: #0f766e;
   font-weight: 800;
-}
-
-.landmark-popup .leaflet-popup-content {
-  width: 260px !important;
-  margin: 14px;
-}
-
-.landmark-popup-content {
-  display: grid;
-  gap: 10px;
-}
-
-.landmark-popup-photo {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: 8px;
-  object-fit: cover;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
-}
-
-.landmark-popup-title {
-  display: grid;
-  gap: 2px;
-}
-
-.landmark-popup h3 {
-  margin: 0;
-  color: #0f172a;
-  font-size: 1rem;
-  line-height: 1.25;
-}
-
-.landmark-popup p {
-  margin: 0;
-  color: #64748b;
-  line-height: 1.4;
 }
 
 .modal-backdrop {
@@ -1186,12 +1141,6 @@ button:disabled {
   margin: 6px 0 0;
   color: #64748b;
   line-height: 1.45;
-}
-
-.landmark-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
 }
 
 .continent-list {
@@ -1612,71 +1561,6 @@ button:disabled {
   background: #e2e8f0;
 }
 
-.landmark-card {
-  display: grid;
-  grid-template-columns: 112px minmax(0, 1fr);
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid #dbe3ed;
-  border-radius: 8px;
-  background: #f8fafc;
-}
-
-.landmark-card.is-collected {
-  border-color: #99f6e4;
-  background: #f0fdfa;
-}
-
-.landmark-card-photo {
-  width: 112px;
-  height: 112px;
-  border: 0;
-  border-radius: 8px;
-  background: #ffffff;
-  object-fit: cover;
-  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
-}
-
-.landmark-card-fallback {
-  display: grid;
-  place-items: center;
-  color: #0f766e;
-  font-size: 1.8rem;
-  font-weight: 900;
-}
-
-.landmark-card-body {
-  display: grid;
-  min-width: 0;
-  gap: 12px;
-}
-
-.landmark-card-heading {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.landmark-card h3 {
-  margin: 0;
-  color: #0f172a;
-  font-size: 1rem;
-  line-height: 1.25;
-}
-
-.landmark-card-heading p,
-.landmark-description {
-  font-size: 0.9rem;
-}
-
-.landmark-action-button {
-  width: 100%;
-  min-height: 42px;
-  padding: 0 14px;
-  font-size: 0.92rem;
-}
-
 .collection-status {
   flex: 0 0 auto;
   padding: 5px 8px;
@@ -1884,21 +1768,8 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .landmark-button span {
+  .nav-action span {
     display: none;
-  }
-
-  .landmark-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .landmark-card {
-    grid-template-columns: 88px minmax(0, 1fr);
-  }
-
-  .landmark-card-photo {
-    width: 88px;
-    height: 88px;
   }
 
   .legend {
