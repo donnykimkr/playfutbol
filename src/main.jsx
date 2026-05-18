@@ -916,7 +916,6 @@ function SelectedCountryFocus({ selectedCountry, geoJsonRef, onMissingCountry })
     if (bounds?.isValid?.()) {
       map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6 });
     }
-    targetLayer.openPopup?.();
   }, [geoJsonRef, map, onMissingCountry, selectedCountry?.code, selectedCountry?.focus, selectedCountry?.focusKey]);
 
   return null;
@@ -938,6 +937,9 @@ function TravelMap({
   onCollectLandmark,
   onMissingCountry,
   selectedFriend,
+  onCountryHover,
+  onCountryHoverMove,
+  onCountryHoverEnd,
 }) {
   const geoJsonRef = useRef(null);
   const [zoom, setZoom] = useState(2);
@@ -1029,12 +1031,25 @@ function TravelMap({
       const flag = countryFlag(code);
 
       layer.on({
-        click: () => {
+        click: (event) => {
+          const original = event.originalEvent || {};
           onSelectCountry({ code, flag });
-          layer.openPopup();
+          onCountryHover?.({
+            code,
+            flag,
+            x: original.clientX || 24,
+            y: original.clientY || 160,
+          });
         },
-        mouseover: () => {
+        mouseover: (event) => {
+          const original = event.originalEvent || {};
           const style = styleFeature(feature);
+          onCountryHover?.({
+            code,
+            flag,
+            x: original.clientX || 24,
+            y: original.clientY || 160,
+          });
           layer.setStyle({
             weight: style.weight + 0.35,
             opacity: Math.min((style.opacity || 0.2) + 0.18, 0.64),
@@ -1043,43 +1058,22 @@ function TravelMap({
             fillOpacity: Math.min(style.fillOpacity + 0.08, 0.38),
           });
         },
+        mousemove: (event) => {
+          const original = event.originalEvent || {};
+          onCountryHoverMove?.({
+            code,
+            flag,
+            x: original.clientX || 24,
+            y: original.clientY || 160,
+          });
+        },
         mouseout: () => {
           geoJsonRef.current?.resetStyle(layer);
+          onCountryHoverEnd?.();
         },
       });
-
-      layer.bindPopup(() => {
-        const name = getCountryName(code, language) || countryNameFromFeature(feature);
-        const mine = visitedMine.has(code);
-        const isHome = homeCode && code === homeCode;
-        const friends = friendVisitMap.get(code) || [];
-        const friendList = friends.length
-          ? `<div class="popup-friends">${t(language, "friendVisits")}: ${friends
-              .map((friend) => friend.username)
-              .join(", ")}</div>`
-          : `<div class="popup-friends">${t(language, "friendVisitNone")}</div>`;
-        const wrapper = L.DomUtil.create("div", "country-popup");
-        wrapper.innerHTML = `
-          <div class="popup-title">${flag} ${name}</div>
-          ${friendList}
-          <button class="popup-button" ${isHome ? "disabled" : ""}>
-            ${isHome ? t(language, "homeCountry") : mine ? t(language, "removeVisited") : t(language, "countryVisited")}
-          </button>
-        `;
-        const button = wrapper.querySelector("button");
-        L.DomEvent.on(button, "click", (event) => {
-          L.DomEvent.stop(event);
-          if (isHome) return;
-          if (mine) {
-            onRemoveVisited({ code, flag });
-          } else {
-            onMarkVisited({ code, flag });
-          }
-        });
-        return wrapper;
-      });
     },
-    [friendVisitMap, homeCode, language, onMarkVisited, onRemoveVisited, onSelectCountry, styleFeature, visitedMine],
+    [onCountryHover, onCountryHoverEnd, onCountryHoverMove, onSelectCountry, styleFeature],
   );
 
   const handleZoomChange = useCallback((nextZoom) => {
@@ -1133,7 +1127,7 @@ function TravelMap({
   );
 }
 
-function CountryPanel({
+function CountryHoverCard({
   country,
   mineSet,
   friendVisitMap,
@@ -1141,76 +1135,88 @@ function CountryPanel({
   homeCountryCode,
   countryVisitStats,
   totalUserCount,
+  isSaving,
   onMarkVisited,
   onRemoveVisited,
   onOpenCommunity,
-  isSaving,
+  onMouseEnter,
+  onMouseLeave,
 }) {
-  const friends = country ? friendVisitMap.get(country.code) || [] : [];
-  const isHome = Boolean(country && homeCountryCode && country.code === homeCountryCode);
-  const mine = country ? mineSet.has(country.code) : false;
-  const displayName = country ? getCountryName(country.code, language) || country.name : "";
-  const visitStats = country
-    ? countryVisitStats?.get?.(country.code) || {
-        hasData: Boolean(totalUserCount),
-        totalUsers: totalUserCount || 0,
-        visitedUsers: 0,
-        percent: 0,
-      }
-    : null;
+  if (!country) return null;
+
+  const code = normalizeCountryCode(country.code);
+  const isHome = Boolean(homeCountryCode && code === homeCountryCode);
+  const mine = mineSet.has(code);
+  const friends = friendVisitMap.get(code) || [];
+  const displayName = getCountryName(code, language) || country.name || code;
+  const visitStats =
+    countryVisitStats?.get?.(code) || {
+      hasData: Boolean(totalUserCount),
+      totalUsers: totalUserCount || 0,
+      visitedUsers: 0,
+      percent: 0,
+    };
+  const x = Math.min(Math.max((country.x || 24) + 14, 12), Math.max(12, window.innerWidth - 336));
+  const y = Math.min(Math.max((country.y || 120) + 14, 12), Math.max(12, window.innerHeight - 330));
 
   return (
-    <aside className="side-panel country-panel">
-      {country ? (
-        <>
-          <div className="panel-heading">
-            <h2>
-              {country.flag} {displayName}
-            </h2>
-            <p>
-              {isHome ? t(language, "homeCountry") : `${t(language, "youVisited")}: ${mine ? t(language, "yes") : t(language, "no")}`}
-            </p>
-            {visitStats?.hasData ? (
-              <p>{formatText(language, "countryVisitPercentShort", { percent: visitStats.percent })}</p>
-            ) : (
-              <p>{t(language, "globalPercentileEmpty")}</p>
-            )}
-          </div>
+    <div
+      className="country-hover-card"
+      style={{ left: x, top: y }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      role="dialog"
+      aria-label={displayName}
+    >
+      <div className="country-hover-heading">
+        <h2>
+          {country.flag || countryFlag(code)} {displayName}
+        </h2>
+        <p>
+          {isHome
+            ? t(language, "homeCountry")
+            : `${t(language, "youVisited")}: ${mine ? t(language, "yes") : t(language, "no")}`}
+        </p>
+        {visitStats?.hasData ? (
+          <p>{formatText(language, "countryVisitPercentShort", { percent: visitStats.percent })}</p>
+        ) : (
+          <p>{t(language, "globalPercentileEmpty")}</p>
+        )}
+      </div>
+
+      <div className="country-hover-actions">
+        {!isHome && (
           <button
             className={mine ? "secondary-action danger-action" : "primary-action"}
-            onClick={() => (mine ? onRemoveVisited(country) : onMarkVisited(country))}
-            disabled={isSaving || isHome}
+            onClick={() => (mine ? onRemoveVisited({ code, flag: country.flag }) : onMarkVisited({ code, flag: country.flag }))}
+            disabled={isSaving}
           >
-            <Check size={17} />
-            {isHome ? t(language, "homeCountry") : mine ? t(language, "removeVisited") : t(language, "countryVisited")}
+            <Check size={16} />
+            {mine ? t(language, "removeVisited") : t(language, "countryVisited")}
           </button>
-          <button className="secondary-action" onClick={() => onOpenCommunity(country)}>
-            <MessageCircle size={17} />
-            {t(language, "communityOpen")}
-          </button>
-          <div>
-            <h3>{t(language, "friendsVisited")}</h3>
-            {friends.length ? (
-              <ul className="simple-list avatar-list">
-                {friends.map((friend) => (
-                  <li key={friend.id}>
-                    <Avatar user={friend} size="sm" />
-                    <span>{friend.username}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="empty-text">{t(language, "noFriendsCountry")}</p>
-            )}
-          </div>
-        </>
-      ) : (
-        <div className="panel-placeholder">
-          <h2>{t(language, "searchCountry")}</h2>
-          <p>{t(language, "countryDetailsPrompt")}</p>
-        </div>
-      )}
-    </aside>
+        )}
+        <button className="secondary-action" onClick={() => onOpenCommunity({ code, flag: country.flag, name: displayName })}>
+          <MessageCircle size={16} />
+          {t(language, "communityOpen")}
+        </button>
+      </div>
+
+      <div>
+        <h3>{t(language, "friendsVisited")}</h3>
+        {friends.length ? (
+          <ul className="country-hover-friends">
+            {friends.map((friend) => (
+              <li key={friend.id}>
+                <Avatar user={friend} size="sm" />
+                <span>{friend.username}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="empty-text">{t(language, "noFriendsCountry")}</p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2477,6 +2483,7 @@ function App() {
   const [selectedFriendId, setSelectedFriendId] = useState("");
   const [activities, setActivities] = useState([]);
   const [selectedCountry, setSelectedCountry] = useState(null);
+  const [hoveredCountry, setHoveredCountry] = useState(null);
   const [friendQuery, setFriendQuery] = useState("");
   const [notice, setNotice] = useState("");
   const [isSavingVisit, setIsSavingVisit] = useState(false);
@@ -2500,6 +2507,7 @@ function App() {
   const [landmarkVisits, setLandmarkVisits] = useState([]);
   const [globalStats, setGlobalStats] = useState(null);
   const [animatedCountryCode, setAnimatedCountryCode] = useState("");
+  const hoverHideTimer = useRef(null);
 
   const language = getLanguage(profile);
   const homeCountryCode = normalizeCountryCode(profile?.home_country_code);
@@ -2870,6 +2878,14 @@ function App() {
   }, [friends, selectedFriendId]);
 
   useEffect(() => {
+    return () => {
+      if (hoverHideTimer.current) {
+        window.clearTimeout(hoverHideTimer.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     refreshGlobalStats();
   }, [homeCountryCode, refreshGlobalStats, mineVisits.length]);
 
@@ -3050,6 +3066,53 @@ function App() {
     },
     [countryOptions, defaultCommunityCountry, language],
   );
+
+  const showCountryHover = useCallback(
+    (country) => {
+      if (hoverHideTimer.current) {
+        window.clearTimeout(hoverHideTimer.current);
+      }
+      const code = normalizeCountryCode(country?.code);
+      if (!code) return;
+      setHoveredCountry({
+        code,
+        flag: country.flag || countryFlag(code),
+        name: getCountryName(code, language),
+        x: country.x,
+        y: country.y,
+      });
+    },
+    [language],
+  );
+
+  const moveCountryHover = useCallback((country) => {
+    const code = normalizeCountryCode(country?.code);
+    if (!code) return;
+    setHoveredCountry((current) => {
+      if (!current || current.code !== code) {
+        return {
+          code,
+          flag: country.flag || countryFlag(code),
+          x: country.x,
+          y: country.y,
+        };
+      }
+      return { ...current, x: country.x, y: country.y };
+    });
+  }, []);
+
+  const scheduleCountryHoverClose = useCallback(() => {
+    if (hoverHideTimer.current) {
+      window.clearTimeout(hoverHideTimer.current);
+    }
+    hoverHideTimer.current = window.setTimeout(() => setHoveredCountry(null), 120);
+  }, []);
+
+  const keepCountryHoverOpen = useCallback(() => {
+    if (hoverHideTimer.current) {
+      window.clearTimeout(hoverHideTimer.current);
+    }
+  }, []);
 
   const refreshCommunityPosts = useCallback(
     async (countryCode) => {
@@ -3951,6 +4014,9 @@ function App() {
               onCollectLandmark={handleCollectLandmark}
               onMissingCountry={() => setNotice(t(language, "countryNotFound"))}
               selectedFriend={selectedFriend}
+              onCountryHover={showCountryHover}
+              onCountryHoverMove={moveCountryHover}
+              onCountryHoverEnd={scheduleCountryHoverClose}
             />
           ) : (
             <div className="map-fallback">
@@ -3958,24 +4024,26 @@ function App() {
               <p>{geojsonError || t(language, "mapFallback")}</p>
             </div>
           )}
-        </div>
-        <div className="panel-stack">
-          <ProfilePanel profile={profile} language={language} />
-          <GlobalPercentilePanel stats={globalStats} language={language} />
-          {profile?.is_admin && <AdminStatsPanel stats={globalStats} language={language} />}
-          <CountryPanel
-            country={selectedCountry}
+          <CountryHoverCard
+            country={hoveredCountry}
             mineSet={visitState.mineSet}
             friendVisitMap={friendVisitMap}
             language={language}
             homeCountryCode={homeCountryCode}
             countryVisitStats={globalStats?.countryVisitStats}
             totalUserCount={globalStats?.totalUsers}
+            isSaving={isSavingVisit}
             onMarkVisited={handleMarkVisited}
             onRemoveVisited={handleRemoveVisited}
             onOpenCommunity={openCommunity}
-            isSaving={isSavingVisit}
+            onMouseEnter={keepCountryHoverOpen}
+            onMouseLeave={scheduleCountryHoverClose}
           />
+        </div>
+        <div className="panel-stack">
+          <ProfilePanel profile={profile} language={language} />
+          <GlobalPercentilePanel stats={globalStats} language={language} />
+          {profile?.is_admin && <AdminStatsPanel stats={globalStats} language={language} />}
           <SelectedFriendPanel
             friend={selectedFriend}
             visitCount={selectedFriendVisitSet.size}

@@ -460,6 +460,78 @@ button:disabled {
   background: #172033;
 }
 
+.country-hover-card {
+  position: fixed;
+  z-index: 760;
+  display: grid;
+  width: min(320px, calc(100vw - 24px));
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #dbe3ed;
+  border-radius: 12px;
+  color: #243244;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2);
+  backdrop-filter: blur(10px);
+}
+
+.country-hover-heading {
+  display: grid;
+  gap: 4px;
+}
+
+.country-hover-heading h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+
+.country-hover-heading p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.country-hover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.country-hover-actions .primary-action,
+.country-hover-actions .secondary-action {
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 0.84rem;
+}
+
+.country-hover-card h3 {
+  margin: 0 0 7px;
+  color: #0f172a;
+  font-size: 0.9rem;
+}
+
+.country-hover-friends {
+  display: grid;
+  gap: 7px;
+  max-height: 116px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.country-hover-friends li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #334155;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
 .landmark-marker {
   border: 0;
   background: transparent;
