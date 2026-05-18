@@ -938,7 +938,6 @@ function TravelMap({
   onMissingCountry,
   selectedFriend,
   onCountryHover,
-  onCountryHoverMove,
   onCountryHoverEnd,
 }) {
   const geoJsonRef = useRef(null);
@@ -1033,12 +1032,12 @@ function TravelMap({
       layer.on({
         click: (event) => {
           const original = event.originalEvent || {};
-          onSelectCountry({ code, flag });
-          onCountryHover?.({
+          onSelectCountry({
             code,
             flag,
             x: original.clientX || 24,
             y: original.clientY || 160,
+            showDetails: true,
           });
         },
         mouseover: (event) => {
@@ -1058,22 +1057,13 @@ function TravelMap({
             fillOpacity: Math.min(style.fillOpacity + 0.08, 0.38),
           });
         },
-        mousemove: (event) => {
-          const original = event.originalEvent || {};
-          onCountryHoverMove?.({
-            code,
-            flag,
-            x: original.clientX || 24,
-            y: original.clientY || 160,
-          });
-        },
         mouseout: () => {
           geoJsonRef.current?.resetStyle(layer);
           onCountryHoverEnd?.();
         },
       });
     },
-    [onCountryHover, onCountryHoverEnd, onCountryHoverMove, onSelectCountry, styleFeature],
+    [onCountryHover, onCountryHoverEnd, onSelectCountry, styleFeature],
   );
 
   const handleZoomChange = useCallback((nextZoom) => {
@@ -1127,7 +1117,23 @@ function TravelMap({
   );
 }
 
-function CountryHoverCard({
+function CountryHoverLabel({ country, language }) {
+  if (!country) return null;
+
+  const code = normalizeCountryCode(country.code);
+  const displayName = getCountryName(code, language) || country.name || code;
+  const x = Math.min(Math.max((country.x || 24) + 12, 12), Math.max(12, window.innerWidth - 220));
+  const y = Math.min(Math.max((country.y || 120) + 12, 12), Math.max(12, window.innerHeight - 72));
+
+  return (
+    <div className="country-hover-label" style={{ left: x, top: y }} aria-label={displayName}>
+      <span>{country.flag || countryFlag(code)}</span>
+      <strong>{displayName}</strong>
+    </div>
+  );
+}
+
+function CountryDetailCard({
   country,
   mineSet,
   friendVisitMap,
@@ -1139,8 +1145,7 @@ function CountryHoverCard({
   onMarkVisited,
   onRemoveVisited,
   onOpenCommunity,
-  onMouseEnter,
-  onMouseLeave,
+  onClose,
 }) {
   if (!country) return null;
 
@@ -1156,18 +1161,19 @@ function CountryHoverCard({
       visitedUsers: 0,
       percent: 0,
     };
-  const x = Math.min(Math.max((country.x || 24) + 14, 12), Math.max(12, window.innerWidth - 336));
-  const y = Math.min(Math.max((country.y || 120) + 14, 12), Math.max(12, window.innerHeight - 330));
+  const x = Math.min(Math.max((country.x || 28) + 16, 12), Math.max(12, window.innerWidth - 336));
+  const y = Math.min(Math.max((country.y || 132) + 16, 12), Math.max(12, window.innerHeight - 330));
 
   return (
     <div
-      className="country-hover-card"
+      className="country-detail-card"
       style={{ left: x, top: y }}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
       role="dialog"
       aria-label={displayName}
     >
+      <button className="country-detail-close" onClick={onClose} aria-label={t(language, "close")}>
+        <X size={16} />
+      </button>
       <div className="country-hover-heading">
         <h2>
           {country.flag || countryFlag(code)} {displayName}
@@ -3085,33 +3091,11 @@ function App() {
     [language],
   );
 
-  const moveCountryHover = useCallback((country) => {
-    const code = normalizeCountryCode(country?.code);
-    if (!code) return;
-    setHoveredCountry((current) => {
-      if (!current || current.code !== code) {
-        return {
-          code,
-          flag: country.flag || countryFlag(code),
-          x: country.x,
-          y: country.y,
-        };
-      }
-      return { ...current, x: country.x, y: country.y };
-    });
-  }, []);
-
   const scheduleCountryHoverClose = useCallback(() => {
     if (hoverHideTimer.current) {
       window.clearTimeout(hoverHideTimer.current);
     }
     hoverHideTimer.current = window.setTimeout(() => setHoveredCountry(null), 120);
-  }, []);
-
-  const keepCountryHoverOpen = useCallback(() => {
-    if (hoverHideTimer.current) {
-      window.clearTimeout(hoverHideTimer.current);
-    }
   }, []);
 
   const refreshCommunityPosts = useCallback(
@@ -4015,7 +3999,6 @@ function App() {
               onMissingCountry={() => setNotice(t(language, "countryNotFound"))}
               selectedFriend={selectedFriend}
               onCountryHover={showCountryHover}
-              onCountryHoverMove={moveCountryHover}
               onCountryHoverEnd={scheduleCountryHoverClose}
             />
           ) : (
@@ -4024,8 +4007,9 @@ function App() {
               <p>{geojsonError || t(language, "mapFallback")}</p>
             </div>
           )}
-          <CountryHoverCard
-            country={hoveredCountry}
+          <CountryHoverLabel country={hoveredCountry} language={language} />
+          <CountryDetailCard
+            country={selectedCountry}
             mineSet={visitState.mineSet}
             friendVisitMap={friendVisitMap}
             language={language}
@@ -4036,8 +4020,7 @@ function App() {
             onMarkVisited={handleMarkVisited}
             onRemoveVisited={handleRemoveVisited}
             onOpenCommunity={openCommunity}
-            onMouseEnter={keepCountryHoverOpen}
-            onMouseLeave={scheduleCountryHoverClose}
+            onClose={() => setSelectedCountry(null)}
           />
         </div>
         <div className="panel-stack">
