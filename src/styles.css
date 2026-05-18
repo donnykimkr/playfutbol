@@ -151,21 +151,101 @@ button:disabled {
   background: #0f766e;
 }
 
-.profile-button {
+.account-menu-wrap {
+  position: relative;
   display: inline-flex;
-  min-height: 40px;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px 4px 5px;
-  border: 2px solid #0f766e;
-  border-radius: 999px;
-  color: #0f3f3a;
-  background: #ecfdf5;
-  font-weight: 800;
 }
 
-.profile-button:hover {
-  background: #d1fae5;
+.account-avatar-button,
+.notification-button {
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #243244;
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+}
+
+.account-avatar-button {
+  padding: 2px;
+  border-color: #0f766e;
+  background: #ecfdf5;
+}
+
+.notification-button {
+  position: relative;
+}
+
+.account-avatar-button:hover,
+.notification-button:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.notification-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: #ef4444;
+}
+
+.top-dropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 900;
+  min-width: 220px;
+  border: 1px solid #dbe3ed;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 22px 55px rgba(15, 23, 42, 0.18);
+}
+
+.account-dropdown {
+  display: grid;
+  overflow: hidden;
+  padding: 6px;
+}
+
+.account-dropdown button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  color: #243244;
+  background: transparent;
+  font-weight: 850;
+  text-align: left;
+}
+
+.account-dropdown button:hover {
+  background: #f8fafc;
+}
+
+.account-dropdown .danger-menu-item {
+  color: #991b1b;
+}
+
+.notification-dropdown {
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(420px, 70dvh);
+  overflow: auto;
+  padding: 14px;
+}
+
+.activity-dropdown-panel {
+  display: grid;
+  gap: 12px;
 }
 
 .landmark-button {
@@ -636,6 +716,17 @@ button:disabled {
   gap: 7px;
 }
 
+.activity-dropdown-panel .activity-list li {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+.activity-dropdown-panel .activity-list li span:last-child {
+  grid-column: 2;
+  color: #475569;
+  font-weight: 700;
+}
+
 .leaderboard-list {
   display: grid;
   gap: 8px;
@@ -674,6 +765,14 @@ button:disabled {
 
 .badges-panel {
   gap: 12px;
+}
+
+.badges-panel-compact {
+  display: grid;
+}
+
+.badges-modal {
+  width: min(560px, 100%);
 }
 
 .badge-grid {

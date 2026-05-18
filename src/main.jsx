@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { GeoJSON, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
-import { ArrowDown, ArrowUp, Check, Edit3, Globe2, ImagePlus, Instagram, Landmark, LogOut, Medal, MessageCircle, Plus, RefreshCw, Search, Settings, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, Check, Edit3, Globe2, ImagePlus, Instagram, Landmark, LogOut, Medal, MessageCircle, Plus, RefreshCw, Search, Settings, X } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./styles.css";
@@ -167,6 +167,7 @@ const TEXT = {
     you: "You",
     youVisited: "You visited",
     noFriendsCountry: "No friends have marked this country yet.",
+    noRecentActivity: "No recent activity",
     noTravelerFound: "No traveler found for that username.",
     ownUsername: "That is your own username.",
     validUsernameRequired: "Enter a valid username.",
@@ -300,6 +301,7 @@ const TEXT = {
     you: "나",
     youVisited: "내 방문",
     noFriendsCountry: "아직 이 나라를 방문한 친구가 없습니다.",
+    noRecentActivity: "최근 활동이 없습니다",
     noTravelerFound: "해당 사용자명을 찾을 수 없습니다.",
     ownUsername: "내 사용자명은 추가할 수 없습니다.",
     validUsernameRequired: "올바른 사용자명을 입력해 주세요.",
@@ -1543,9 +1545,9 @@ function ProfileSettingsModal({ profile, language, countryOptions = [], onClose,
   );
 }
 
-function ActivityFeed({ activities, language }) {
+function ActivityFeed({ activities, language, compact = false }) {
   return (
-    <aside className="side-panel activity-feed">
+    <aside className={compact ? "activity-dropdown-panel" : "side-panel activity-feed"}>
       <div className="panel-heading">
         <h2>{t(language, "activity")}</h2>
         <p>{t(language, "recentFriendVisits")}</p>
@@ -1564,9 +1566,63 @@ function ActivityFeed({ activities, language }) {
           ))}
         </ul>
       ) : (
-        <p className="empty-text">{t(language, "friendActivityEmpty")}</p>
+        <p className="empty-text">{compact ? t(language, "noRecentActivity") : t(language, "friendActivityEmpty")}</p>
       )}
     </aside>
+  );
+}
+
+function AccountMenu({ profile, language, isOpen, onToggle, onProfileSettings, onBadges, onLogout }) {
+  return (
+    <div className="account-menu-wrap">
+      <button
+        className="account-avatar-button"
+        onClick={onToggle}
+        title={t(language, "profile")}
+        aria-label={t(language, "profile")}
+        aria-expanded={isOpen}
+      >
+        <Avatar user={profile || { username: "Profile" }} size="md" />
+      </button>
+      {isOpen && (
+        <div className="top-dropdown account-dropdown">
+          <button onClick={onProfileSettings}>
+            <Settings size={16} />
+            {t(language, "profileSettings")}
+          </button>
+          <button onClick={onBadges}>
+            <Medal size={16} />
+            {t(language, "badges")}
+          </button>
+          <button className="danger-menu-item" onClick={onLogout}>
+            <LogOut size={16} />
+            {t(language, "signOut")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationMenu({ activities, language, isOpen, onToggle }) {
+  return (
+    <div className="account-menu-wrap">
+      <button
+        className="notification-button"
+        onClick={onToggle}
+        title={t(language, "activity")}
+        aria-label={t(language, "activity")}
+        aria-expanded={isOpen}
+      >
+        <Bell size={18} />
+        {activities.length > 0 && <span className="notification-dot" />}
+      </button>
+      {isOpen && (
+        <div className="top-dropdown notification-dropdown">
+          <ActivityFeed activities={activities} language={language} compact />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2357,9 +2413,9 @@ function GlobalPercentilePanel({ stats, language }) {
   );
 }
 
-function BadgesPanel({ visitCount, stats, language }) {
+function BadgesPanel({ visitCount, stats, language, compact = false }) {
   return (
-    <aside className="side-panel badges-panel">
+    <aside className={compact ? "badges-panel badges-panel-compact" : "side-panel badges-panel"}>
       <div className="panel-heading">
         <h2>{t(language, "badges")}</h2>
         <p>{visitCount}</p>
@@ -2428,6 +2484,9 @@ function App() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isLandmarkOpen, setIsLandmarkOpen] = useState(false);
   const [isCountryCollectionOpen, setIsCountryCollectionOpen] = useState(false);
+  const [isBadgesOpen, setIsBadgesOpen] = useState(false);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isNotificationMenuOpen, setIsNotificationMenuOpen] = useState(false);
   const [isCommunityOpen, setIsCommunityOpen] = useState(false);
   const [communityCountry, setCommunityCountry] = useState(null);
   const [communityPosts, setCommunityPosts] = useState([]);
@@ -3726,25 +3785,40 @@ function App() {
           <button className="icon-button" onClick={refreshSocialData} title={t(language, "refresh")} aria-label={t(language, "refresh")}>
             <RefreshCw size={18} />
           </button>
-          <button
-            className="profile-button"
-            onClick={() => {
+          <NotificationMenu
+            activities={activities}
+            language={language}
+            isOpen={isNotificationMenuOpen}
+            onToggle={() => {
+              setIsNotificationMenuOpen((current) => !current);
+              setIsAccountMenuOpen(false);
+            }}
+          />
+          <AccountMenu
+            profile={profile}
+            language={language}
+            isOpen={isAccountMenuOpen}
+            onToggle={() => {
+              setIsAccountMenuOpen((current) => !current);
+              setIsNotificationMenuOpen(false);
+            }}
+            onProfileSettings={() => {
+              setIsAccountMenuOpen(false);
               if (profile) {
                 setIsProfileOpen(true);
               } else {
                 setNotice(t(language, "profileStillLoading"));
               }
             }}
-            title={t(language, "settings")}
-            aria-label={t(language, "settings")}
-          >
-            <Avatar user={profile || { username: "Profile" }} size="sm" />
-            <span>{t(language, "profile")}</span>
-            <Settings size={16} />
-          </button>
-          <button className="icon-button" onClick={signOut} title={t(language, "signOut")} aria-label={t(language, "signOut")}>
-            <LogOut size={18} />
-          </button>
+            onBadges={() => {
+              setIsAccountMenuOpen(false);
+              setIsBadgesOpen(true);
+            }}
+            onLogout={() => {
+              setIsAccountMenuOpen(false);
+              signOut();
+            }}
+          />
         </div>
       </header>
 
@@ -3795,6 +3869,23 @@ function App() {
           onCollect={handleCollectLandmark}
           onClose={() => setIsLandmarkOpen(false)}
         />
+      )}
+
+      {isBadgesOpen && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="badges-modal-title">
+          <section className="collection-modal badges-modal">
+            <div className="modal-title-row">
+              <div>
+                <p className="eyebrow">{t(language, "collection")}</p>
+                <h2 id="badges-modal-title">{t(language, "badges")}</h2>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setIsBadgesOpen(false)} title={t(language, "close")} aria-label={t(language, "close")}>
+                <X size={18} />
+              </button>
+            </div>
+            <BadgesPanel visitCount={displayedVisitCount} stats={globalStats} language={language} compact />
+          </section>
+        </div>
       )}
 
       {isCommunityOpen && (
@@ -3871,7 +3962,6 @@ function App() {
         <div className="panel-stack">
           <ProfilePanel profile={profile} language={language} />
           <GlobalPercentilePanel stats={globalStats} language={language} />
-          <BadgesPanel visitCount={displayedVisitCount} stats={globalStats} language={language} />
           {profile?.is_admin && <AdminStatsPanel stats={globalStats} language={language} />}
           <CountryPanel
             country={selectedCountry}
@@ -3903,7 +3993,6 @@ function App() {
             />
           )}
           <LeaderboardPanel leaderboard={leaderboard} language={language} />
-          <ActivityFeed activities={activities} language={language} />
         </div>
       </section>
     </main>
