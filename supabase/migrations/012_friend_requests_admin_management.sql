@@ -8,6 +8,7 @@ create table if not exists public.friend_requests (
   check (sender_id <> receiver_id)
 );
 
+alter table public.profiles add column if not exists is_admin boolean default false;
 alter table public.friend_requests enable row level security;
 
 do $$
@@ -71,17 +72,34 @@ begin
     );
   end if;
 
-  drop policy if exists "admins can update profiles admin status" on public.profiles;
-  create policy "admins can update profiles admin status"
-  on public.profiles
-  for update
-  using (
-    exists (
-      select 1
-      from public.profiles p
-      where p.id = auth.uid()
-        and p.is_admin = true
-    )
-  )
-  with check (true);
 end $$;
+
+create or replace function public.is_admin_user(check_user_id uuid) returns boolean language sql security definer set search_path = public as $$
+  select coalesce(
+    (
+      select p.is_admin
+      from public.profiles p
+      where p.id = check_user_id
+      limit 1
+    ),
+    false
+  );
+$$;
+
+grant execute on function public.is_admin_user(uuid) to authenticated;
+
+update public.profiles
+set is_admin = true
+where id in (
+  select id
+  from auth.users
+  where email = 'donnykimkr@gmail.com'
+);
+
+drop policy if exists "admins can update profiles admin status" on public.profiles;
+
+create policy "admins can update profiles admin status"
+on public.profiles
+for update
+using (public.is_admin_user(auth.uid()))
+with check (true);
