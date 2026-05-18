@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "generate:countries": "node scripts/generate-countries.mjs",
+    "generate:countries:light": "node scripts/generate-light-countries.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

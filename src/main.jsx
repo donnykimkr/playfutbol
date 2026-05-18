@@ -16,7 +16,7 @@ import {
   normalizeCountryCode,
 } from "./utils/countries";
 
-const WORLD_GEOJSON_URL = "/countries.geojson";
+const WORLD_GEOJSON_URL = "/countries-light.geojson";
 const MAX_AVATAR_SIZE = 2 * 1024 * 1024;
 const MAX_COMMUNITY_IMAGE_SIZE = 5 * 1024 * 1024;
 const LANDMARK_ZOOM_THRESHOLD = 8;
