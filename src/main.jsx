@@ -376,27 +376,6 @@ function ZoomObserver({ onZoomChange }) {
   return null;
 }
 
-function VerticalBoundsClamp() {
-  const map = useMapEvents({
-    drag() {
-      const center = map.getCenter();
-      const clampedLat = Math.max(-85, Math.min(85, center.lat));
-      if (clampedLat !== center.lat) {
-        map.panTo([clampedLat, center.lng], { animate: false });
-      }
-    },
-    moveend() {
-      const center = map.getCenter();
-      const clampedLat = Math.max(-85, Math.min(85, center.lat));
-      if (clampedLat !== center.lat) {
-        map.panTo([clampedLat, center.lng], { animate: false });
-      }
-    },
-  });
-
-  return null;
-}
-
 function makeFriendCode() {
   return `TRIP-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 }
@@ -1135,6 +1114,11 @@ function TravelMap({
       zoom={2}
       minZoom={2}
       maxZoom={12}
+      maxBounds={[
+        [-85, -360000],
+        [85, 360000],
+      ]}
+      maxBoundsViscosity={1}
       worldCopyJump
       className="map"
       zoomControl={false}
@@ -1142,7 +1126,6 @@ function TravelMap({
     >
       <FitWorld />
       <ZoomObserver onZoomChange={handleZoomChange} />
-      <VerticalBoundsClamp />
       <TileLayer
         key="terrain-map"
         attribution={tileLayer.attribution}
