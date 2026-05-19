@@ -565,6 +565,26 @@ function ringArea(ring) {
   return Math.abs(area / 2);
 }
 
+function getFeatureArea(feature) {
+  const geometry = feature?.geometry;
+  const polygons =
+    geometry?.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry?.type === "MultiPolygon"
+        ? geometry.coordinates
+        : [];
+
+  return polygons.reduce((sum, polygon) => sum + ringArea(polygon?.[0]), 0);
+}
+
+function getCountryButtonMinZoom(feature) {
+  const area = getFeatureArea(feature);
+  if (area >= 280) return 2;
+  if (area >= 90) return 3;
+  if (area >= 20) return 4;
+  return 5;
+}
+
 function ringCentroid(ring) {
   if (!Array.isArray(ring) || !ring.length) return null;
   const sum = ring.reduce(
@@ -805,12 +825,11 @@ function FriendAvatarMarkers({ geojson, friendVisitMap, onSelectCountry }) {
 
 function CountryButtonMarkers({ geojson, friendVisitMap, selectedCountryCode, zoom, onSelectCountry }) {
   const markers = useMemo(() => {
-    if (zoom < 4) return [];
-
     return (geojson?.features || [])
       .map((feature) => {
         const code = getIsoA2FromFeature(feature);
         if (!code || SMALL_COUNTRY_CODES.has(code)) return null;
+        if (zoom < getCountryButtonMinZoom(feature)) return null;
 
         const position = getFeatureDisplayCenter(feature);
         if (!position) return null;
