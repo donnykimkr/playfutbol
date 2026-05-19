@@ -19,6 +19,8 @@ import {
 const WORLD_GEOJSON_URL = "/countries-light.geojson";
 const CANONICAL_APP_ORIGIN = "https://whereyoubeen.vercel.app";
 const CANONICAL_APP_HOST = "whereyoubeen.vercel.app";
+const GLOBAL_STATS_CACHE_KEY = "whereyoubeen-global-stats-v1";
+const GLOBAL_STATS_CACHE_TTL = 10 * 60 * 1000;
 const LEGACY_APP_HOSTS = new Set([
   "travel-map-five-kappa.vercel.app",
   "travel-map-donny-kims-projects.vercel.app",
@@ -409,6 +411,10 @@ const SMALL_COUNTRY_CODES = new Set(SMALL_COUNTRY_HOTSPOTS.map((country) => coun
 const COUNTRY_BUTTON_POSITION_OVERRIDES = {
   MY: [4.2, 102.05],
 };
+const FEATURE_BOUNDS_CENTER_CACHE = new WeakMap();
+const FEATURE_AREA_CACHE = new WeakMap();
+const FEATURE_DISPLAY_CENTER_CACHE = new WeakMap();
+const FEATURE_MIN_ZOOM_CACHE = new WeakMap();
 const BLOCKED_NAME_TERMS = [
   "fuck",
   "shit",
@@ -556,6 +562,29 @@ function isEditedPost(post) {
 function percent(value, total) {
   if (!total) return 0;
   return Math.round((value / total) * 100);
+}
+
+function readCachedGlobalStats() {
+  if (typeof window === "undefined") return null;
+  try {
+    const cached = JSON.parse(window.localStorage.getItem(GLOBAL_STATS_CACHE_KEY) || "null");
+    if (!cached?.stats || Date.now() - cached.savedAt > GLOBAL_STATS_CACHE_TTL) return null;
+    return cached.stats;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedGlobalStats(stats) {
+  if (typeof window === "undefined" || !stats) return;
+  try {
+    window.localStorage.setItem(
+      GLOBAL_STATS_CACHE_KEY,
+      JSON.stringify({ savedAt: Date.now(), stats }),
+    );
+  } catch {
+    // localStorage can be unavailable in private browsing modes.
+  }
 }
 
 function getDisplayName(user, language = DEFAULT_LANGUAGE) {
@@ -726,6 +755,8 @@ function createCountryButtonIcon({ code, friendCount = 0, selected = false }) {
 }
 
 function getFeatureBoundsCenter(feature) {
+  if (FEATURE_BOUNDS_CENTER_CACHE.has(feature)) return FEATURE_BOUNDS_CENTER_CACHE.get(feature);
+
   const points = [];
   const collect = (coords) => {
     if (typeof coords?.[0] === "number" && typeof coords?.[1] === "number") {
@@ -736,14 +767,19 @@ function getFeatureBoundsCenter(feature) {
   };
 
   collect(feature.geometry?.coordinates);
-  if (!points.length) return null;
+  if (!points.length) {
+    FEATURE_BOUNDS_CENTER_CACHE.set(feature, null);
+    return null;
+  }
 
   const longitudes = points.map((point) => point[0]);
   const latitudes = points.map((point) => point[1]);
   const lng = (Math.min(...longitudes) + Math.max(...longitudes)) / 2;
   const lat = (Math.min(...latitudes) + Math.max(...latitudes)) / 2;
 
-  return [lat, Math.max(-179.5, Math.min(179.5, lng))];
+  const center = [lat, Math.max(-179.5, Math.min(179.5, lng))];
+  FEATURE_BOUNDS_CENTER_CACHE.set(feature, center);
+  return center;
 }
 
 function ringArea(ring) {
@@ -758,6 +794,8 @@ function ringArea(ring) {
 }
 
 function getFeatureArea(feature) {
+  if (FEATURE_AREA_CACHE.has(feature)) return FEATURE_AREA_CACHE.get(feature);
+
   const geometry = feature?.geometry;
   const polygons =
     geometry?.type === "Polygon"
@@ -766,15 +804,21 @@ function getFeatureArea(feature) {
         ? geometry.coordinates
         : [];
 
-  return polygons.reduce((sum, polygon) => sum + ringArea(polygon?.[0]), 0);
+  const area = polygons.reduce((sum, polygon) => sum + ringArea(polygon?.[0]), 0);
+  FEATURE_AREA_CACHE.set(feature, area);
+  return area;
 }
 
 function getCountryButtonMinZoom(feature) {
+  if (FEATURE_MIN_ZOOM_CACHE.has(feature)) return FEATURE_MIN_ZOOM_CACHE.get(feature);
+
   const area = getFeatureArea(feature);
-  if (area >= 280) return 2;
-  if (area >= 90) return 3;
-  if (area >= 20) return 4;
-  return 5;
+  let minZoom = 5;
+  if (area >= 280) minZoom = 2;
+  else if (area >= 90) minZoom = 3;
+  else if (area >= 20) minZoom = 4;
+  FEATURE_MIN_ZOOM_CACHE.set(feature, minZoom);
+  return minZoom;
 }
 
 function ringCentroid(ring) {
@@ -802,6 +846,7 @@ function ringCentroid(ring) {
 function getFeatureDisplayCenter(feature) {
   const code = getIsoA2FromFeature(feature);
   if (COUNTRY_BUTTON_POSITION_OVERRIDES[code]) return COUNTRY_BUTTON_POSITION_OVERRIDES[code];
+  if (FEATURE_DISPLAY_CENTER_CACHE.has(feature)) return FEATURE_DISPLAY_CENTER_CACHE.get(feature);
 
   const geometry = feature?.geometry;
   const polygons =
@@ -822,7 +867,9 @@ function getFeatureDisplayCenter(feature) {
     }
   });
 
-  return ringCentroid(largestRing) || getFeatureBoundsCenter(feature);
+  const center = ringCentroid(largestRing) || getFeatureBoundsCenter(feature);
+  FEATURE_DISPLAY_CENTER_CACHE.set(feature, center);
+  return center;
 }
 
 function getIsoA2FromFeature(feature) {
@@ -2843,7 +2890,7 @@ function App() {
   const [isCommunityLoading, setIsCommunityLoading] = useState(false);
   const [isPostingCommunity, setIsPostingCommunity] = useState(false);
   const [replyingPostId, setReplyingPostId] = useState("");
-  const [globalStats, setGlobalStats] = useState(null);
+  const [globalStats, setGlobalStats] = useState(() => readCachedGlobalStats());
   const [adminUsers, setAdminUsers] = useState([]);
   const [isLoadingAdminUsers, setIsLoadingAdminUsers] = useState(false);
   const [animatedCountryCode, setAnimatedCountryCode] = useState("");
@@ -3043,7 +3090,6 @@ function App() {
     }
 
     const user = activeSession.user;
-    console.log("[travel-map] authenticated user id", user.id);
     const { data: existingProfile } = await supabase
       .from("profiles")
       .select("*")
@@ -3051,8 +3097,6 @@ function App() {
       .maybeSingle();
 
     if (existingProfile) {
-      console.log("[travel-map] loaded profile id", existingProfile.id);
-      console.log("[travel-map] fetched profile", existingProfile);
       setProfile(existingProfile);
       return existingProfile;
     }
@@ -3065,8 +3109,6 @@ function App() {
       };
       const { data, error } = await supabase.from("profiles").insert(candidate).select("*").single();
       if (!error && data) {
-        console.log("[travel-map] loaded profile id", data.id);
-        console.log("[travel-map] fetched profile", data);
         setProfile(data);
         return data;
       }
@@ -3091,8 +3133,6 @@ function App() {
   const refreshSocialData = useCallback(async () => {
     const userId = session?.user?.id;
     if (!supabase || !userId) return;
-
-    console.log("[travel-map] authenticated user id", userId);
 
     const [
       { data: myData },
@@ -3130,8 +3170,6 @@ function App() {
       });
     const friendIds = friendProfiles.map((friend) => friend.id);
 
-    console.log("[travel-map] fetched visited countries count", myData?.length || 0);
-    console.log("[travel-map] fetched friends count", friendProfiles.length);
     setMineVisits(myData || []);
     setFriends(friendProfiles);
     setFriendRequests(requestError ? [] : requestRows || []);
@@ -3166,9 +3204,15 @@ function App() {
     );
   }, [countryNames, session?.user?.id]);
 
-  const refreshGlobalStats = useCallback(async () => {
+  const refreshGlobalStats = useCallback(async ({ force = false } = {}) => {
     const userId = session?.user?.id;
     if (!supabase || !userId) return;
+
+    const cachedStats = readCachedGlobalStats();
+    if (!force && cachedStats) {
+      setGlobalStats(cachedStats);
+      return;
+    }
 
     const [{ data: profileRows }, { count: totalVisitRecords }, { data: visitRows }] = await Promise.all([
       supabase.from("profiles").select("id"),
@@ -3203,14 +3247,17 @@ function App() {
       }),
     );
 
-    setGlobalStats({
+    const nextStats = {
       hasEnoughUsers: usersWithVisits >= 3,
       percentile,
       topPercent,
       totalUsers: totalUserCount,
       totalVisitRecords: totalVisitRecords || 0,
       badgeRarities,
-    });
+    };
+
+    setGlobalStats(nextStats);
+    writeCachedGlobalStats(nextStats);
   }, [session?.user?.id]);
 
   useEffect(() => {
@@ -3242,8 +3289,17 @@ function App() {
   }, [friends, selectedFriendId]);
 
   useEffect(() => {
-    refreshGlobalStats();
-  }, [refreshGlobalStats, mineVisits.length]);
+    if (!session?.user?.id) return undefined;
+
+    const run = () => refreshGlobalStats();
+    if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+      const idleId = window.requestIdleCallback(run, { timeout: 3500 });
+      return () => window.cancelIdleCallback(idleId);
+    }
+
+    const timeoutId = window.setTimeout(run, 1200);
+    return () => window.clearTimeout(timeoutId);
+  }, [refreshGlobalStats, session?.user?.id]);
 
   const handleMarkVisited = useCallback(
     async (country) => {
