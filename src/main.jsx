@@ -162,7 +162,6 @@ const TEXT = {
     usernameSetupCopy: "Friends will find you by this name.",
     usernameRules: "Use 3-20 lowercase letters, numbers, or underscores.",
     inappropriateName: "That name is not allowed. Please choose a respectful name.",
-    blockedDisplayName: "Traveler",
     saveUsername: "Save username",
     visited: "Visited",
     both: "Both",
@@ -306,7 +305,6 @@ const TEXT = {
     usernameSetupCopy: "친구들이 이 이름으로 나를 찾을 수 있어요.",
     usernameRules: "3-20자의 소문자, 숫자, 밑줄만 사용할 수 있습니다.",
     inappropriateName: "사용할 수 없는 이름입니다. 다른 이름을 선택해 주세요.",
-    blockedDisplayName: "여행자",
     saveUsername: "사용자명 저장",
     visited: "방문 완료",
     both: "공통",
@@ -501,8 +499,7 @@ function percent(value, total) {
 }
 
 function getDisplayName(user, language = DEFAULT_LANGUAGE) {
-  const displayName = user?.display_name || user?.friend_nickname || user?.username || t(language, "friendFallback");
-  return isUnsafeName(displayName) ? t(language, "blockedDisplayName") : displayName;
+  return user?.display_name || user?.friend_nickname || user?.username || t(language, "friendFallback");
 }
 
 function getCommunityRole({ countryCode, visitedSet }) {
