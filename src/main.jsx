@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { CircleMarker, GeoJSON, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { GeoJSON, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import { ArrowDown, ArrowUp, Bell, Check, Edit3, Globe2, ImagePlus, Instagram, LogOut, Medal, MessageCircle, Plus, RefreshCw, Search, Settings, X } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -493,34 +493,6 @@ function Avatar({ user, size = "md" }) {
   );
 }
 
-function createAvatarIcon(friends) {
-  const visible = friends.slice(0, 3);
-  const extra = friends.length - visible.length;
-  const html = `
-    <div class="map-avatar-stack">
-      ${visible
-        .map((friend) => {
-          const username = escapeHtml(getDisplayName(friend));
-          const avatarUrl = escapeHtml(friend.avatar_url || "");
-          return avatarUrl
-            ? `<img class="map-avatar" src="${avatarUrl}" alt="${username}" />`
-            : `<span class="map-avatar map-avatar-fallback" title="${username}">${escapeHtml(
-                avatarLetter(getDisplayName(friend)),
-              )}</span>`;
-        })
-        .join("")}
-      ${extra > 0 ? `<span class="map-avatar-extra">+${extra}</span>` : ""}
-    </div>
-  `;
-
-  return L.divIcon({
-    className: "map-avatar-marker",
-    html,
-    iconSize: [92, 32],
-    iconAnchor: [18, 16],
-  });
-}
-
 function createCountryButtonIcon({ code, friendCount = 0, selected = false }) {
   const countBadge = friendCount ? `<span class="country-button-count">${friendCount}</span>` : "";
   return L.divIcon({
@@ -778,51 +750,6 @@ function CountrySearch({ countries, language, onSelectCountry, onMissingCountry 
   );
 }
 
-function FriendAvatarMarkers({ geojson, friendVisitMap, onSelectCountry }) {
-  const markers = useMemo(() => {
-    const featureByCode = new Map();
-    (geojson?.features || []).forEach((feature) => {
-      const code = getIsoA2FromFeature(feature);
-      if (code && !featureByCode.has(code)) {
-        featureByCode.set(code, feature);
-      }
-    });
-    if (featureByCode.has("FR")) {
-      console.log("[travel-map] FR avatar centroid", getFeatureDisplayCenter(featureByCode.get("FR")));
-    }
-
-    return Array.from(friendVisitMap.entries())
-      .map(([rawCode, friendsForCountry]) => {
-        const code = normalizeCountryCode(rawCode);
-        const feature = featureByCode.get(code);
-        if (!feature || !friendsForCountry.length) return null;
-
-        const position = getFeatureDisplayCenter(feature);
-        if (!position) return null;
-
-        return {
-          code,
-          name: countryNameFromFeature(feature),
-          flag: countryFlag(code),
-          friends: friendsForCountry,
-          position,
-        };
-      })
-      .filter(Boolean);
-  }, [friendVisitMap, geojson]);
-
-  return markers.map((marker) => (
-    <Marker
-      key={marker.code}
-      position={marker.position}
-      icon={createAvatarIcon(marker.friends)}
-      eventHandlers={{
-        click: () => onSelectCountry({ code: marker.code, name: marker.name, flag: marker.flag }),
-      }}
-    />
-  ));
-}
-
 function CountryButtonMarkers({ geojson, friendVisitMap, selectedCountryCode, zoom, onSelectCountry }) {
   const markers = useMemo(() => {
     return (geojson?.features || [])
@@ -880,7 +807,9 @@ function CountryButtonMarkers({ geojson, friendVisitMap, selectedCountryCode, zo
   });
 }
 
-function SmallCountryHotspots({ friendVisitMap, onSelectCountry }) {
+function SmallCountryHotspots({ friendVisitMap, selectedCountryCode, zoom, onSelectCountry }) {
+  if (zoom < 4) return null;
+
   return SMALL_COUNTRY_HOTSPOTS.map((hotspot) => {
     const code = normalizeCountryCode(hotspot.code);
     const friends = friendVisitMap.get(code) || [];
@@ -889,17 +818,15 @@ function SmallCountryHotspots({ friendVisitMap, onSelectCountry }) {
     const label = `${flag} ${name}${friends.length ? ` · ${friends.length}` : ""}`;
 
     return (
-      <CircleMarker
+      <Marker
         key={code}
-        center={[hotspot.lat, hotspot.lng]}
-        radius={friends.length ? 10 : 8}
-        pathOptions={{
-          color: friends.length ? "#047857" : "#475569",
-          weight: 1.6,
-          opacity: 0.72,
-          fillColor: friends.length ? "#6ee7b7" : "#ffffff",
-          fillOpacity: friends.length ? 0.58 : 0.72,
-        }}
+        position={[hotspot.lat, hotspot.lng]}
+        icon={createCountryButtonIcon({
+          code,
+          friendCount: friends.length,
+          selected: selectedCountryCode === code,
+        })}
+        riseOnHover
         eventHandlers={{
           click: (event) => {
             const original = event.originalEvent || {};
@@ -914,10 +841,10 @@ function SmallCountryHotspots({ friendVisitMap, onSelectCountry }) {
           },
         }}
       >
-        <Tooltip direction="top" offset={[0, -8]} opacity={0.95} interactive={false}>
+        <Tooltip direction="top" offset={[0, -14]} opacity={0.95} interactive={false}>
           {label}
         </Tooltip>
-      </CircleMarker>
+      </Marker>
     );
   });
 }
@@ -1114,7 +1041,6 @@ function TravelMap({
         geoJsonRef={geoJsonRef}
         onMissingCountry={onMissingCountry}
       />
-      <FriendAvatarMarkers geojson={geojson} friendVisitMap={friendVisitMap} onSelectCountry={onSelectCountry} />
       <CountryButtonMarkers
         geojson={geojson}
         friendVisitMap={friendVisitMap}
@@ -1124,6 +1050,8 @@ function TravelMap({
       />
       <SmallCountryHotspots
         friendVisitMap={friendVisitMap}
+        selectedCountryCode={selectedCountry?.code}
+        zoom={zoom}
         onSelectCountry={onSelectCountry}
       />
       <MapLegend language={language} />

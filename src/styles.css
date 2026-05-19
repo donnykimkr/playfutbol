@@ -467,41 +467,6 @@ button:disabled {
   gap: 6px;
 }
 
-.map-avatar-marker {
-  border: 0;
-  background: transparent;
-}
-
-.map-avatar-stack {
-  display: flex;
-  align-items: center;
-  filter: drop-shadow(0 8px 12px rgba(15, 23, 42, 0.2));
-}
-
-.map-avatar,
-.map-avatar-extra {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  margin-left: -7px;
-  border: 2px solid #ffffff;
-  border-radius: 999px;
-  background: #0f766e;
-  color: #ffffff;
-  font-size: 0.72rem;
-  font-weight: 800;
-  object-fit: cover;
-}
-
-.map-avatar:first-child {
-  margin-left: 0;
-}
-
-.map-avatar-extra {
-  background: #172033;
-}
-
 .country-button-marker {
   border: 0;
   background: transparent;
