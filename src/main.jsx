@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { GeoJSON, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
-import { ArrowDown, ArrowUp, Bell, Check, Edit3, Globe2, ImagePlus, Instagram, LogOut, Medal, MessageCircle, Plus, RefreshCw, Search, Settings, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, Check, Edit3, Globe2, ImagePlus, Instagram, LogOut, Medal, MessageCircle, Plus, RefreshCw, Search, Settings, Share2, X } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./styles.css";
@@ -173,6 +173,16 @@ const TEXT = {
     saveChanges: "Save changes",
     searchCountry: "Search country",
     settings: "Settings",
+    share: "Share",
+    shareCopied: "Image copied",
+    shareCopy: "Copy image",
+    shareDownload: "Download image",
+    shareGenerateError: "Could not generate the share image.",
+    shareNative: "Share",
+    shareSquare: "Square",
+    shareStory: "Story",
+    shareTitle: "Share my travel stats",
+    shareUnsupported: "Copy is not supported in this browser. Download the image instead.",
     signOut: "Sign out",
     southAmerica: "South America",
     totalUsers: "Total users",
@@ -316,6 +326,16 @@ const TEXT = {
     saveChanges: "변경사항 저장",
     searchCountry: "국가 검색",
     settings: "설정",
+    share: "공유",
+    shareCopied: "이미지를 복사했습니다",
+    shareCopy: "이미지 복사",
+    shareDownload: "이미지 다운로드",
+    shareGenerateError: "공유 이미지를 만들지 못했습니다.",
+    shareNative: "공유",
+    shareSquare: "정사각형",
+    shareStory: "스토리",
+    shareTitle: "내 여행 기록 공유",
+    shareUnsupported: "이 브라우저에서는 복사를 지원하지 않습니다. 이미지를 다운로드해 주세요.",
     signOut: "로그아웃",
     southAmerica: "남아메리카",
     totalUsers: "전체 사용자",
@@ -534,6 +554,111 @@ function percent(value, total) {
 
 function getDisplayName(user, language = DEFAULT_LANGUAGE) {
   return user?.display_name || user?.friend_nickname || user?.username || t(language, "friendFallback");
+}
+
+function drawRoundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Canvas export failed"));
+    }, "image/png", 0.95);
+  });
+}
+
+function generateShareStatsImage({ aspect, username, visitedCount, topPercent, flags }) {
+  const isStory = aspect === "story";
+  const width = 1080;
+  const height = isStory ? 1920 : 1080;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, "#f8fafc");
+  gradient.addColorStop(0.52, "#eef7ff");
+  gradient.addColorStop(1, "#ecfdf5");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+
+  const cardMargin = isStory ? 86 : 70;
+  const cardX = cardMargin;
+  const cardY = isStory ? 250 : 95;
+  const cardW = width - cardMargin * 2;
+  const cardH = isStory ? 1350 : 890;
+
+  ctx.save();
+  ctx.shadowColor = "rgba(15, 23, 42, 0.16)";
+  ctx.shadowBlur = 48;
+  ctx.shadowOffsetY = 24;
+  drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 46);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+  ctx.fill();
+  ctx.restore();
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "800 68px Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.fillText(`🌍 I visited ${visitedCount} ${visitedCount === 1 ? "country" : "countries"}`, width / 2, cardY + 175);
+
+  ctx.font = "700 38px Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.fillStyle = "#0f766e";
+  ctx.fillText(topPercent ? `Top ${topPercent}% traveler` : "Travel map collection", width / 2, cardY + 242);
+
+  const visibleFlags = flags.slice(0, 20);
+  const extraCount = Math.max(0, flags.length - visibleFlags.length);
+  const columns = isStory ? 4 : 5;
+  const chipW = isStory ? 152 : 138;
+  const chipH = isStory ? 112 : 96;
+  const gap = isStory ? 26 : 22;
+  const rows = Math.ceil((visibleFlags.length + (extraCount ? 1 : 0)) / columns) || 1;
+  const gridW = columns * chipW + (columns - 1) * gap;
+  const gridX = (width - gridW) / 2;
+  const gridY = cardY + (isStory ? 405 : 360);
+
+  [...visibleFlags, ...(extraCount ? [`+${extraCount}`] : [])].forEach((flag, index) => {
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    const x = gridX + col * (chipW + gap);
+    const y = gridY + row * (chipH + gap);
+
+    ctx.save();
+    ctx.shadowColor = "rgba(15, 23, 42, 0.08)";
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 8;
+    drawRoundedRect(ctx, x, y, chipW, chipH, 30);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = flag.startsWith("+") ? "#0f766e" : "#111827";
+    ctx.font = flag.startsWith("+")
+      ? "800 35px Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+      : "52px 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif";
+    ctx.fillText(flag, x + chipW / 2, y + chipH / 2 + (flag.startsWith("+") ? 12 : 18));
+  });
+
+  const footerY = cardY + cardH - 160;
+  ctx.fillStyle = "#64748b";
+  ctx.font = "700 34px Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.fillText(`@${username || "traveler"}`, width / 2, footerY);
+
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "900 38px Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.fillText("whereyoubeen.app", width / 2, footerY + 70);
+
+  return canvasToBlob(canvas);
 }
 
 function getCommunityRole({ countryCode, visitedSet }) {
@@ -2435,6 +2560,140 @@ function BadgesPanel({ visitCount, stats, language, compact = false }) {
   );
 }
 
+function ShareStatsModal({ profile, visitedCountries, visitCount, stats, language, onClose, onNotice }) {
+  const [aspect, setAspect] = useState("story");
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageBlob, setImageBlob] = useState(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let revoked = false;
+    let nextUrl = "";
+
+    const buildImage = async () => {
+      setIsGenerating(true);
+      setError("");
+      setImageBlob(null);
+      setImageUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return "";
+      });
+
+      try {
+        const blob = await generateShareStatsImage({
+          aspect,
+          username: profile?.username,
+          visitedCount: visitCount,
+          topPercent: stats?.hasEnoughUsers ? stats.topPercent : null,
+          flags: visitedCountries.map((country) => country.flag).filter(Boolean),
+        });
+
+        if (revoked) return;
+        nextUrl = URL.createObjectURL(blob);
+        setImageBlob(blob);
+        setImageUrl(nextUrl);
+      } catch {
+        if (!revoked) setError(t(language, "shareGenerateError"));
+      } finally {
+        if (!revoked) setIsGenerating(false);
+      }
+    };
+
+    buildImage();
+
+    return () => {
+      revoked = true;
+      if (nextUrl) URL.revokeObjectURL(nextUrl);
+    };
+  }, [aspect, language, profile?.username, stats?.hasEnoughUsers, stats?.topPercent, visitCount, visitedCountries]);
+
+  const filename = `whereyoubeen-${profile?.username || "traveler"}-${aspect}.png`;
+
+  const downloadImage = () => {
+    if (!imageUrl) return;
+    const link = document.createElement("a");
+    link.href = imageUrl;
+    link.download = filename;
+    link.click();
+  };
+
+  const copyImage = async () => {
+    if (!imageBlob || !navigator.clipboard || typeof ClipboardItem === "undefined") {
+      onNotice(t(language, "shareUnsupported"));
+      return;
+    }
+
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": imageBlob })]);
+      onNotice(t(language, "shareCopied"));
+    } catch {
+      onNotice(t(language, "shareUnsupported"));
+    }
+  };
+
+  const nativeShare = async () => {
+    if (!imageBlob || !navigator.share) return;
+
+    const file = new File([imageBlob], filename, { type: "image/png" });
+    try {
+      if (navigator.canShare && !navigator.canShare({ files: [file] })) {
+        await navigator.share({ title: "whereyoubeen", text: `I visited ${visitCount} countries` });
+        return;
+      }
+      await navigator.share({
+        title: "whereyoubeen",
+        text: `I visited ${visitCount} countries`,
+        files: [file],
+      });
+    } catch {
+      // User cancelled native share.
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="share-modal-title">
+      <section className="collection-modal share-modal">
+        <div className="modal-title-row">
+          <div>
+            <p className="eyebrow">{t(language, "share")}</p>
+            <h2 id="share-modal-title">{t(language, "shareTitle")}</h2>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} title={t(language, "close")} aria-label={t(language, "close")}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="share-aspect-toggle" role="group" aria-label={t(language, "shareTitle")}>
+          <button type="button" className={aspect === "story" ? "active" : ""} onClick={() => setAspect("story")}>
+            {t(language, "shareStory")} 9:16
+          </button>
+          <button type="button" className={aspect === "square" ? "active" : ""} onClick={() => setAspect("square")}>
+            {t(language, "shareSquare")} 1:1
+          </button>
+        </div>
+
+        <div className={`share-preview ${aspect === "square" ? "share-preview-square" : ""}`}>
+          {imageUrl ? <img src={imageUrl} alt={t(language, "shareTitle")} /> : <p>{isGenerating ? t(language, "loadingMap") : t(language, "shareGenerateError")}</p>}
+        </div>
+        {error && <p className="form-error">{error}</p>}
+
+        <div className="share-actions">
+          <button type="button" className="secondary-button" onClick={downloadImage} disabled={!imageUrl || isGenerating}>
+            {t(language, "shareDownload")}
+          </button>
+          <button type="button" className="secondary-button" onClick={copyImage} disabled={!imageBlob || isGenerating}>
+            {t(language, "shareCopy")}
+          </button>
+          <button type="button" onClick={nativeShare} disabled={!imageBlob || isGenerating || !navigator.share}>
+            {t(language, "shareNative")}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AdminStatsPanel({ stats, language }) {
   if (!stats) return null;
 
@@ -2554,6 +2813,7 @@ function App() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isCountryCollectionOpen, setIsCountryCollectionOpen] = useState(false);
   const [isBadgesOpen, setIsBadgesOpen] = useState(false);
+  const [isShareOpen, setIsShareOpen] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isNotificationMenuOpen, setIsNotificationMenuOpen] = useState(false);
@@ -2652,6 +2912,14 @@ function App() {
   }, [friendVisits, mineVisits, selectedFriendId, selectedFriendVisitSet]);
 
   const displayedVisitCount = visitState.mineSet.size;
+
+  const visitedCountries = useMemo(() => {
+    const byCode = new Map(countryOptions.map((country) => [country.code, country]));
+    return Array.from(visitState.mineSet)
+      .map((code) => byCode.get(code) || { code, name: getCountryName(code, "en"), flag: countryFlag(code) })
+      .filter((country) => /^[A-Z]{2}$/.test(country.code))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [countryOptions, visitState.mineSet]);
 
   const friendVisitMap = useMemo(() => {
     const friendById = new Map(friends.map((friend) => [friend.id, friend]));
@@ -3921,6 +4189,10 @@ function App() {
             <Instagram size={17} />
             <span>@gafl.ai</span>
           </a>
+          <button className="nav-action" onClick={() => setIsShareOpen(true)}>
+            <Share2 size={17} />
+            <span>{t(language, "share")}</span>
+          </button>
           <button className="icon-button" onClick={refreshSocialData} title={t(language, "refresh")} aria-label={t(language, "refresh")}>
             <RefreshCw size={18} />
           </button>
@@ -4020,6 +4292,18 @@ function App() {
             <BadgesPanel visitCount={displayedVisitCount} stats={globalStats} language={language} compact />
           </section>
         </div>
+      )}
+
+      {isShareOpen && (
+        <ShareStatsModal
+          profile={profile}
+          visitedCountries={visitedCountries}
+          visitCount={displayedVisitCount}
+          stats={globalStats}
+          language={language}
+          onClose={() => setIsShareOpen(false)}
+          onNotice={setNotice}
+        />
       )}
 
       {profile?.is_admin && isAdminPanelOpen && (
