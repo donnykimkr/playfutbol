@@ -662,7 +662,7 @@ function generateShareStatsImage({ aspect, username, visitedCount, topPercent, f
 
   ctx.fillStyle = "#0f172a";
   ctx.font = "900 38px Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-  ctx.fillText("whereyoubeen.app", width / 2, footerY + 70);
+  ctx.fillText("whereyoubeen.vercel.app", width / 2, footerY + 70);
 
   return canvasToBlob(canvas);
 }
