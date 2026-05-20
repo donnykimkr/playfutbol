@@ -464,8 +464,13 @@ const COUNTRY_BUTTON_POSITION_OVERRIDES = {
 };
 const EARLY_COUNTRY_BUTTON_MIN_ZOOM = {
   AE: 3,
+  GB: 2,
+  IN: 2,
+  JP: 2,
   KP: 3,
   KR: 3,
+  MX: 2,
+  KZ: 3,
 };
 const COUNTRY_BUTTON_SHORT_NAMES = {
   AE: "UAE",
@@ -497,6 +502,7 @@ const COUNTRY_BUTTON_SHORT_NAMES = {
   MO: "Macao",
   NL: "Netherlands",
   PS: "Palestine",
+  RU: "Russia",
   SG: "Singapore",
   SM: "San Marino",
   ST: "Sao Tome",
@@ -1040,8 +1046,8 @@ function getGroupedCountryButtonSize(groupCount, label = "") {
   if (groupCount === 3) return { iconSize: [118, 48], iconAnchor: [59, 24] };
   if (groupCount === 2) return { iconSize: [86, 48], iconAnchor: [43, 24] };
   const labelLength = Array.from(label).length;
-  const width = Math.min(156, Math.max(88, 34 + labelLength * 8));
-  return { iconSize: [width, 56], iconAnchor: [width / 2, 28] };
+  const width = Math.min(172, Math.max(104, 46 + labelLength * 8));
+  return { iconSize: [width, 72], iconAnchor: [width / 2, 36] };
 }
 
 function createCountryButtonIcon({ code, friendCount = 0, selected = false, label = "", groupCount = 1, groupCodes = null }) {

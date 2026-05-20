@@ -530,7 +530,7 @@ button:disabled {
   justify-content: center;
   gap: 7px;
   padding: 0 14px;
-  overflow: hidden;
+  overflow: visible;
   color: #0f172a;
   font-size: 0.84rem;
   font-weight: 900;
@@ -606,8 +606,8 @@ button:disabled {
 
 .country-owner-badge {
   position: absolute;
-  right: -5px;
-  bottom: -5px;
+  right: -6px;
+  bottom: -9px;
   display: grid;
   width: 18px;
   height: 18px;
@@ -629,8 +629,8 @@ button:disabled {
 
 .country-button-count {
   position: absolute;
-  right: -8px;
-  top: -8px;
+  right: -10px;
+  top: -10px;
   min-width: 20px;
   height: 20px;
   padding: 0 4px;
