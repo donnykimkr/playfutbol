@@ -99,8 +99,9 @@ button:disabled {
 }
 
 .top-brand {
-  display: grid;
-  gap: 6px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 
 .brand-logo {
@@ -110,7 +111,7 @@ button:disabled {
 }
 
 .brand-logo-header {
-  height: 28px;
+  height: 58px;
 }
 
 .brand-logo-login {
@@ -515,6 +516,10 @@ button:disabled {
     transform 150ms ease,
     box-shadow 150ms ease,
     border-color 150ms ease;
+}
+
+.country-button-marker.is-wide .country-map-button {
+  width: 50px;
 }
 
 .country-button-marker.is-selected .country-map-button,
@@ -1880,6 +1885,10 @@ button:disabled {
   .top-actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .brand-logo-header {
+    height: 46px;
   }
 
   .panel-stack {

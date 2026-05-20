@@ -388,10 +388,10 @@ const TEXT = {
   },
 };
 const SMALL_COUNTRY_HOTSPOTS = [
-  { code: "HK", lat: 22.43, lng: 114.28 },
-  { code: "MO", lat: 21.92, lng: 113.2 },
-  { code: "IL", lat: 31.25, lng: 34.45 },
-  { code: "PS", lat: 32.05, lng: 35.75 },
+  { code: "HK", lat: 22.36, lng: 114.2 },
+  { code: "MO", lat: 22.12, lng: 113.52 },
+  { code: "IL", lat: 31.25, lng: 34.62 },
+  { code: "PS", lat: 31.95, lng: 35.2 },
   { code: "MV", lat: 3.2028, lng: 73.2207 },
   { code: "SG", lat: 1.3521, lng: 103.8198 },
   { code: "MC", lat: 43.7384, lng: 7.4246 },
@@ -415,6 +415,18 @@ const COUNTRY_BUTTON_POSITION_OVERRIDES = {
   MY: [4.2, 102.05],
   VN: [16.1, 108.05],
 };
+const COMBINED_SMALL_COUNTRY_MARKERS = [
+  {
+    id: "HK_MO",
+    codes: ["HK", "MO"],
+    lat: 22.25,
+    lng: 113.86,
+    minZoom: 4,
+    maxZoom: 6,
+    label: "🇭🇰 Hong Kong / 🇲🇴 Macao",
+    iconLabel: "🇭🇰🇲🇴",
+  },
+];
 const FEATURE_BOUNDS_CENTER_CACHE = new WeakMap();
 const FEATURE_AREA_CACHE = new WeakMap();
 const FEATURE_DISPLAY_CENTER_CACHE = new WeakMap();
@@ -746,15 +758,16 @@ function Avatar({ user, size = "md" }) {
   );
 }
 
-function createCountryButtonIcon({ code, friendCount = 0, selected = false }) {
+function createCountryButtonIcon({ code, friendCount = 0, selected = false, label = "", wide = false }) {
   const countBadge = friendCount ? `<span class="country-button-count">${friendCount}</span>` : "";
+  const displayLabel = label || countryFlag(code);
   return L.divIcon({
-    className: `country-button-marker ${selected ? "is-selected" : ""}`,
+    className: `country-button-marker ${wide ? "is-wide" : ""} ${selected ? "is-selected" : ""}`,
     html: `<button class="country-map-button" type="button" aria-label="${escapeHtml(
       getCountryName(code, "en") || code,
-    )}">${escapeHtml(countryFlag(code))}${countBadge}</button>`,
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
+    )}">${escapeHtml(displayLabel)}${countBadge}</button>`,
+    iconSize: wide ? [56, 34] : [34, 34],
+    iconAnchor: wide ? [28, 17] : [17, 17],
   });
 }
 
@@ -1035,10 +1048,21 @@ function CountrySearch({ countries, language, onSelectCountry, onMissingCountry 
 
 function CountryButtonMarkers({ geojson, friendVisitMap, selectedCountryCode, zoom, onSelectCountry }) {
   const markers = useMemo(() => {
-    return (geojson?.features || [])
+    const largestFeatureByCode = new Map();
+
+    (geojson?.features || []).forEach((feature) => {
+      const code = getIsoA2FromFeature(feature);
+      if (!code || SMALL_COUNTRY_CODES.has(code)) return;
+
+      const current = largestFeatureByCode.get(code);
+      if (!current || getFeatureArea(feature) > getFeatureArea(current)) {
+        largestFeatureByCode.set(code, feature);
+      }
+    });
+
+    return Array.from(largestFeatureByCode.values())
       .map((feature) => {
         const code = getIsoA2FromFeature(feature);
-        if (!code || SMALL_COUNTRY_CODES.has(code)) return null;
         if (zoom < getCountryButtonMinZoom(feature)) return null;
 
         const position = getFeatureDisplayCenter(feature);
@@ -1093,7 +1117,53 @@ function CountryButtonMarkers({ geojson, friendVisitMap, selectedCountryCode, zo
 function SmallCountryHotspots({ friendVisitMap, selectedCountryCode, zoom, onSelectCountry }) {
   if (zoom < 4) return null;
 
-  return SMALL_COUNTRY_HOTSPOTS.map((hotspot) => {
+  const combinedCodes = new Set(
+    COMBINED_SMALL_COUNTRY_MARKERS
+      .filter((marker) => zoom >= marker.minZoom && zoom <= marker.maxZoom)
+      .flatMap((marker) => marker.codes),
+  );
+
+  const combinedMarkers = COMBINED_SMALL_COUNTRY_MARKERS
+    .filter((marker) => zoom >= marker.minZoom && zoom <= marker.maxZoom)
+    .map((marker) => {
+      const friends = marker.codes.flatMap((code) => friendVisitMap.get(code) || []);
+      const uniqueFriendCount = new Set(friends.map((friend) => friend.id)).size;
+      const selected = marker.codes.includes(selectedCountryCode);
+
+      return (
+        <Marker
+          key={marker.id}
+          position={[marker.lat, marker.lng]}
+          icon={createCountryButtonIcon({
+            code: marker.codes[0],
+            friendCount: uniqueFriendCount,
+            selected,
+            label: marker.iconLabel,
+            wide: true,
+          })}
+          riseOnHover
+          eventHandlers={{
+            click: (event) => {
+              const original = event.originalEvent || {};
+              onSelectCountry({
+                code: marker.codes[0],
+                flag: countryFlag(marker.codes[0]),
+                name: getCountryName(marker.codes[0], "en"),
+                x: original.clientX || 24,
+                y: original.clientY || 160,
+                showDetails: true,
+              });
+            },
+          }}
+        >
+          <Tooltip direction="top" offset={[0, -14]} opacity={0.95} interactive={false}>
+            {marker.label}
+          </Tooltip>
+        </Marker>
+      );
+    });
+
+  const individualMarkers = SMALL_COUNTRY_HOTSPOTS.filter((hotspot) => !combinedCodes.has(hotspot.code)).map((hotspot) => {
     const code = normalizeCountryCode(hotspot.code);
     const friends = friendVisitMap.get(code) || [];
     const flag = countryFlag(code);
@@ -1130,6 +1200,8 @@ function SmallCountryHotspots({ friendVisitMap, selectedCountryCode, zoom, onSel
       </Marker>
     );
   });
+
+  return [...combinedMarkers, ...individualMarkers];
 }
 
 function SelectedCountryFocus({ selectedCountry, geoJsonRef, onMissingCountry }) {
