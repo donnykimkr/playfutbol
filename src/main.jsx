@@ -418,7 +418,12 @@ const SMALL_COUNTRY_HOTSPOTS = [
 ];
 const SMALL_COUNTRY_CODES = new Set(SMALL_COUNTRY_HOTSPOTS.map((country) => country.code));
 const COUNTRY_BUTTON_POSITION_OVERRIDES = {
+  FI: [64.6, 26.2],
+  GB: [54.6, -2.4],
+  ID: [-7.35, 110.1],
+  KG: [41.35, 74.65],
   MY: [4.2, 102.05],
+  NO: [64.6, 11.8],
   VN: [16.1, 108.05],
   PH: [12.8, 122.2],
 };
@@ -527,26 +532,6 @@ const COMBINED_SMALL_COUNTRY_MARKERS = [
     maxZoom: 6,
     label: "🇨🇭 Switzerland / 🇱🇮 Liechtenstein",
     iconLabel: "🇨🇭🇱🇮",
-  },
-  {
-    id: "FR_MC",
-    codes: ["FR", "MC"],
-    lat: 44.8,
-    lng: 5.2,
-    minZoom: 5,
-    maxZoom: 6,
-    label: "🇫🇷 France / 🇲🇨 Monaco",
-    iconLabel: "🇫🇷🇲🇨",
-  },
-  {
-    id: "ES_AD",
-    codes: ["ES", "AD"],
-    lat: 41.3,
-    lng: -1.0,
-    minZoom: 5,
-    maxZoom: 6,
-    label: "🇪🇸 Spain / 🇦🇩 Andorra",
-    iconLabel: "🇪🇸🇦🇩",
   },
   {
     id: "EE_LV_LT",
