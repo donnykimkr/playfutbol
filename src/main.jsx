@@ -439,6 +439,16 @@ const COMBINED_SMALL_COUNTRY_MARKERS = [
     iconLabel: "🇭🇰🇲🇴",
   },
   {
+    id: "KR_KP",
+    codes: ["KR", "KP"],
+    lat: 38.25,
+    lng: 127.35,
+    minZoom: 3,
+    maxZoom: 5,
+    label: "🇰🇷 South Korea / 🇰🇵 North Korea",
+    iconLabel: "🇰🇷🇰🇵",
+  },
+  {
     id: "IL_PS",
     codes: ["IL", "PS"],
     lat: 31.63,
@@ -497,6 +507,66 @@ const COMBINED_SMALL_COUNTRY_MARKERS = [
     maxZoom: 6,
     label: "🇸🇬 Singapore / 🇲🇾 Malaysia",
     iconLabel: "🇸🇬🇲🇾",
+  },
+  {
+    id: "BE_NL_LU",
+    codes: ["BE", "NL", "LU"],
+    lat: 51.0,
+    lng: 5.1,
+    minZoom: 4,
+    maxZoom: 5,
+    label: "🇧🇪 Belgium / 🇳🇱 Netherlands / 🇱🇺 Luxembourg",
+    iconLabel: "🇧🇪🇳🇱🇱🇺",
+  },
+  {
+    id: "CH_LI",
+    codes: ["CH", "LI"],
+    lat: 46.95,
+    lng: 8.45,
+    minZoom: 4,
+    maxZoom: 6,
+    label: "🇨🇭 Switzerland / 🇱🇮 Liechtenstein",
+    iconLabel: "🇨🇭🇱🇮",
+  },
+  {
+    id: "FR_MC",
+    codes: ["FR", "MC"],
+    lat: 44.8,
+    lng: 5.2,
+    minZoom: 4,
+    maxZoom: 6,
+    label: "🇫🇷 France / 🇲🇨 Monaco",
+    iconLabel: "🇫🇷🇲🇨",
+  },
+  {
+    id: "ES_AD",
+    codes: ["ES", "AD"],
+    lat: 41.3,
+    lng: -1.0,
+    minZoom: 4,
+    maxZoom: 6,
+    label: "🇪🇸 Spain / 🇦🇩 Andorra",
+    iconLabel: "🇪🇸🇦🇩",
+  },
+  {
+    id: "EE_LV_LT",
+    codes: ["EE", "LV", "LT"],
+    lat: 57.0,
+    lng: 24.5,
+    minZoom: 4,
+    maxZoom: 5,
+    label: "🇪🇪 Estonia / 🇱🇻 Latvia / 🇱🇹 Lithuania",
+    iconLabel: "🇪🇪🇱🇻🇱🇹",
+  },
+  {
+    id: "EAST_CARIBBEAN",
+    codes: ["AG", "BB", "GD", "LC", "VC"],
+    lat: 14.25,
+    lng: -61.1,
+    minZoom: 4,
+    maxZoom: 6,
+    label: "Eastern Caribbean islands",
+    iconLabel: "🇦🇬🇧🇧🇬🇩🇱🇨🇻🇨",
   },
 ];
 const FEATURE_BOUNDS_CENTER_CACHE = new WeakMap();
@@ -830,16 +900,26 @@ function Avatar({ user, size = "md" }) {
   );
 }
 
-function createCountryButtonIcon({ code, friendCount = 0, selected = false, label = "", wide = false }) {
+function getGroupedCountryButtonSize(groupCount) {
+  if (groupCount >= 5) return { iconSize: [170, 54], iconAnchor: [85, 27] };
+  if (groupCount === 4) return { iconSize: [170, 54], iconAnchor: [85, 27] };
+  if (groupCount === 3) return { iconSize: [138, 54], iconAnchor: [69, 27] };
+  if (groupCount === 2) return { iconSize: [100, 54], iconAnchor: [50, 27] };
+  return { iconSize: [54, 54], iconAnchor: [27, 27] };
+}
+
+function createCountryButtonIcon({ code, friendCount = 0, selected = false, label = "", groupCount = 1 }) {
   const countBadge = friendCount ? `<span class="country-button-count">${friendCount}</span>` : "";
   const displayLabel = label || countryFlag(code);
+  const groupClass = groupCount > 1 ? `is-group-${Math.min(groupCount, 5)}` : "";
+  const { iconSize, iconAnchor } = getGroupedCountryButtonSize(groupCount);
   return L.divIcon({
-    className: `country-button-marker ${wide ? "is-wide" : ""} ${selected ? "is-selected" : ""}`,
+    className: `country-button-marker ${groupClass} ${selected ? "is-selected" : ""}`,
     html: `<button class="country-map-button" type="button" aria-label="${escapeHtml(
       getCountryName(code, "en") || code,
     )}">${escapeHtml(displayLabel)}${countBadge}</button>`,
-    iconSize: wide ? [124, 54] : [54, 54],
-    iconAnchor: wide ? [62, 27] : [27, 27],
+    iconSize,
+    iconAnchor,
   });
 }
 
@@ -1259,7 +1339,7 @@ function SmallCountryHotspots({ friendVisitMap, selectedCountryCode, zoom, onSel
             friendCount: uniqueFriendCount,
             selected,
             label: marker.iconLabel,
-            wide: true,
+            groupCount: marker.codes.length,
           })}
           riseOnHover
           eventHandlers={{

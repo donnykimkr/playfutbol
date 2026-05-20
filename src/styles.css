@@ -519,9 +519,20 @@ button:disabled {
     border-color 150ms ease;
 }
 
-.country-button-marker.is-wide .country-map-button {
-  width: 112px;
+.country-button-marker.is-group-2 .country-map-button {
+  width: 88px;
+  font-size: 24px;
+}
+
+.country-button-marker.is-group-3 .country-map-button {
+  width: 126px;
   font-size: 23px;
+}
+
+.country-button-marker.is-group-4 .country-map-button,
+.country-button-marker.is-group-5 .country-map-button {
+  width: 158px;
+  font-size: 22px;
 }
 
 .country-button-marker.is-selected .country-map-button,
