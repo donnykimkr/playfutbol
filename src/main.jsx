@@ -464,6 +464,9 @@ const COUNTRY_BUTTON_POSITION_OVERRIDES = {
 };
 const EARLY_COUNTRY_BUTTON_MIN_ZOOM = {
   AE: 3,
+  DE: 3,
+  ES: 3,
+  FR: 3,
   GB: 2,
   IN: 2,
   JP: 2,
@@ -471,6 +474,21 @@ const EARLY_COUNTRY_BUTTON_MIN_ZOOM = {
   KR: 3,
   MX: 2,
   KZ: 3,
+  TH: 3,
+  TR: 3,
+};
+const DELAYED_COUNTRY_BUTTON_MIN_ZOOM = {
+  BM: 5,
+  IO: 5,
+  LK: 5,
+  ML: 5,
+  NE: 5,
+  PM: 5,
+  PW: 5,
+  SD: 5,
+  SH: 5,
+  TD: 5,
+  TL: 5,
 };
 const COUNTRY_BUTTON_SHORT_NAMES = {
   AE: "UAE",
@@ -480,6 +498,7 @@ const COUNTRY_BUTTON_SHORT_NAMES = {
   BO: "Bolivia",
   CF: "CAR",
   CD: "DR Congo",
+  TD: "Chad",
   CG: "Congo",
   CN: "China",
   CI: "Cote d'Ivoire",
@@ -509,6 +528,7 @@ const COUNTRY_BUTTON_SHORT_NAMES = {
   SZ: "Eswatini",
   TT: "Trinidad",
   TZ: "Tanzania",
+  TL: "Timor-Leste",
   TW: "Taiwan",
   IR: "Iran",
   US: "USA",
@@ -1046,8 +1066,8 @@ function getGroupedCountryButtonSize(groupCount, label = "") {
   if (groupCount === 3) return { iconSize: [118, 48], iconAnchor: [59, 24] };
   if (groupCount === 2) return { iconSize: [86, 48], iconAnchor: [43, 24] };
   const labelLength = Array.from(label).length;
-  const width = Math.min(172, Math.max(104, 46 + labelLength * 8));
-  return { iconSize: [width, 72], iconAnchor: [width / 2, 36] };
+  const width = Math.min(160, Math.max(96, 40 + labelLength * 7.5));
+  return { iconSize: [width, 64], iconAnchor: [width / 2, 32] };
 }
 
 function createCountryButtonIcon({ code, friendCount = 0, selected = false, label = "", groupCount = 1, groupCodes = null }) {
@@ -1140,6 +1160,10 @@ function getCountryButtonMinZoom(feature) {
   if (EARLY_COUNTRY_BUTTON_MIN_ZOOM[code]) {
     FEATURE_MIN_ZOOM_CACHE.set(feature, EARLY_COUNTRY_BUTTON_MIN_ZOOM[code]);
     return EARLY_COUNTRY_BUTTON_MIN_ZOOM[code];
+  }
+  if (DELAYED_COUNTRY_BUTTON_MIN_ZOOM[code]) {
+    FEATURE_MIN_ZOOM_CACHE.set(feature, DELAYED_COUNTRY_BUTTON_MIN_ZOOM[code]);
+    return DELAYED_COUNTRY_BUTTON_MIN_ZOOM[code];
   }
 
   const area = getFeatureArea(feature);
