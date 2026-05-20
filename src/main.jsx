@@ -417,6 +417,18 @@ const SMALL_COUNTRY_HOTSPOTS = [
   { code: "VC", lat: 12.9843, lng: -61.2872 },
   { code: "AW", lat: 12.5211, lng: -69.9683 },
   { code: "CW", lat: 12.1696, lng: -68.99 },
+  { code: "AI", lat: 18.2206, lng: -63.0686 },
+  { code: "BL", lat: 17.9, lng: -62.8333 },
+  { code: "DM", lat: 15.415, lng: -61.371 },
+  { code: "KN", lat: 17.3578, lng: -62.783 },
+  { code: "KY", lat: 19.3133, lng: -81.2546 },
+  { code: "MF", lat: 18.0708, lng: -63.0501 },
+  { code: "MS", lat: 16.7425, lng: -62.1874 },
+  { code: "PR", lat: 18.2208, lng: -66.5901 },
+  { code: "SX", lat: 18.0425, lng: -63.0548 },
+  { code: "TC", lat: 21.694, lng: -71.7979 },
+  { code: "VG", lat: 18.4207, lng: -64.64 },
+  { code: "VI", lat: 18.3358, lng: -64.8963 },
 ];
 const SMALL_COUNTRY_CODES = new Set(SMALL_COUNTRY_HOTSPOTS.map((country) => country.code));
 const OVERSEAS_TERRITORY_PARENTS = {
@@ -515,16 +527,6 @@ const COMBINED_SMALL_COUNTRY_MARKERS = [
     iconLabel: "🇬🇺🇲🇵",
   },
   {
-    id: "AW_CW",
-    codes: ["AW", "CW"],
-    lat: 12.34,
-    lng: -69.48,
-    minZoom: 5,
-    maxZoom: 6,
-    label: "🇦🇼 Aruba / 🇨🇼 Curaçao",
-    iconLabel: "🇦🇼🇨🇼",
-  },
-  {
     id: "IT_VA_SM",
     codes: ["IT", "VA", "SM"],
     lat: 42.65,
@@ -555,14 +557,14 @@ const COMBINED_SMALL_COUNTRY_MARKERS = [
     iconLabel: "🇨🇭🇱🇮",
   },
   {
-    id: "EAST_CARIBBEAN",
-    codes: ["AG", "BB", "GD", "LC", "VC"],
-    lat: 14.25,
-    lng: -61.1,
+    id: "CARIBBEAN_CLUSTER",
+    codes: ["PR", "VI", "VG", "TC", "KY", "MS", "AI", "SX", "BL", "MF", "AW", "CW", "AG", "BB", "GD", "LC", "VC", "DM", "KN"],
+    lat: 16.2,
+    lng: -67.1,
     minZoom: 5,
     maxZoom: 6,
-    label: "Eastern Caribbean islands",
-    iconLabel: "🇦🇬🇧🇧🇬🇩🇱🇨🇻🇨",
+    label: "Caribbean islands and territories",
+    iconLabel: "Caribbean",
   },
 ];
 const FEATURE_BOUNDS_CENTER_CACHE = new WeakMap();
@@ -897,6 +899,7 @@ function Avatar({ user, size = "md" }) {
 }
 
 function getGroupedCountryButtonSize(groupCount) {
+  if (groupCount >= 10) return { iconSize: [112, 54], iconAnchor: [56, 27] };
   if (groupCount >= 5) return { iconSize: [112, 76], iconAnchor: [56, 38] };
   if (groupCount === 4) return { iconSize: [146, 48], iconAnchor: [73, 24] };
   if (groupCount === 3) return { iconSize: [118, 48], iconAnchor: [59, 24] };
@@ -914,7 +917,9 @@ function createCountryButtonIcon({ code, friendCount = 0, selected = false, labe
     ? `<span class="country-owner-badge" title="${escapeHtml(getCountryName(parentCode, "en"))}">${countryFlag(parentCode)}</span>`
     : "";
   const innerHtml =
-    groupCodes?.length >= 5
+    groupCodes?.length >= 10
+      ? `<span class="country-button-region-label">${escapeHtml(displayLabel)}</span>`
+      : groupCodes?.length >= 5
       ? `<span class="country-button-cluster">${groupCodes
           .map((groupCode) => `<span>${countryFlag(groupCode)}</span>`)
           .join("")}</span>`

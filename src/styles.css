@@ -535,11 +535,30 @@ button:disabled {
   font-size: 19px;
 }
 
+.country-button-marker.is-group-5 .country-button-region-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 92px;
+  height: 34px;
+  border-radius: 999px;
+  color: #0f172a;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
 .country-button-marker.is-group-5 .country-map-button {
   width: 98px;
   height: 66px;
   border-radius: 28px;
   font-size: 18px;
+}
+
+.country-button-marker.is-group-5 .country-map-button:has(.country-button-region-label) {
+  width: 104px;
+  height: 46px;
+  border-radius: 999px;
 }
 
 .country-button-cluster {
