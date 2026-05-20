@@ -838,8 +838,8 @@ function createCountryButtonIcon({ code, friendCount = 0, selected = false, labe
     html: `<button class="country-map-button" type="button" aria-label="${escapeHtml(
       getCountryName(code, "en") || code,
     )}">${escapeHtml(displayLabel)}${countBadge}</button>`,
-    iconSize: wide ? [96, 54] : [54, 54],
-    iconAnchor: wide ? [48, 27] : [27, 27],
+    iconSize: wide ? [124, 54] : [54, 54],
+    iconAnchor: wide ? [62, 27] : [27, 27],
   });
 }
 
@@ -914,6 +914,33 @@ function getCountryButtonMinZoom(feature) {
   else if (area >= 20) minZoom = 4;
   FEATURE_MIN_ZOOM_CACHE.set(feature, minZoom);
   return minZoom;
+}
+
+function getWrappedLngDistance(a, b) {
+  const diff = Math.abs(a - b);
+  return Math.min(diff, 360 - diff);
+}
+
+function getMapPositionDistance(a, b) {
+  if (!a || !b) return Infinity;
+  const latDistance = Math.abs(a[0] - b[0]);
+  const avgLatRadians = (((a[0] + b[0]) / 2) * Math.PI) / 180;
+  const lngDistance = getWrappedLngDistance(a[1], b[1]) * Math.max(0.35, Math.cos(avgLatRadians));
+  return Math.hypot(latDistance, lngDistance);
+}
+
+function getIsolatedCountryMinZoom(position, countries) {
+  let nearestDistance = Infinity;
+
+  countries.forEach((country) => {
+    if (country.position === position) return;
+    nearestDistance = Math.min(nearestDistance, getMapPositionDistance(position, country.position));
+  });
+
+  if (nearestDistance >= 24) return 2;
+  if (nearestDistance >= 12) return 3;
+  if (nearestDistance >= 7) return 4;
+  return null;
 }
 
 function ringCentroid(ring) {
@@ -1143,13 +1170,21 @@ function CountryButtonMarkers({ geojson, friendVisitMap, selectedCountryCode, zo
       }
     });
 
-    return Array.from(largestFeatureByCode.values())
-      .map((feature) => {
-        const code = getIsoA2FromFeature(feature);
-        if (zoom < getCountryButtonMinZoom(feature)) return null;
+    const countries = Array.from(largestFeatureByCode.values())
+      .map((feature) => ({
+        code: getIsoA2FromFeature(feature),
+        feature,
+        position: getFeatureDisplayCenter(feature),
+      }))
+      .filter((country) => country.code && country.position);
 
-        const position = getFeatureDisplayCenter(feature);
-        if (!position) return null;
+    return countries
+      .map(({ code, feature, position }) => {
+        const isolatedMinZoom = getIsolatedCountryMinZoom(position, countries);
+        const minZoom = isolatedMinZoom
+          ? Math.min(getCountryButtonMinZoom(feature), isolatedMinZoom)
+          : getCountryButtonMinZoom(feature);
+        if (zoom < minZoom) return null;
 
         const friends = friendVisitMap.get(code) || [];
         return {

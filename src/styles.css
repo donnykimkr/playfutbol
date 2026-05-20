@@ -512,6 +512,7 @@ button:disabled {
   cursor: pointer;
   font-size: 25px;
   line-height: 1;
+  white-space: nowrap;
   transition:
     transform 150ms ease,
     box-shadow 150ms ease,
@@ -519,8 +520,8 @@ button:disabled {
 }
 
 .country-button-marker.is-wide .country-map-button {
-  width: 84px;
-  font-size: 24px;
+  width: 112px;
+  font-size: 23px;
 }
 
 .country-button-marker.is-selected .country-map-button,
