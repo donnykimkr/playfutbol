@@ -438,6 +438,7 @@ const OVERSEAS_TERRITORY_PARENTS = {
   CW: "NL",
   GG: "GB",
   GU: "US",
+  HK: "CN",
   JE: "GB",
   KY: "GB",
   MF: "FR",
@@ -565,6 +566,86 @@ const COMBINED_SMALL_COUNTRY_MARKERS = [
     maxZoom: 6,
     label: "Caribbean islands and territories",
     iconLabel: "Caribbean",
+  },
+  {
+    id: "PR_VI_VG",
+    codes: ["PR", "VI", "VG"],
+    lat: 18.32,
+    lng: -65.35,
+    minZoom: 7,
+    maxZoom: 8,
+    label: "🇵🇷 Puerto Rico / 🇻🇮 U.S. Virgin Islands / 🇻🇬 British Virgin Islands",
+    iconLabel: "🇵🇷🇻🇮🇻🇬",
+  },
+  {
+    id: "KY_TC",
+    codes: ["KY", "TC"],
+    lat: 20.55,
+    lng: -76.5,
+    minZoom: 7,
+    maxZoom: 8,
+    label: "🇰🇾 Cayman Islands / 🇹🇨 Turks and Caicos Islands",
+    iconLabel: "🇰🇾🇹🇨",
+  },
+  {
+    id: "AI_MS",
+    codes: ["AI", "MS"],
+    lat: 17.45,
+    lng: -62.65,
+    minZoom: 7,
+    maxZoom: 8,
+    label: "🇦🇮 Anguilla / 🇲🇸 Montserrat",
+    iconLabel: "🇦🇮🇲🇸",
+  },
+  {
+    id: "SX_MF_BL",
+    codes: ["SX", "MF", "BL"],
+    lat: 18.0,
+    lng: -62.95,
+    minZoom: 7,
+    maxZoom: 8,
+    label: "🇸🇽 Sint Maarten / 🇲🇫 Saint Martin / 🇧🇱 Saint Barthélemy",
+    iconLabel: "🇸🇽🇲🇫🇧🇱",
+  },
+  {
+    id: "AW_CW",
+    codes: ["AW", "CW"],
+    lat: 12.34,
+    lng: -69.48,
+    minZoom: 7,
+    maxZoom: 8,
+    label: "🇦🇼 Aruba / 🇨🇼 Curaçao",
+    iconLabel: "🇦🇼🇨🇼",
+  },
+  {
+    id: "AG_KN",
+    codes: ["AG", "KN"],
+    lat: 17.2,
+    lng: -62.25,
+    minZoom: 7,
+    maxZoom: 8,
+    label: "🇦🇬 Antigua and Barbuda / 🇰🇳 Saint Kitts and Nevis",
+    iconLabel: "🇦🇬🇰🇳",
+  },
+  {
+    id: "DM_LC",
+    codes: ["DM", "LC"],
+    lat: 14.65,
+    lng: -61.15,
+    minZoom: 7,
+    maxZoom: 8,
+    label: "🇩🇲 Dominica / 🇱🇨 Saint Lucia",
+    iconLabel: "🇩🇲🇱🇨",
+  },
+  {
+    id: "BB_GD_VC",
+    codes: ["BB", "GD", "VC"],
+    lat: 12.75,
+    lng: -60.8,
+    minZoom: 7,
+    maxZoom: 8,
+    label: "🇧🇧 Barbados / 🇬🇩 Grenada / 🇻🇨 Saint Vincent and the Grenadines",
+    iconLabel: "🇧🇧🇬🇩🇻🇨",
   },
 ];
 const FEATURE_BOUNDS_CENTER_CACHE = new WeakMap();
@@ -912,7 +993,7 @@ function createCountryButtonIcon({ code, friendCount = 0, selected = false, labe
   const displayLabel = label || countryFlag(code);
   const groupClass = groupCount > 1 ? `is-group-${Math.min(groupCount, 5)}` : "";
   const { iconSize, iconAnchor } = getGroupedCountryButtonSize(groupCount);
-  const parentCode = OVERSEAS_TERRITORY_PARENTS[code];
+  const parentCode = groupCount === 1 ? OVERSEAS_TERRITORY_PARENTS[code] : "";
   const parentBadge = parentCode
     ? `<span class="country-owner-badge" title="${escapeHtml(getCountryName(parentCode, "en"))}">${countryFlag(parentCode)}</span>`
     : "";
