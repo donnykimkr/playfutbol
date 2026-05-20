@@ -392,6 +392,9 @@ const SMALL_COUNTRY_HOTSPOTS = [
   { code: "MO", lat: 22.12, lng: 113.52 },
   { code: "IL", lat: 31.25, lng: 34.62 },
   { code: "PS", lat: 31.95, lng: 35.2 },
+  { code: "GG", lat: 49.52, lng: -2.68 },
+  { code: "JE", lat: 49.18, lng: -2.05 },
+  { code: "QA", lat: 25.35, lng: 51.18 },
   { code: "MV", lat: 3.2028, lng: 73.2207 },
   { code: "SG", lat: 1.3521, lng: 103.8198 },
   { code: "MC", lat: 43.7384, lng: 7.4246 },
@@ -402,6 +405,8 @@ const SMALL_COUNTRY_HOTSPOTS = [
   { code: "AD", lat: 42.5063, lng: 1.5218 },
   { code: "BH", lat: 26.0667, lng: 50.5577 },
   { code: "BN", lat: 4.5353, lng: 114.7277 },
+  { code: "GU", lat: 13.45, lng: 144.75 },
+  { code: "MP", lat: 15.25, lng: 145.75 },
   { code: "MU", lat: -20.3484, lng: 57.5522 },
   { code: "SC", lat: -4.6796, lng: 55.492 },
   { code: "BB", lat: 13.1939, lng: -59.5432 },
@@ -414,6 +419,7 @@ const SMALL_COUNTRY_CODES = new Set(SMALL_COUNTRY_HOTSPOTS.map((country) => coun
 const COUNTRY_BUTTON_POSITION_OVERRIDES = {
   MY: [4.2, 102.05],
   VN: [16.1, 108.05],
+  PH: [12.8, 122.2],
 };
 const COMBINED_SMALL_COUNTRY_MARKERS = [
   {
@@ -425,6 +431,46 @@ const COMBINED_SMALL_COUNTRY_MARKERS = [
     maxZoom: 6,
     label: "🇭🇰 Hong Kong / 🇲🇴 Macao",
     iconLabel: "🇭🇰🇲🇴",
+  },
+  {
+    id: "IL_PS",
+    codes: ["IL", "PS"],
+    lat: 31.63,
+    lng: 34.92,
+    minZoom: 4,
+    maxZoom: 6,
+    label: "🇮🇱 Israel / 🇵🇸 Palestine",
+    iconLabel: "🇮🇱🇵🇸",
+  },
+  {
+    id: "GG_JE",
+    codes: ["GG", "JE"],
+    lat: 49.35,
+    lng: -2.36,
+    minZoom: 4,
+    maxZoom: 6,
+    label: "🇬🇬 Guernsey / 🇯🇪 Jersey",
+    iconLabel: "🇬🇬🇯🇪",
+  },
+  {
+    id: "QA_BH",
+    codes: ["QA", "BH"],
+    lat: 25.72,
+    lng: 50.86,
+    minZoom: 4,
+    maxZoom: 6,
+    label: "🇶🇦 Qatar / 🇧🇭 Bahrain",
+    iconLabel: "🇶🇦🇧🇭",
+  },
+  {
+    id: "GU_MP",
+    codes: ["GU", "MP"],
+    lat: 14.36,
+    lng: 145.22,
+    minZoom: 4,
+    maxZoom: 6,
+    label: "🇬🇺 Guam / 🇲🇵 Saipan",
+    iconLabel: "🇬🇺🇲🇵",
   },
 ];
 const FEATURE_BOUNDS_CENTER_CACHE = new WeakMap();
