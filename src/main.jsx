@@ -959,7 +959,7 @@ function LoginScreen() {
     <main className="login-screen">
       <section className="login-panel">
         <div>
-          <p className="eyebrow">Travel Map</p>
+          <img className="brand-logo brand-logo-login" src="/wyb-logo.png" alt="wyb" />
           <h1>{t(language, "worldSeen")}</h1>
           <p className="login-copy">{t(language, "loginCopy")}</p>
         </div>
@@ -1641,7 +1641,7 @@ function UsernameSetupModal({ language, onSave }) {
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="username-title">
       <form className="username-modal" onSubmit={handleSubmit}>
         <div>
-          <p className="eyebrow">Travel Map</p>
+          <img className="brand-logo brand-logo-small" src="/wyb-logo.png" alt="wyb" />
           <h2 id="username-title">{t(language, "usernameSetupTitle")}</h2>
           <p>{t(language, "usernameSetupCopy")}</p>
         </div>
@@ -4234,8 +4234,8 @@ function App() {
   return (
     <main className="app-shell">
       <header className="top-bar">
-        <div>
-          <p className="eyebrow">Travel Map</p>
+        <div className="top-brand">
+          <img className="brand-logo brand-logo-header" src="/wyb-logo.png" alt="wyb" />
           <h1>
             {displayedVisitCount} {t(language, "countriesVisited")}
           </h1>
