@@ -420,6 +420,7 @@ const SMALL_COUNTRY_HOTSPOTS = [
   { code: "AI", lat: 18.2206, lng: -63.0686 },
   { code: "BL", lat: 17.9, lng: -62.8333 },
   { code: "DM", lat: 15.415, lng: -61.371 },
+  { code: "DO", lat: 18.85, lng: -70.2 },
   { code: "KN", lat: 17.3578, lng: -62.783 },
   { code: "KY", lat: 19.3133, lng: -81.2546 },
   { code: "MF", lat: 18.0708, lng: -63.0501 },
@@ -475,8 +476,10 @@ const COUNTRY_BUTTON_SHORT_NAMES = {
   CF: "CAR",
   CD: "DR Congo",
   CG: "Congo",
+  CN: "China",
   CI: "Cote d'Ivoire",
   CZ: "Czechia",
+  DM: "Dominica",
   DO: "Dominican Rep.",
   GB: "UK",
   GQ: "Eq. Guinea",
@@ -500,6 +503,8 @@ const COUNTRY_BUTTON_SHORT_NAMES = {
   SZ: "Eswatini",
   TT: "Trinidad",
   TZ: "Tanzania",
+  TW: "Taiwan",
+  IR: "Iran",
   US: "USA",
   VA: "Vatican",
   VC: "St. Vincent",
@@ -598,7 +603,7 @@ const COMBINED_SMALL_COUNTRY_MARKERS = [
   },
   {
     id: "CARIBBEAN_CLUSTER",
-    codes: ["PR", "VI", "VG", "TC", "KY", "MS", "AI", "SX", "BL", "MF", "AW", "CW", "AG", "BB", "GD", "LC", "VC", "DM", "KN"],
+    codes: ["PR", "VI", "VG", "TC", "KY", "MS", "AI", "SX", "BL", "MF", "AW", "CW", "AG", "BB", "GD", "LC", "VC", "DM", "DO", "KN"],
     lat: 16.2,
     lng: -67.1,
     minZoom: 5,
@@ -637,14 +642,14 @@ const COMBINED_SMALL_COUNTRY_MARKERS = [
     iconLabel: "🇦🇮🇲🇸",
   },
   {
-    id: "SX_MF_BL",
-    codes: ["SX", "MF", "BL"],
-    lat: 18.0,
-    lng: -62.95,
+    id: "SX_MF",
+    codes: ["SX", "MF"],
+    lat: 18.055,
+    lng: -63.052,
     minZoom: 7,
     maxZoom: 8,
-    label: "🇸🇽 Sint Maarten / 🇲🇫 Saint Martin / 🇧🇱 Saint Barthélemy",
-    iconLabel: "🇸🇽🇲🇫🇧🇱",
+    label: "🇸🇽 Sint Maarten / 🇲🇫 Saint Martin",
+    iconLabel: "🇸🇽🇲🇫",
   },
   {
     id: "AW_CW",
@@ -667,14 +672,14 @@ const COMBINED_SMALL_COUNTRY_MARKERS = [
     iconLabel: "🇦🇬🇰🇳",
   },
   {
-    id: "DM_LC",
-    codes: ["DM", "LC"],
-    lat: 14.65,
-    lng: -61.15,
+    id: "DO_DM",
+    codes: ["DO", "DM"],
+    lat: 17.2,
+    lng: -65.55,
     minZoom: 7,
     maxZoom: 8,
-    label: "🇩🇲 Dominica / 🇱🇨 Saint Lucia",
-    iconLabel: "🇩🇲🇱🇨",
+    label: "🇩🇴 Dominican Republic / 🇩🇲 Dominica",
+    iconLabel: "🇩🇴🇩🇲",
   },
   {
     id: "BB_GD_VC",
@@ -1035,8 +1040,8 @@ function getGroupedCountryButtonSize(groupCount, label = "") {
   if (groupCount === 3) return { iconSize: [118, 48], iconAnchor: [59, 24] };
   if (groupCount === 2) return { iconSize: [86, 48], iconAnchor: [43, 24] };
   const labelLength = Array.from(label).length;
-  const width = Math.min(148, Math.max(82, 30 + labelLength * 8));
-  return { iconSize: [width, 48], iconAnchor: [width / 2, 24] };
+  const width = Math.min(156, Math.max(88, 34 + labelLength * 8));
+  return { iconSize: [width, 56], iconAnchor: [width / 2, 28] };
 }
 
 function createCountryButtonIcon({ code, friendCount = 0, selected = false, label = "", groupCount = 1, groupCodes = null }) {
