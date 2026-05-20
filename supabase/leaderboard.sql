@@ -2,6 +2,7 @@ create extension if not exists pgcrypto;
 
 create table if not exists leaderboard (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
   nickname text not null,
   score integer not null,
   gems integer not null default 0,
@@ -13,6 +14,9 @@ create table if not exists leaderboard (
   constraint leaderboard_positive_level check (level > 0)
 );
 
+alter table leaderboard
+add column if not exists user_id uuid references auth.users(id) on delete cascade;
+
 alter table leaderboard enable row level security;
 
 drop policy if exists "Anyone can read leaderboard" on leaderboard;
@@ -22,10 +26,15 @@ for select
 using (true);
 
 drop policy if exists "Anyone can submit leaderboard scores" on leaderboard;
-create policy "Anyone can submit leaderboard scores"
+drop policy if exists "Authenticated users can submit their own scores" on leaderboard;
+create policy "Authenticated users can submit their own scores"
 on leaderboard
 for insert
+to authenticated
 with check (
+  auth.uid() is not null
+  and user_id = auth.uid()
+  and
   char_length(nickname) between 2 and 16
   and score > 0
   and gems >= 0

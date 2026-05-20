@@ -11,7 +11,7 @@ Brave Browser is recommended for testing and playing because it is fast, Chromiu
 - React
 - Tailwind CSS
 - Three.js
-- Supabase leaderboard with graceful local fallback
+- Supabase Auth and leaderboard with graceful local fallback
 - Vercel deployment-ready
 
 ## Run Locally
@@ -23,7 +23,7 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-Make sure the app runs locally before deploying. Supabase is optional for local play: if `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` is missing, the game still works and the UI shows that the online leaderboard is disabled.
+Make sure the app runs locally before deploying. Supabase is optional for local play: if `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` is missing, the game still works and the UI shows that online auth and leaderboard saving are disabled.
 
 ## Environment Variables
 
@@ -51,6 +51,7 @@ create extension if not exists pgcrypto;
 
 create table if not exists leaderboard (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
   nickname text not null,
   score integer not null,
   gems integer not null default 0,
@@ -62,6 +63,9 @@ create table if not exists leaderboard (
   constraint leaderboard_positive_level check (level > 0)
 );
 
+alter table leaderboard
+add column if not exists user_id uuid references auth.users(id) on delete cascade;
+
 alter table leaderboard enable row level security;
 
 drop policy if exists "Anyone can read leaderboard" on leaderboard;
@@ -71,10 +75,15 @@ for select
 using (true);
 
 drop policy if exists "Anyone can submit leaderboard scores" on leaderboard;
-create policy "Anyone can submit leaderboard scores"
+drop policy if exists "Authenticated users can submit their own scores" on leaderboard;
+create policy "Authenticated users can submit their own scores"
 on leaderboard
 for insert
+to authenticated
 with check (
+  auth.uid() is not null
+  and user_id = auth.uid()
+  and
   char_length(nickname) between 2 and 16
   and score > 0
   and gems >= 0
@@ -87,17 +96,39 @@ on leaderboard (score desc, created_at asc);
 
 The app validates nicknames as 2-16 characters and only submits positive integer scores.
 
+## Google OAuth Setup
+
+Skyline Dash uses Supabase Auth with Google OAuth. Guests can play without logging in, but only signed-in users can upload leaderboard scores. Scores are inserted with the authenticated `user_id`.
+
+1. In Supabase, go to Authentication → Providers.
+2. Enable Google.
+3. Create OAuth credentials in Google Cloud Console.
+4. Add the Google Client ID and Client Secret to the Supabase Google provider.
+5. In Supabase Authentication → URL Configuration, set:
+   - Site URL for local testing: `http://localhost:3000`
+   - Site URL for production: `https://skyline-dash.vercel.app`
+   - Redirect URLs:
+     - `http://localhost:3000`
+     - `http://localhost:3000/**`
+     - `https://skyline-dash.vercel.app`
+     - `https://skyline-dash.vercel.app/**`
+
+If you deploy to a different Vercel domain, add that domain and wildcard redirect URL too.
+
+The app uses `signInWithOAuth({ provider: "google" })` client-side with the Supabase anon key only. Never expose a service role key in this app.
+
 ## Connect Supabase To Vercel
 
 The project is prepared for the simplest Vercel connection path:
 
 1. Push this repo to GitHub.
 2. Create or open a Supabase project and run `supabase/leaderboard.sql`.
-3. In Vercel, import the GitHub repo as a new project.
-4. Add these Environment Variables in Vercel Project Settings for Production, Preview, and Development:
+3. Enable Google OAuth in Supabase and add the Vercel/local redirect URLs.
+4. In Vercel, import the GitHub repo as a new project.
+5. Add these Environment Variables in Vercel Project Settings for Production, Preview, and Development:
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-5. Deploy.
+6. Deploy.
 
 If you use the Supabase integration from Vercel Marketplace, Supabase can synchronize environment variables to Vercel for connected projects. Confirm the public client variables above exist with the `NEXT_PUBLIC_` prefix, because Next.js only exposes client-side variables with that prefix.
 

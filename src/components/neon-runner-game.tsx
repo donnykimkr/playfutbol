@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
-import { ChevronLeft, ChevronRight, Gem, Medal, Play, RotateCcw, Trophy } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
+import { ChevronLeft, ChevronRight, Gem, LogOut, Medal, Play, RotateCcw, Trophy, UserCircle } from "lucide-react";
 import { getSupabaseClient, hasSupabaseConfig } from "@/lib/supabase";
 
 type GameState = "start" | "playing" | "gameOver" | "complete";
@@ -108,6 +109,8 @@ export function NeonRunnerGame() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
   const [nickname, setNickname] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
+  const [user, setUser] = useState<User | null>(null);
+  const [authStatus, setAuthStatus] = useState("");
 
   const level = useMemo(() => makeLevel(levelId), [levelId]);
   const gemIds = useMemo(() => new Set(level.gems.map((gem) => gem.id)), [level.gems]);
@@ -155,7 +158,36 @@ export function NeonRunnerGame() {
     setLeaderboard((data ?? []) as LeaderboardRow[]);
   }, []);
 
+  const signInWithGoogle = useCallback(async () => {
+    const supabase = getSupabaseClient();
+    if (!supabase || typeof window === "undefined") {
+      setAuthStatus("Google sign-in needs Supabase env vars.");
+      return;
+    }
+    setAuthStatus("Opening Google sign-in...");
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: window.location.origin,
+      },
+    });
+    if (error) setAuthStatus(error.message);
+  }, []);
+
+  const signOut = useCallback(async () => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setUser(null);
+    setSaveStatus("");
+    setAuthStatus("Signed out. Playing as Guest.");
+  }, []);
+
   const saveScore = useCallback(async () => {
+    if (!user) {
+      setSaveStatus("Sign in with Google to upload scores. Guest runs stay local.");
+      return;
+    }
     const cleanName = nickname.trim();
     if (!nicknameIsValid(cleanName)) {
       setSaveStatus("Nickname must be 2-16 letters, numbers, spaces, _ or -.");
@@ -172,6 +204,7 @@ export function NeonRunnerGame() {
     }
     setSaveStatus("Saving...");
     const { error } = await supabase.from("leaderboard").insert({
+      user_id: user.id,
       nickname: cleanName,
       score,
       gems: gemsCollected,
@@ -183,7 +216,7 @@ export function NeonRunnerGame() {
     }
     setSaveStatus("Saved to leaderboard.");
     await fetchLeaderboard();
-  }, [fetchLeaderboard, gemsCollected, levelId, nickname, score]);
+  }, [fetchLeaderboard, gemsCollected, levelId, nickname, score, user]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -191,6 +224,37 @@ export function NeonRunnerGame() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [fetchLeaderboard]);
+
+  useEffect(() => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return undefined;
+
+    const timer = window.setTimeout(() => {
+      void supabase.auth.getSession().then(({ data }) => {
+        const sessionUser = data.session?.user ?? null;
+        setUser(sessionUser);
+        if (sessionUser) {
+          const fallbackName = sessionUser.user_metadata?.full_name || sessionUser.email || "Player";
+          setNickname((current) => current || String(fallbackName).slice(0, 16));
+        }
+      });
+    }, 0);
+
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      const sessionUser = session?.user ?? null;
+      setUser(sessionUser);
+      if (sessionUser) {
+        const fallbackName = sessionUser.user_metadata?.full_name || sessionUser.email || "Player";
+        setNickname((current) => current || String(fallbackName).slice(0, 16));
+        setAuthStatus("");
+      }
+    });
+
+    return () => {
+      window.clearTimeout(timer);
+      data.subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -372,6 +436,7 @@ export function NeonRunnerGame() {
 
   const progressPercent = Math.min(100, Math.floor((progress / (level.length * TILE_SIZE)) * 100));
   const canSave = gameState === "complete" || gameState === "gameOver";
+  const playerLabel = user?.user_metadata?.full_name || user?.email || "Guest";
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#05060d] text-white">
@@ -384,10 +449,36 @@ export function NeonRunnerGame() {
             <h1 className="text-2xl font-black tracking-normal sm:text-4xl">Skyline Dash</h1>
             <p className="mt-1 text-sm text-cyan-100/75">Level {levelId} · avoid gaps, dodge blocks, collect gems</p>
           </div>
-          <div className="grid grid-cols-3 gap-2 text-center text-sm">
-            <Metric label="Score" value={score} />
-            <Metric label="Gems" value={gemsCollected} />
-            <Metric label="Run" value={`${progressPercent}%`} />
+          <div className="flex flex-wrap justify-end gap-2">
+            <div className="grid grid-cols-3 gap-2 text-center text-sm">
+              <Metric label="Score" value={score} />
+              <Metric label="Gems" value={gemsCollected} />
+              <Metric label="Run" value={`${progressPercent}%`} />
+            </div>
+            <div className="pointer-events-auto flex min-w-48 max-w-full items-center gap-2 rounded-md border border-white/10 bg-black/35 px-3 py-2 shadow-2xl backdrop-blur">
+              <UserCircle size={18} className="shrink-0 text-cyan-200" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-bold text-white">{playerLabel}</div>
+                <div className="text-[10px] uppercase text-cyan-100/55">{user ? "Signed in" : "Guest mode"}</div>
+              </div>
+              {user ? (
+                <button
+                  aria-label="Sign out"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-white/10 text-cyan-100 transition hover:bg-white/10"
+                  onClick={signOut}
+                >
+                  <LogOut size={15} />
+                </button>
+              ) : (
+                <button
+                  className="shrink-0 rounded-md bg-white px-3 py-2 text-xs font-bold text-slate-950 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!hasSupabaseConfig}
+                  onClick={signInWithGoogle}
+                >
+                  Sign in with Google
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -468,6 +559,10 @@ export function NeonRunnerGame() {
                   Leaderboard is offline locally. Add Supabase env vars to enable online scores.
                 </p>
               )}
+              {hasSupabaseConfig && !user && (
+                <p className="mb-3 text-sm text-cyan-100/75">Playing as Guest. Sign in with Google to upload leaderboard scores.</p>
+              )}
+              {authStatus && <p className="mb-3 text-sm text-cyan-100/75">{authStatus}</p>}
               <div className="space-y-2">
                 {leaderboard.length === 0 ? (
                   <p className="text-sm text-white/55">No saved scores yet.</p>
@@ -492,7 +587,7 @@ export function NeonRunnerGame() {
                   />
                   <button
                     className="rounded-md bg-lime-300 px-4 py-2 text-sm font-bold text-slate-950 transition hover:bg-lime-200 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!hasSupabaseConfig}
+                    disabled={!hasSupabaseConfig || !user}
                     onClick={saveScore}
                   >
                     Save score
