@@ -66,6 +66,7 @@ type LeaderboardRow = {
   level: number;
   created_at: string;
 };
+type LevelMeta = { id: number; label: string; difficulty: "Easy" | "Medium" | "Hard" | "Insane" };
 type TileMesh = {
   mesh: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
   edge: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
@@ -151,9 +152,14 @@ const THEMES: Theme[] = [
 ];
 
 const LEVEL_COUNT = 3;
+const LEVEL_META: LevelMeta[] = [
+  { id: 1, label: "Aurora Grid", difficulty: "Easy" },
+  { id: 2, label: "Solar Drift", difficulty: "Hard" },
+  { id: 3, label: "Ion Night", difficulty: "Insane" },
+];
 
 function buildLevel(id: number): Level {
-  const length = id === 1 ? 430 : id === 2 ? 540 : 660;
+  const length = id === 1 ? 1290 : id === 2 ? 1620 : 1980;
   const cells = Array.from({ length }, () => [".", ".", ".", ".", "."]);
   const obstacles: Obstacle[] = [];
 
@@ -281,6 +287,40 @@ function buildLevel(id: number): Level {
     add("wheel", 586, 0, 2.2, 2.8, 2.2);
     add("verticalHammer", 620, 2, 2.1, 1.7);
   }
+
+  const introEnd = Math.floor(length * 0.24);
+  const mediumEnd = Math.floor(length * 0.54);
+  const hardEnd = Math.floor(length * 0.8);
+  section(introEnd, mediumEnd, id === 1 ? 42 : id === 2 ? 34 : 28, (row, index) => {
+    const safeLane = LANES[(index + id) % 5];
+    if (index % 2 === 0) narrow(row, [safeLane, Math.max(MIN_LANE, safeLane - 1), Math.min(MAX_LANE, safeLane + 1)]);
+    if (index % 3 === 1) falling(row + 4, LANES[(index * 2 + id) % 5]);
+    if (index % 4 === 2) add("signalBlock", row + 8, LANES[(index + 2) % 5], 1.35 + id * 0.15, index * 0.4);
+    if (index % 4 === 0) add("riser", row + 12, LANES[(index + 1) % 5], 1.3 + id * 0.12, index * 0.3);
+  });
+  section(mediumEnd, hardEnd, id === 1 ? 34 : id === 2 ? 27 : 22, (row, index) => {
+    const lane = LANES[(index * 2 + id) % 5];
+    if (index % 3 === 0) {
+      narrow(row - 2, [lane, Math.max(MIN_LANE, lane - 1), Math.min(MAX_LANE, lane + 1)]);
+      jump(row, lane, [lane], index % 2 === 0);
+    }
+    if (index % 3 === 1) add("horizontalHammer", row + 5, 0, 1.5 + id * 0.18, index * 0.5, 1.75 + id * 0.18);
+    if (index % 3 === 2) add("wheel", row + 7, 0, 1.55 + id * 0.2, index * 0.55, 1.65 + id * 0.2);
+    if (index % 4 === 0) addLaser(row + 13, [LANES[index % 5], LANES[(index + 2) % 5], LANES[(index + 4) % 5]], index * 0.25);
+    if (index % 4 === 1) add("airCrusher", row + 15, LANES[(index + 1) % 5], 1.45 + id * 0.18, index * 0.6);
+  });
+  section(hardEnd, length - 36, id === 1 ? 26 : id === 2 ? 21 : 17, (row, index) => {
+    const lane = LANES[(index * 3 + id) % 5];
+    narrow(row, index % 2 ? [-2, -1, 0] : [0, 1, 2]);
+    if (index % 2 === 0) falling(row + 2, lane);
+    if (index % 3 === 0) add("slasher", row + 5, 0, 1.9 + id * 0.25, index * 0.42, 2.1 + id * 0.12);
+    if (index % 3 === 1) add("verticalHammer", row + 8, LANES[(index + 2) % 5], 1.75 + id * 0.2, index * 0.5);
+    if (index % 3 === 2) addLaser(row + 10, [LANES[(index + 1) % 5], LANES[(index + 3) % 5], LANES[(index + 4) % 5]], index * 0.35);
+    if (index % 5 === 0) {
+      narrow(row + 12, [lane, Math.max(MIN_LANE, lane - 1)]);
+      jump(row + 14, lane, [lane], true);
+    }
+  });
 
   const rows: Row[] = [];
   const gems: GemItem[] = [];
@@ -566,6 +606,10 @@ export function NeonRunnerGame() {
   const [progress, setProgress] = useState(0);
   const [gemsCollected, setGemsCollected] = useState(0);
   const [score, setScore] = useState(0);
+  const [selectedLevel, setSelectedLevel] = useState(1);
+  const [completedLevels, setCompletedLevels] = useState<Set<number>>(() => new Set());
+  const [bestScores, setBestScores] = useState<Record<number, number>>({});
+  const [devUnlockLevels, setDevUnlockLevels] = useState(false);
   const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
   const [nickname, setNickname] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
@@ -578,19 +622,64 @@ export function NeonRunnerGame() {
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const requestedLevel = Number(new URLSearchParams(window.location.search).get("level"));
-    if (!Number.isInteger(requestedLevel)) return undefined;
     const timer = window.setTimeout(() => {
-      const boundedLevel = Math.max(1, Math.min(LEVEL_COUNT, requestedLevel));
-      runtimeRef.current.levelId = boundedLevel;
-      setLevelId(boundedLevel);
+      const savedBest = window.localStorage.getItem("skyline-dash-best-scores");
+      const savedCompleted = window.localStorage.getItem("skyline-dash-completed-levels");
+      const parsedBest = savedBest ? (JSON.parse(savedBest) as Record<string, number>) : {};
+      const parsedCompleted = savedCompleted ? (JSON.parse(savedCompleted) as number[]) : [];
+      const completed = new Set(parsedCompleted.filter((value) => Number.isInteger(value) && value >= 1 && value <= LEVEL_COUNT));
+      const best: Record<number, number> = {};
+      Object.entries(parsedBest).forEach(([key, value]) => {
+        const levelNumber = Number(key);
+        if (Number.isInteger(levelNumber) && Number.isFinite(value)) best[levelNumber] = value;
+      });
+      setBestScores(best);
+      setCompletedLevels(completed);
+      const isLocalhost = window.location.hostname === "localhost";
+      setDevUnlockLevels(isLocalhost);
+      if (Number.isInteger(requestedLevel) && isLocalhost) {
+        const boundedLevel = Math.max(1, Math.min(LEVEL_COUNT, requestedLevel));
+        runtimeRef.current.levelId = boundedLevel;
+        setSelectedLevel(boundedLevel);
+        setLevelId(boundedLevel);
+      }
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
 
+  const isLevelUnlocked = useCallback(
+    (id: number) => id === 1 || completedLevels.has(id - 1),
+    [completedLevels],
+  );
+
+  const persistRunResult = useCallback((completed: boolean) => {
+    if (typeof window === "undefined") return;
+    const runtime = runtimeRef.current;
+    const resultLevel = runtime.levelId;
+    const resultScore = runtime.score;
+    setBestScores((current) => {
+      const next = { ...current, [resultLevel]: Math.max(current[resultLevel] ?? 0, resultScore) };
+      window.localStorage.setItem("skyline-dash-best-scores", JSON.stringify(next));
+      return next;
+    });
+    if (completed) {
+      setCompletedLevels((current) => {
+        const next = new Set(current);
+        next.add(resultLevel);
+        window.localStorage.setItem("skyline-dash-completed-levels", JSON.stringify([...next]));
+        return next;
+      });
+    }
+  }, []);
+
   const syncState = useCallback((next: GameState) => {
+    const previous = runtimeRef.current.state;
     runtimeRef.current.state = next;
     setGameState(next);
-  }, []);
+    if (previous === "playing" && (next === "gameOver" || next === "complete")) {
+      persistRunResult(next === "complete");
+    }
+  }, [persistRunResult]);
 
   const moveLane = useCallback((direction: -1 | 1) => {
     const runtime = runtimeRef.current;
@@ -601,6 +690,7 @@ export function NeonRunnerGame() {
   const resetRun = useCallback(
     (nextLevel = levelId) => {
       const boundedLevel = Math.max(1, Math.min(LEVEL_COUNT, nextLevel));
+      if (!isLevelUnlocked(boundedLevel) && !devUnlockLevels) return;
       runtimeRef.current = {
         state: "playing",
         lane: 0,
@@ -615,13 +705,14 @@ export function NeonRunnerGame() {
         jumpStart: -1,
       };
       setLevelId(boundedLevel);
+      setSelectedLevel(boundedLevel);
       setProgress(0);
       setGemsCollected(0);
       setScore(0);
       setSaveStatus("");
       setTimeout(() => syncState("playing"), 0);
     },
-    [levelId, syncState],
+    [devUnlockLevels, isLevelUnlocked, levelId, syncState],
   );
 
   const fetchLeaderboard = useCallback(async () => {
@@ -851,10 +942,10 @@ export function NeonRunnerGame() {
       if (!airborne) runtime.jumpStart = -1;
 
       if (runtime.state === "playing") {
-        const speedBoost = 1 + (runtime.progress / ((level.rows.length - 1) * TILE_SIZE)) * (0.1 + level.id * 0.06);
+        const speedBoost = 1 + (runtime.progress / ((level.rows.length - 1) * TILE_SIZE)) * (0.18 + level.id * 0.1);
         const currentSpeed = level.speed * speedBoost;
         runtime.progress += currentSpeed * delta;
-        runtime.lane += (runtime.targetLane - runtime.lane) * Math.min(1, delta * 12);
+        runtime.lane += (runtime.targetLane - runtime.lane) * Math.min(1, delta * 15);
         const currentRow = Math.round(runtime.progress / TILE_SIZE);
         const row = level.rows[currentRow];
         const lane = Math.round(runtime.lane);
@@ -913,7 +1004,7 @@ export function NeonRunnerGame() {
       }
 
       active.ball.position.set(laneToX(runtime.lane), BALL_Y + jumpLift, -runtime.progress);
-      const displaySpeedBoost = 1 + (runtime.progress / ((level.rows.length - 1) * TILE_SIZE)) * (0.1 + level.id * 0.06);
+      const displaySpeedBoost = 1 + (runtime.progress / ((level.rows.length - 1) * TILE_SIZE)) * (0.18 + level.id * 0.1);
       active.ball.rotation.x -= (level.speed * displaySpeedBoost * delta) / BALL_RADIUS;
       active.ball.rotation.z += (runtime.targetLane - runtime.lane) * delta * 2.6;
       active.camera.position.x += (active.ball.position.x * 0.23 - active.camera.position.x) * 0.06;
@@ -1000,6 +1091,7 @@ export function NeonRunnerGame() {
   const playerLabel = user?.user_metadata?.full_name || user?.email || "Guest";
   const nextLevel = Math.min(levelId + 1, LEVEL_COUNT);
   const finishedFinalLevel = gameState === "complete" && levelId === LEVEL_COUNT;
+  const selectedLevelUnlocked = isLevelUnlocked(selectedLevel) || devUnlockLevels;
 
   return (
     <main className="relative min-h-screen overflow-hidden text-white" style={{ backgroundColor: level.theme.background }}>
@@ -1087,7 +1179,7 @@ export function NeonRunnerGame() {
 
       {gameState !== "playing" && (
         <div className="absolute inset-0 z-30 grid place-items-center bg-black/58 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-md border border-cyan-300/25 bg-[#080b17]/92 p-5 shadow-[0_0_45px_rgba(37,231,255,0.18)]">
+          <div className={`w-full ${gameState === "start" ? "max-w-2xl" : "max-w-md"} rounded-md border border-cyan-300/25 bg-[#080b17]/92 p-5 shadow-[0_0_45px_rgba(37,231,255,0.18)]`}>
             <div className="mb-4 flex items-center gap-3">
               {gameState === "complete" ? <Trophy className="text-lime-300" /> : <Medal className="text-cyan-300" />}
               <div>
@@ -1104,20 +1196,53 @@ export function NeonRunnerGame() {
               </div>
             </div>
 
+            {gameState === "start" && (
+              <div className="mb-4 grid gap-2 sm:grid-cols-3">
+                {LEVEL_META.map((item) => {
+                  const unlocked = isLevelUnlocked(item.id) || devUnlockLevels;
+                  const selected = selectedLevel === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      className={`rounded-md border px-3 py-3 text-left transition ${
+                        selected
+                          ? "border-cyan-300 bg-cyan-300/16 shadow-[0_0_20px_rgba(103,232,249,0.18)]"
+                          : "border-white/10 bg-white/5 hover:bg-white/10"
+                      } ${unlocked ? "text-white" : "cursor-not-allowed text-white/35"}`}
+                      disabled={!unlocked}
+                      onClick={() => setSelectedLevel(item.id)}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-black">Level {item.id}</span>
+                        <span className="rounded-sm border border-white/10 px-1.5 py-0.5 text-[10px] uppercase text-cyan-100/70">
+                          {unlocked ? item.difficulty : "Locked"}
+                        </span>
+                      </div>
+                      <div className="mt-1 truncate text-xs text-white/60">{item.label}</div>
+                      <div className="mt-2 font-mono text-xs text-lime-200/80">
+                        Best {bestScores[item.id] ? bestScores[item.id].toLocaleString() : "-"}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <button
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-cyan-300 px-4 py-3 font-bold text-slate-950 transition hover:bg-cyan-200"
-                onClick={() => resetRun(gameState === "complete" ? nextLevel : levelId)}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-cyan-300 px-4 py-3 font-bold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={gameState === "start" && !selectedLevelUnlocked}
+                onClick={() => resetRun(gameState === "complete" ? nextLevel : gameState === "start" ? selectedLevel : levelId)}
               >
                 {gameState === "complete" && !finishedFinalLevel ? <ChevronRight size={18} /> : <Play size={18} />}
-                {gameState === "complete" && !finishedFinalLevel ? "Next level" : "Start"}
+                {gameState === "complete" && !finishedFinalLevel ? "Next level" : gameState === "start" ? `Start L${selectedLevel}` : "Start"}
               </button>
               <button
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-white/15 px-4 py-3 font-bold text-white transition hover:bg-white/10"
-                onClick={() => resetRun(1)}
+                onClick={() => resetRun(gameState === "start" ? selectedLevel : levelId)}
               >
                 <RotateCcw size={18} />
-                Restart
+                Replay
               </button>
             </div>
 
