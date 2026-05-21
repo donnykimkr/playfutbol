@@ -7,16 +7,38 @@ import { ChevronLeft, ChevronRight, Gem, LogOut, Medal, Play, RotateCcw, Trophy,
 import { getSupabaseClient, hasSupabaseConfig } from "@/lib/supabase";
 
 type GameState = "start" | "playing" | "gameOver" | "complete";
-type Row = { index: number; lanes: number[] };
-type Obstacle = { row: number; lane: number; shift: number; speed: number };
+type TileKind = "normal" | "falling" | "jump";
+type Row = { index: number; lanes: number[]; falling: number[]; jumps: number[] };
+type Obstacle = { row: number; lane: number; shift: number; speed: number; range: number };
 type GemItem = { row: number; lane: number; id: string };
+type Theme = {
+  name: string;
+  background: string;
+  fog: string;
+  tile: string;
+  tileGlow: string;
+  edge: string;
+  jump: string;
+  jumpGlow: string;
+  falling: string;
+  fallingGlow: string;
+  obstacle: string;
+  obstacleGlow: string;
+  gem: string;
+  gemGlow: string;
+  ball: string;
+  ballGlow: string;
+  overlayA: string;
+  overlayB: string;
+};
 type Level = {
   id: number;
-  length: number;
+  title: string;
   rows: Row[];
   obstacles: Obstacle[];
   gems: GemItem[];
   speed: number;
+  theme: Theme;
 };
 type LeaderboardRow = {
   id: string;
@@ -26,41 +48,172 @@ type LeaderboardRow = {
   level: number;
   created_at: string;
 };
+type TileMesh = {
+  mesh: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
+  edge: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
+  row: number;
+  lane: number;
+  kind: TileKind;
+  baseX: number;
+  baseY: number;
+};
 
-const LANES = [-1, 0, 1];
+const LANES = [-2, -1, 0, 1, 2];
+const MIN_LANE = LANES[0];
+const MAX_LANE = LANES[LANES.length - 1];
 const TILE_SIZE = 4;
-const LANE_WIDTH = 3.2;
+const LANE_WIDTH = 2.8;
+const BALL_RADIUS = 0.78;
 const BALL_Y = 1.1;
+const JUMP_DURATION = 0.86;
+const JUMP_HEIGHT = 2.8;
+const FALL_DELAY = 0.34;
 
-function makeLevel(id: number): Level {
-  const length = 74 + id * 10;
+const THEMES: Theme[] = [
+  {
+    name: "Aurora Grid",
+    background: "#030712",
+    fog: "#05101f",
+    tile: "#0b1830",
+    tileGlow: "#063752",
+    edge: "#22d3ee",
+    jump: "#143a52",
+    jumpGlow: "#38bdf8",
+    falling: "#321a2c",
+    fallingGlow: "#fb7185",
+    obstacle: "#fb3867",
+    obstacleGlow: "#9f1239",
+    gem: "#a3ff12",
+    gemGlow: "#5f7f05",
+    ball: "#d9ff4f",
+    ballGlow: "#6b8d05",
+    overlayA: "rgba(34,211,238,0.20)",
+    overlayB: "rgba(163,255,18,0.14)",
+  },
+  {
+    name: "Solar Drift",
+    background: "#09050f",
+    fog: "#150915",
+    tile: "#1d1029",
+    tileGlow: "#6d255e",
+    edge: "#f59e0b",
+    jump: "#32235f",
+    jumpGlow: "#a78bfa",
+    falling: "#3a140d",
+    fallingGlow: "#f97316",
+    obstacle: "#34d399",
+    obstacleGlow: "#047857",
+    gem: "#67e8f9",
+    gemGlow: "#0891b2",
+    ball: "#ffd166",
+    ballGlow: "#b45309",
+    overlayA: "rgba(245,158,11,0.18)",
+    overlayB: "rgba(167,139,250,0.16)",
+  },
+  {
+    name: "Ion Night",
+    background: "#03030a",
+    fog: "#080816",
+    tile: "#121624",
+    tileGlow: "#3730a3",
+    edge: "#e879f9",
+    jump: "#073b3a",
+    jumpGlow: "#2dd4bf",
+    falling: "#3a1029",
+    fallingGlow: "#f43f5e",
+    obstacle: "#facc15",
+    obstacleGlow: "#a16207",
+    gem: "#60a5fa",
+    gemGlow: "#1d4ed8",
+    ball: "#f0abfc",
+    ballGlow: "#a21caf",
+    overlayA: "rgba(232,121,249,0.18)",
+    overlayB: "rgba(45,212,191,0.14)",
+  },
+];
+
+const LEVEL_PATTERNS = [
+  [
+    ".....", ".....", ".....", ".....", ".....", "..G..", ".....", ".G.G.", ".....", " .G. ",
+    ".....", "..J..", "     ", "..G..", ".....", "F...F", ".....", ".G.G.", ".....", ".. ..",
+    ".....", ".F.F.", ".....", "G...G", ".....", " . . ", ".....", "..J..", "     ", ".G.G.",
+    ".....", "F.F.F", ".....", ".G.G.", ".....", ".. ..", ".....", ".F.F.", ".....", "..J..",
+    "     ", "G...G", ".....", " .G. ", ".....", "F...F", ".....", ".G.G.", ".....", ".....",
+    ".....", ".....",
+  ],
+  [
+    ".....", ".....", ".....", "..G..", ".....", ". . .", ".....", "F.G.F", ".....", "..J..",
+    "     ", " .G. ", ".....", "F...F", ".G.G.", ".....", " .. .", ".....", ".F.F.", "G...G",
+    ".....", "..J..", "     ", "G...G", ".....", "F.F.F", ".....", ".G.G.", " . . ", ".....",
+    ".F.F.", ".....", "..G..", "F...F", ".....", "..J..", "     ", ".G.G.", ".....", "F.F.F",
+    ".....", "G...G", ". . .", ".....", ".F.F.", "..G..", ".....", "..J..", "     ", "G...G",
+    ".....", "F.F.F", ".....", ".G.G.", ".....", ".....",
+  ],
+  [
+    ".....", ".....", "..G..", ".....", ".F.F.", " .. .", ".....", "G.F.G", ".....", "..J..",
+    "     ", ".G.G.", "F...F", ".....", " . . ", "G...G", ".F.F.", ".....", "..J..", "     ",
+    "..G..", "F.F.F", ".....", ". . .", ".....", "G.F.G", ".....", "..J..", "     ", "G...G",
+    ".F.F.", ".....", " .. .", ".G.G.", "F...F", ".....", "..J..", "     ", "..G..", "F.F.F",
+    ".....", "G...G", " . . ", ".....", ".F.F.", "G.F.G", ".....", "..J..", "     ", ".G.G.",
+    "F...F", ".....", " . . ", "G...G", ".F.F.", ".....", ".....", ".....",
+  ],
+];
+
+const OBSTACLES: Obstacle[][] = [
+  [
+    { row: 18, lane: 0, shift: 0.4, speed: 1.1, range: 0.75 },
+    { row: 34, lane: 1, shift: 1.8, speed: 1.2, range: 0.7 },
+    { row: 47, lane: -1, shift: 2.6, speed: 1.25, range: 0.8 },
+  ],
+  [
+    { row: 12, lane: 0, shift: 0.2, speed: 1.25, range: 0.9 },
+    { row: 24, lane: -1, shift: 1.7, speed: 1.35, range: 0.95 },
+    { row: 37, lane: 1, shift: 2.8, speed: 1.45, range: 1.0 },
+    { row: 50, lane: 0, shift: 3.4, speed: 1.55, range: 1.05 },
+  ],
+  [
+    { row: 9, lane: 0, shift: 0.6, speed: 1.45, range: 1.05 },
+    { row: 17, lane: -1, shift: 1.2, speed: 1.55, range: 1.1 },
+    { row: 27, lane: 1, shift: 2.1, speed: 1.65, range: 1.12 },
+    { row: 39, lane: 0, shift: 2.9, speed: 1.75, range: 1.18 },
+    { row: 51, lane: -1, shift: 3.5, speed: 1.85, range: 1.2 },
+  ],
+];
+
+function buildLevel(id: number): Level {
+  const pattern = LEVEL_PATTERNS[id - 1] ?? LEVEL_PATTERNS[LEVEL_PATTERNS.length - 1];
   const rows: Row[] = [];
-  const obstacles: Obstacle[] = [];
   const gems: GemItem[] = [];
 
-  for (let index = 0; index <= length; index += 1) {
-    const lanes = [...LANES];
-    if (index > 8 && index < length - 5 && index % (7 - Math.min(id, 3)) === 0) {
-      const holeLane = LANES[(index + id) % LANES.length];
-      lanes.splice(lanes.indexOf(holeLane), 1);
-    }
-    if (index > 14 && index % 11 === 3) {
-      obstacles.push({
-        row: index,
-        lane: LANES[(index + 1) % LANES.length],
-        shift: index * 0.6,
-        speed: 1.1 + id * 0.15,
-      });
-    }
-    if (index > 5 && index < length - 4 && index % 5 === 1) {
-      const lane = lanes[(index + id) % lanes.length];
-      gems.push({ row: index, lane, id: `${id}-${index}-${lane}` });
-    }
-    rows.push({ index, lanes });
-  }
+  pattern.forEach((line, index) => {
+    const lanes: number[] = [];
+    const falling: number[] = [];
+    const jumps: number[] = [];
 
-  return { id, length, rows, obstacles, gems, speed: 13 + id * 1.4 };
+    [...line.padEnd(5, " ").slice(0, 5)].forEach((cell, cellIndex) => {
+      if (cell === " ") return;
+      const lane = LANES[cellIndex];
+      lanes.push(lane);
+      if (cell === "F") falling.push(lane);
+      if (cell === "J") jumps.push(lane);
+      if (cell === "G") gems.push({ row: index, lane, id: `${id}-${index}-${lane}` });
+    });
+
+    rows.push({ index, lanes, falling, jumps });
+  });
+
+  return {
+    id,
+    title: THEMES[id - 1]?.name ?? THEMES[THEMES.length - 1].name,
+    rows,
+    gems,
+    obstacles: OBSTACLES[id - 1] ?? OBSTACLES[OBSTACLES.length - 1],
+    speed: 11.7 + id * 1.25,
+    theme: THEMES[id - 1] ?? THEMES[THEMES.length - 1],
+  };
 }
+
+const LEVEL_COUNT = LEVEL_PATTERNS.length;
 
 function laneToX(lane: number) {
   return lane * LANE_WIDTH;
@@ -68,6 +221,10 @@ function laneToX(lane: number) {
 
 function rowToZ(row: number) {
   return -row * TILE_SIZE;
+}
+
+function tileKey(row: number, lane: number) {
+  return `${row}:${lane}`;
 }
 
 function nicknameIsValid(value: string) {
@@ -78,15 +235,26 @@ function scoreIsValid(value: number) {
   return Number.isInteger(value) && value > 0;
 }
 
+function makeMaterial(color: string, emissive: string, emissiveIntensity = 0.7) {
+  return new THREE.MeshStandardMaterial({
+    color,
+    emissive,
+    emissiveIntensity,
+    roughness: 0.52,
+    metalness: 0.18,
+  });
+}
+
 export function NeonRunnerGame() {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<{
     renderer: THREE.WebGLRenderer;
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
-    ball: THREE.Mesh;
+    ball: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
     obstacleMeshes: THREE.Mesh[];
     gemMeshes: Map<string, THREE.Mesh>;
+    tileMeshes: Map<string, TileMesh>;
     frame: number;
     lastTime: number;
   } | null>(null);
@@ -96,8 +264,12 @@ export function NeonRunnerGame() {
     targetLane: 0,
     progress: 0,
     gems: new Set<string>(),
+    jumped: new Set<string>(),
+    fallingStarted: new Map<string, number>(),
+    fallen: new Set<string>(),
     score: 0,
     levelId: 1,
+    jumpStart: -1,
   });
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -112,7 +284,7 @@ export function NeonRunnerGame() {
   const [user, setUser] = useState<User | null>(null);
   const [authStatus, setAuthStatus] = useState("");
 
-  const level = useMemo(() => makeLevel(levelId), [levelId]);
+  const level = useMemo(() => buildLevel(levelId), [levelId]);
   const gemIds = useMemo(() => new Set(level.gems.map((gem) => gem.id)), [level.gems]);
 
   const syncState = useCallback((next: GameState) => {
@@ -123,21 +295,26 @@ export function NeonRunnerGame() {
   const moveLane = useCallback((direction: -1 | 1) => {
     const runtime = runtimeRef.current;
     if (runtime.state !== "playing") return;
-    runtime.targetLane = Math.max(-1, Math.min(1, runtime.targetLane + direction));
+    runtime.targetLane = Math.max(MIN_LANE, Math.min(MAX_LANE, runtime.targetLane + direction));
   }, []);
 
   const resetRun = useCallback(
     (nextLevel = levelId) => {
+      const boundedLevel = Math.max(1, Math.min(LEVEL_COUNT, nextLevel));
       runtimeRef.current = {
         state: "playing",
         lane: 0,
         targetLane: 0,
         progress: 0,
         gems: new Set<string>(),
+        jumped: new Set<string>(),
+        fallingStarted: new Map<string, number>(),
+        fallen: new Set<string>(),
         score: 0,
-        levelId: nextLevel,
+        levelId: boundedLevel,
+        jumpStart: -1,
       };
-      setLevelId(nextLevel);
+      setLevelId(boundedLevel);
       setProgress(0);
       setGemsCollected(0);
       setScore(0);
@@ -167,9 +344,7 @@ export function NeonRunnerGame() {
     setAuthStatus("Opening Google sign-in...");
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: {
-        redirectTo: window.location.origin,
-      },
+      options: { redirectTo: window.location.origin },
     });
     if (error) setAuthStatus(error.message);
   }, []);
@@ -261,10 +436,10 @@ export function NeonRunnerGame() {
     if (!mount) return;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color("#05060d");
-    scene.fog = new THREE.Fog("#05060d", 18, 120);
+    scene.background = new THREE.Color(level.theme.background);
+    scene.fog = new THREE.Fog(level.theme.fog, 18, 128);
 
-    const camera = new THREE.PerspectiveCamera(58, mount.clientWidth / mount.clientHeight, 0.1, 400);
+    const camera = new THREE.PerspectiveCamera(58, mount.clientWidth / mount.clientHeight, 0.1, 420);
     camera.position.set(0, 12, 15);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -272,51 +447,72 @@ export function NeonRunnerGame() {
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     mount.appendChild(renderer.domElement);
 
-    const ambient = new THREE.AmbientLight("#d8f7ff", 1.1);
-    const key = new THREE.DirectionalLight("#ffffff", 2.2);
+    const ambient = new THREE.AmbientLight("#d8f7ff", 1.05);
+    const key = new THREE.DirectionalLight("#ffffff", 2.25);
     key.position.set(8, 18, 10);
     scene.add(ambient, key);
 
     const ball = new THREE.Mesh(
-      new THREE.SphereGeometry(0.78, 32, 32),
-      new THREE.MeshStandardMaterial({ color: "#c7ff37", emissive: "#5f7f05", metalness: 0.25, roughness: 0.25 }),
+      new THREE.SphereGeometry(BALL_RADIUS, 36, 36),
+      new THREE.MeshStandardMaterial({
+        color: level.theme.ball,
+        emissive: level.theme.ballGlow,
+        emissiveIntensity: 0.9,
+        metalness: 0.25,
+        roughness: 0.25,
+      }),
     );
     ball.position.set(0, BALL_Y, 0);
     scene.add(ball);
 
     const finish = new THREE.Mesh(
-      new THREE.BoxGeometry(12, 0.28, 0.8),
-      new THREE.MeshStandardMaterial({ color: "#ffffff", emissive: "#37f3ff", emissiveIntensity: 1.6 }),
+      new THREE.BoxGeometry(15.5, 0.28, 0.8),
+      makeMaterial("#ffffff", level.theme.edge, 1.55),
     );
-    finish.position.set(0, 0.08, rowToZ(level.length + 1));
+    finish.position.set(0, 0.08, rowToZ(level.rows.length + 1));
     scene.add(finish);
 
-    const tileMaterial = new THREE.MeshStandardMaterial({
-      color: "#10192f",
-      emissive: "#07324c",
-      roughness: 0.55,
-      metalness: 0.18,
-    });
-    const edgeMaterial = new THREE.MeshStandardMaterial({
-      color: "#25e7ff",
-      emissive: "#11bfe0",
-      emissiveIntensity: 0.75,
-    });
+    const tileMeshes = new Map<string, TileMesh>();
     level.rows.forEach((row) => {
       row.lanes.forEach((lane) => {
-        const tile = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.3, 3.7), tileMaterial);
+        const kind: TileKind = row.jumps.includes(lane) ? "jump" : row.falling.includes(lane) ? "falling" : "normal";
+        const material =
+          kind === "jump"
+            ? makeMaterial(level.theme.jump, level.theme.jumpGlow, 1.25)
+            : kind === "falling"
+              ? makeMaterial(level.theme.falling, level.theme.fallingGlow, 0.95)
+              : makeMaterial(level.theme.tile, level.theme.tileGlow, 0.68);
+        const tile = new THREE.Mesh(new THREE.BoxGeometry(2.45, 0.3, 3.65), material);
         tile.position.set(laneToX(lane), 0, rowToZ(row.index));
         scene.add(tile);
-        const strip = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.04, 0.1), edgeMaterial);
-        strip.position.set(laneToX(lane), 0.18, rowToZ(row.index) + 1.78);
-        scene.add(strip);
+
+        const edge = new THREE.Mesh(new THREE.BoxGeometry(2.45, 0.04, 0.1), makeMaterial(level.theme.edge, level.theme.edge, 0.9));
+        edge.position.set(laneToX(lane), 0.18, rowToZ(row.index) + 1.78);
+        scene.add(edge);
+
+        if (kind === "jump") {
+          const ramp = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.16, 1.05), makeMaterial(level.theme.jumpGlow, level.theme.jumpGlow, 1.2));
+          ramp.position.set(laneToX(lane), 0.34, rowToZ(row.index) - 0.35);
+          ramp.rotation.x = -0.22;
+          scene.add(ramp);
+        }
+
+        tileMeshes.set(tileKey(row.index, lane), {
+          mesh: tile,
+          edge,
+          row: row.index,
+          lane,
+          kind,
+          baseX: laneToX(lane),
+          baseY: 0,
+        });
       });
     });
 
     const obstacleMeshes = level.obstacles.map((obstacle) => {
       const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(1.45, 1.45, 1.45),
-        new THREE.MeshStandardMaterial({ color: "#ff3864", emissive: "#9e1030", emissiveIntensity: 0.9 }),
+        new THREE.BoxGeometry(1.35, 1.35, 1.35),
+        makeMaterial(level.theme.obstacle, level.theme.obstacleGlow, 1),
       );
       mesh.position.set(laneToX(obstacle.lane), 0.95, rowToZ(obstacle.row));
       scene.add(mesh);
@@ -327,14 +523,14 @@ export function NeonRunnerGame() {
     level.gems.forEach((gem) => {
       const mesh = new THREE.Mesh(
         new THREE.OctahedronGeometry(0.48),
-        new THREE.MeshStandardMaterial({ color: "#66ffd9", emissive: "#1edeb8", emissiveIntensity: 1.2 }),
+        makeMaterial(level.theme.gem, level.theme.gemGlow, 1.25),
       );
       mesh.position.set(laneToX(gem.lane), 1.1, rowToZ(gem.row));
       scene.add(mesh);
       gemMeshes.set(gem.id, mesh);
     });
 
-    sceneRef.current = { renderer, scene, camera, ball, obstacleMeshes, gemMeshes, frame: 0, lastTime: performance.now() };
+    sceneRef.current = { renderer, scene, camera, ball, obstacleMeshes, gemMeshes, tileMeshes, frame: 0, lastTime: performance.now() };
 
     const handleResize = () => {
       if (!mount || !sceneRef.current) return;
@@ -353,16 +549,37 @@ export function NeonRunnerGame() {
       const delta = Math.min((time - active.lastTime) / 1000, 0.04);
       active.lastTime = time;
 
+      const jumpElapsed = runtime.jumpStart > 0 ? (time - runtime.jumpStart) / 1000 : Number.POSITIVE_INFINITY;
+      const airborne = jumpElapsed < JUMP_DURATION;
+      const jumpLift = airborne ? Math.sin((jumpElapsed / JUMP_DURATION) * Math.PI) * JUMP_HEIGHT : 0;
+      if (!airborne) runtime.jumpStart = -1;
+
       if (runtime.state === "playing") {
         runtime.progress += level.speed * delta;
-        runtime.lane += (runtime.targetLane - runtime.lane) * Math.min(1, delta * 11);
+        runtime.lane += (runtime.targetLane - runtime.lane) * Math.min(1, delta * 12);
         const currentRow = Math.round(runtime.progress / TILE_SIZE);
         const row = level.rows[currentRow];
         const lane = Math.round(runtime.lane);
 
-        if (row && !row.lanes.includes(lane)) {
+        if (row) {
+          const currentKey = tileKey(row.index, lane);
+          if (row.jumps.includes(lane) && !runtime.jumped.has(currentKey) && !airborne) {
+            runtime.jumped.add(currentKey);
+            runtime.jumpStart = time;
+          }
+          if (row.falling.includes(lane) && !runtime.fallingStarted.has(currentKey)) {
+            runtime.fallingStarted.set(currentKey, time);
+          }
+          if (!airborne && (!row.lanes.includes(lane) || runtime.fallen.has(currentKey))) {
+            syncState("gameOver");
+          }
+        } else if (!airborne) {
           syncState("gameOver");
         }
+
+        runtime.fallingStarted.forEach((startedAt, key) => {
+          if (time - startedAt > FALL_DELAY * 1000) runtime.fallen.add(key);
+        });
 
         level.gems.forEach((gem) => {
           if (!runtime.gems.has(gem.id) && Math.abs(runtime.progress + rowToZ(gem.row)) < 1.25 && Math.abs(runtime.lane - gem.lane) < 0.45) {
@@ -372,16 +589,16 @@ export function NeonRunnerGame() {
         });
 
         level.obstacles.forEach((obstacle) => {
-          const movingLane = obstacle.lane + Math.sin(time * 0.001 * obstacle.speed + obstacle.shift) * 0.7;
-          if (Math.abs(runtime.progress + rowToZ(obstacle.row)) < 1.3 && Math.abs(runtime.lane - movingLane) < 0.55) {
+          const movingLane = obstacle.lane + Math.sin(time * 0.001 * obstacle.speed + obstacle.shift) * obstacle.range;
+          if (!airborne && Math.abs(runtime.progress + rowToZ(obstacle.row)) < 1.25 && Math.abs(runtime.lane - movingLane) < 0.55) {
             syncState("gameOver");
           }
         });
 
         const distanceScore = Math.max(0, Math.floor(runtime.progress * 10));
         runtime.score = distanceScore + runtime.gems.size * 150;
-        if (runtime.progress >= level.length * TILE_SIZE) {
-          runtime.score += 1000 + level.id * 250;
+        if (runtime.progress >= (level.rows.length - 1) * TILE_SIZE) {
+          runtime.score += 1000 + level.id * 300;
           syncState("complete");
         }
 
@@ -390,21 +607,43 @@ export function NeonRunnerGame() {
         setScore(runtime.score);
       }
 
-      active.ball.position.set(laneToX(runtime.lane), BALL_Y, -runtime.progress);
-      active.ball.rotation.x -= delta * 7;
-      active.camera.position.x += (active.ball.position.x * 0.25 - active.camera.position.x) * 0.06;
+      active.ball.position.set(laneToX(runtime.lane), BALL_Y + jumpLift, -runtime.progress);
+      active.ball.rotation.x -= (level.speed * delta) / BALL_RADIUS;
+      active.ball.rotation.z += (runtime.targetLane - runtime.lane) * delta * 2.6;
+      active.camera.position.x += (active.ball.position.x * 0.23 - active.camera.position.x) * 0.06;
       active.camera.position.z += (active.ball.position.z + 15 - active.camera.position.z) * 0.08;
-      active.camera.lookAt(active.ball.position.x, 0.5, active.ball.position.z - 12);
+      active.camera.lookAt(active.ball.position.x, 0.65, active.ball.position.z - 12);
 
       level.obstacles.forEach((obstacle, index) => {
         const mesh = active.obstacleMeshes[index];
-        mesh.position.x = laneToX(obstacle.lane + Math.sin(time * 0.001 * obstacle.speed + obstacle.shift) * 0.7);
+        mesh.position.x = laneToX(obstacle.lane + Math.sin(time * 0.001 * obstacle.speed + obstacle.shift) * obstacle.range);
         mesh.rotation.y += delta * 2.5;
+        mesh.rotation.x += delta * 1.2;
       });
       active.gemMeshes.forEach((mesh, id) => {
         if (!runtime.gems.has(id) && gemIds.has(id)) {
           mesh.rotation.y += delta * 2.8;
           mesh.position.y = 1.1 + Math.sin(time * 0.004) * 0.12;
+        }
+      });
+      active.tileMeshes.forEach((tile, key) => {
+        const startedAt = runtime.fallingStarted.get(key);
+        const isFallen = runtime.fallen.has(key);
+        if (tile.kind === "falling" && startedAt && !isFallen) {
+          const shake = Math.sin(time * 0.08) * 0.08;
+          tile.mesh.position.x = tile.baseX + shake;
+          tile.edge.position.x = tile.baseX + shake;
+          tile.mesh.material.color.set(level.theme.obstacle);
+          tile.mesh.material.emissive.set(level.theme.fallingGlow);
+        } else {
+          tile.mesh.position.x += (tile.baseX - tile.mesh.position.x) * 0.18;
+          tile.edge.position.x += (tile.baseX - tile.edge.position.x) * 0.18;
+        }
+        if (isFallen) {
+          tile.mesh.position.y -= delta * 10;
+          tile.edge.position.y -= delta * 10;
+          tile.mesh.rotation.z += delta * 2.4;
+          tile.edge.visible = false;
         }
       });
 
@@ -418,6 +657,13 @@ export function NeonRunnerGame() {
       const active = sceneRef.current;
       if (!active) return;
       cancelAnimationFrame(active.frame);
+      active.scene.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        object.geometry.dispose();
+        const material = object.material;
+        if (Array.isArray(material)) material.forEach((item) => item.dispose());
+        else material.dispose();
+      });
       active.renderer.dispose();
       mount.removeChild(active.renderer.domElement);
       sceneRef.current = null;
@@ -426,28 +672,47 @@ export function NeonRunnerGame() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "ArrowLeft" || event.key.toLowerCase() === "a") moveLane(-1);
-      if (event.key === "ArrowRight" || event.key.toLowerCase() === "d") moveLane(1);
+      const key = event.key.toLowerCase();
+      const code = event.code;
+      if (key === "arrowleft" || key === "a" || code === "KeyA") {
+        event.preventDefault();
+        moveLane(-1);
+      }
+      if (key === "arrowright" || key === "d" || code === "KeyD") {
+        event.preventDefault();
+        moveLane(1);
+      }
       if (event.key === "Enter" && runtimeRef.current.state !== "playing") resetRun(levelId);
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, { passive: false, capture: true });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+    };
   }, [levelId, moveLane, resetRun]);
 
-  const progressPercent = Math.min(100, Math.floor((progress / (level.length * TILE_SIZE)) * 100));
+  const progressPercent = Math.min(100, Math.floor((progress / ((level.rows.length - 1) * TILE_SIZE)) * 100));
   const canSave = gameState === "complete" || gameState === "gameOver";
   const playerLabel = user?.user_metadata?.full_name || user?.email || "Guest";
+  const nextLevel = Math.min(levelId + 1, LEVEL_COUNT);
+  const finishedFinalLevel = gameState === "complete" && levelId === LEVEL_COUNT;
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#05060d] text-white">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(38,231,255,0.2),transparent_32%),radial-gradient(circle_at_80%_0%,rgba(199,255,55,0.15),transparent_28%)]" />
-      <div ref={mountRef} className="absolute inset-0" aria-label="3D neon tile runner game" />
+    <main className="relative min-h-screen overflow-hidden text-white" style={{ backgroundColor: level.theme.background }}>
+      <div
+        className="absolute inset-0"
+        style={{
+          background: `radial-gradient(circle at 20% 10%, ${level.theme.overlayA}, transparent 32%), radial-gradient(circle at 80% 0%, ${level.theme.overlayB}, transparent 28%)`,
+        }}
+      />
+      <div ref={mountRef} className="absolute inset-0" aria-label="3D neon five-lane tile runner game" />
 
       <section className="pointer-events-none relative z-10 flex min-h-screen flex-col justify-between p-4 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-black tracking-normal sm:text-4xl">Skyline Dash</h1>
-            <p className="mt-1 text-sm text-cyan-100/75">Level {levelId} · avoid gaps, dodge blocks, collect gems</p>
+            <p className="mt-1 text-sm text-cyan-100/75">
+              Level {levelId} · {level.title} · 5 lanes
+            </p>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             <div className="grid grid-cols-3 gap-2 text-center text-sm">
@@ -524,10 +789,12 @@ export function NeonRunnerGame() {
                 <h2 className="text-xl font-black">
                   {gameState === "start" && "Ready to roll"}
                   {gameState === "gameOver" && "Run ended"}
-                  {gameState === "complete" && "Level complete"}
+                  {gameState === "complete" && (finishedFinalLevel ? "Final level clear" : "Level complete")}
                 </h2>
                 <p className="text-sm text-white/65">
-                  {gameState === "start" ? "Move between three lanes and stay on the glowing path." : `Score ${score} · ${gemsCollected} gems`}
+                  {gameState === "start"
+                    ? "Move across five lanes, hit jump blocks, and watch for falling tiles."
+                    : `Score ${score} · ${gemsCollected} gems`}
                 </p>
               </div>
             </div>
@@ -535,10 +802,10 @@ export function NeonRunnerGame() {
             <div className="grid grid-cols-2 gap-3">
               <button
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-cyan-300 px-4 py-3 font-bold text-slate-950 transition hover:bg-cyan-200"
-                onClick={() => resetRun(gameState === "complete" ? levelId + 1 : levelId)}
+                onClick={() => resetRun(gameState === "complete" ? nextLevel : levelId)}
               >
-                {gameState === "complete" ? <ChevronRight size={18} /> : <Play size={18} />}
-                {gameState === "complete" ? "Next level" : "Start"}
+                {gameState === "complete" && !finishedFinalLevel ? <ChevronRight size={18} /> : <Play size={18} />}
+                {gameState === "complete" && !finishedFinalLevel ? "Next level" : "Start"}
               </button>
               <button
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-white/15 px-4 py-3 font-bold text-white transition hover:bg-white/10"
@@ -569,7 +836,9 @@ export function NeonRunnerGame() {
                 ) : (
                   leaderboard.map((entry, index) => (
                     <div key={entry.id} className="flex items-center justify-between rounded-md bg-white/6 px-3 py-2 text-sm">
-                      <span className="truncate">{index + 1}. {entry.nickname}</span>
+                      <span className="truncate">
+                        {index + 1}. {entry.nickname}
+                      </span>
                       <span className="font-mono text-cyan-100">{entry.score}</span>
                     </div>
                   ))
