@@ -9,7 +9,25 @@ import { getSupabaseClient, hasSupabaseConfig } from "@/lib/supabase";
 type GameState = "start" | "playing" | "gameOver" | "complete";
 type TileKind = "normal" | "falling" | "jump";
 type Row = { index: number; lanes: number[]; falling: number[]; jumps: number[] };
-type Obstacle = { row: number; lane: number; shift: number; speed: number; range: number };
+type ObstacleKind =
+  | "riser"
+  | "airCrusher"
+  | "verticalHammer"
+  | "horizontalHammer"
+  | "laserCannon"
+  | "signalBlock"
+  | "floatingSpikes"
+  | "wheel"
+  | "slasher";
+type Obstacle = {
+  kind: ObstacleKind;
+  row: number;
+  lane: number;
+  phase: number;
+  speed: number;
+  range?: number;
+  lanes?: number[];
+};
 type GemItem = { row: number; lane: number; id: string };
 type Theme = {
   name: string;
@@ -65,7 +83,7 @@ const TILE_SIZE = 4;
 const LANE_WIDTH = 2.8;
 const BALL_RADIUS = 0.78;
 const BALL_Y = 1.1;
-const JUMP_DURATION = 0.86;
+const JUMP_DURATION = 0.72;
 const JUMP_HEIGHT = 2.8;
 const FALL_DELAY = 0.34;
 
@@ -132,74 +150,132 @@ const THEMES: Theme[] = [
   },
 ];
 
-const LEVEL_PATTERNS = [
-  [
-    ".....", ".....", ".....", ".....", ".....", "..G..", ".....", ".G.G.", ".....", " .G. ",
-    ".....", "..J..", "     ", "..G..", ".....", "F...F", ".....", ".G.G.", ".....", ".. ..",
-    ".....", ".F.F.", ".....", "G...G", ".....", " . . ", ".....", "..J..", "     ", ".G.G.",
-    ".....", "F.F.F", ".....", ".G.G.", ".....", ".. ..", ".....", ".F.F.", ".....", "..J..",
-    "     ", "G...G", ".....", " .G. ", ".....", "F...F", ".....", ".G.G.", ".....", ".....",
-    ".....", ".....",
-  ],
-  [
-    ".....", ".....", ".....", "..G..", ".....", ". . .", ".....", "F.G.F", ".....", "..J..",
-    "     ", " .G. ", ".....", "F...F", ".G.G.", ".....", " .. .", ".....", ".F.F.", "G...G",
-    ".....", "..J..", "     ", "G...G", ".....", "F.F.F", ".....", ".G.G.", " . . ", ".....",
-    ".F.F.", ".....", "..G..", "F...F", ".....", "..J..", "     ", ".G.G.", ".....", "F.F.F",
-    ".....", "G...G", ". . .", ".....", ".F.F.", "..G..", ".....", "..J..", "     ", "G...G",
-    ".....", "F.F.F", ".....", ".G.G.", ".....", ".....",
-  ],
-  [
-    ".....", ".....", "..G..", ".....", ".F.F.", " .. .", ".....", "G.F.G", ".....", "..J..",
-    "     ", ".G.G.", "F...F", ".....", " . . ", "G...G", ".F.F.", ".....", "..J..", "     ",
-    "..G..", "F.F.F", ".....", ". . .", ".....", "G.F.G", ".....", "..J..", "     ", "G...G",
-    ".F.F.", ".....", " .. .", ".G.G.", "F...F", ".....", "..J..", "     ", "..G..", "F.F.F",
-    ".....", "G...G", " . . ", ".....", ".F.F.", "G.F.G", ".....", "..J..", "     ", ".G.G.",
-    "F...F", ".....", " . . ", "G...G", ".F.F.", ".....", ".....", ".....",
-  ],
-];
-
-const OBSTACLES: Obstacle[][] = [
-  [
-    { row: 18, lane: 0, shift: 0.4, speed: 1.1, range: 0.75 },
-    { row: 34, lane: 1, shift: 1.8, speed: 1.2, range: 0.7 },
-    { row: 47, lane: -1, shift: 2.6, speed: 1.25, range: 0.8 },
-  ],
-  [
-    { row: 12, lane: 0, shift: 0.2, speed: 1.25, range: 0.9 },
-    { row: 24, lane: -1, shift: 1.7, speed: 1.35, range: 0.95 },
-    { row: 37, lane: 1, shift: 2.8, speed: 1.45, range: 1.0 },
-    { row: 50, lane: 0, shift: 3.4, speed: 1.55, range: 1.05 },
-  ],
-  [
-    { row: 9, lane: 0, shift: 0.6, speed: 1.45, range: 1.05 },
-    { row: 17, lane: -1, shift: 1.2, speed: 1.55, range: 1.1 },
-    { row: 27, lane: 1, shift: 2.1, speed: 1.65, range: 1.12 },
-    { row: 39, lane: 0, shift: 2.9, speed: 1.75, range: 1.18 },
-    { row: 51, lane: -1, shift: 3.5, speed: 1.85, range: 1.2 },
-  ],
-];
+const LEVEL_COUNT = 3;
 
 function buildLevel(id: number): Level {
-  const pattern = LEVEL_PATTERNS[id - 1] ?? LEVEL_PATTERNS[LEVEL_PATTERNS.length - 1];
+  const length = id === 1 ? 132 : id === 2 ? 156 : 184;
+  const cells = Array.from({ length }, () => [".", ".", ".", ".", "."]);
+  const obstacles: Obstacle[] = [];
+
+  const laneIndex = (lane: number) => LANES.indexOf(lane);
+  const put = (row: number, lane: number, value: string) => {
+    const index = laneIndex(lane);
+    if (row >= 0 && row < length && index >= 0) cells[row][index] = value;
+  };
+  const narrow = (row: number, lanes: number[], fill = ".") => {
+    if (row < 0 || row >= length) return;
+    cells[row] = [" ", " ", " ", " ", " "];
+    lanes.forEach((lane) => put(row, lane, fill));
+  };
+  const hole = (row: number, lane: number) => put(row, lane, " ");
+  const falling = (row: number, lane: number) => put(row, lane, "F");
+  const gem = (row: number, lane: number) => put(row, lane, "G");
+  const jump = (row: number, lane: number, landingLanes: number[], landingFalls = false) => {
+    put(row, lane, "J");
+    narrow(row + 1, []);
+    narrow(row + 2, landingLanes, landingFalls ? "F" : ".");
+  };
+  const add = (kind: ObstacleKind, row: number, lane: number, speed: number, phase: number, range = 1, lanes?: number[]) => {
+    obstacles.push({ kind, row, lane, speed, phase, range, lanes });
+  };
+
+  for (let row = 8; row < length - 6; row += id === 1 ? 10 : id === 2 ? 8 : 7) {
+    gem(row, LANES[(row + id) % LANES.length]);
+  }
+
+  if (id === 1) {
+    [18, 34, 58, 82, 108].forEach((row, index) => hole(row, LANES[index % LANES.length]));
+    jump(24, -1, [-1, 0]);
+    narrow(22, [0, -1, -2]);
+    jump(48, 2, [1, 2], true);
+    narrow(46, [-1, 0, 1, 2]);
+    jump(76, -2, [-2, -1]);
+    narrow(73, [0, -1, -2]);
+    jump(103, 1, [0, 1], true);
+    narrow(100, [-1, 0, 1]);
+    [39, 40, 67, 91, 117].forEach((row, index) => falling(row, LANES[(index * 2) % LANES.length]));
+    [62, 63, 64, 95, 96].forEach((row, index) => narrow(row, index % 2 ? [-1, 0, 1] : [0, 1, 2]));
+    add("riser", 28, 0, 1.2, 0.2);
+    add("signalBlock", 42, -1, 1.4, 0.8);
+    add("wheel", 55, 0, 1.1, 1.6, 1.3);
+    add("airCrusher", 72, 1, 1.25, 0.4);
+    add("horizontalHammer", 94, 0, 1.1, 2.2, 1.7);
+    add("laserCannon", 114, 0, 1.15, 1.1, 1, [-2, -1, 1, 2]);
+  } else if (id === 2) {
+    for (let row = 20; row < length - 12; row += 12) {
+      const holeIndex = Math.floor(row / 4) % LANES.length;
+      hole(row, LANES[holeIndex]);
+      hole(row + 1, LANES[(holeIndex + 2) % LANES.length]);
+    }
+    [
+      [24, 2, [1], true],
+      [45, -2, [-1, -2], false],
+      [68, 1, [1], true],
+      [92, -1, [-2, -1], true],
+      [119, 0, [0, 1], false],
+      [139, 2, [2], true],
+    ].forEach(([row, lane, lands, fall]) => jump(row as number, lane as number, lands as number[], fall as boolean));
+    [22, 43, 66, 89, 116, 136].forEach((row, index) => narrow(row, [LANES[(index + 1) % 5], LANES[(index + 2) % 5], LANES[(index + 3) % 5]]));
+    for (let row = 34; row < length - 10; row += 9) falling(row, LANES[(row + 1) % LANES.length]);
+    [54, 55, 56, 104, 105, 130, 131].forEach((row, index) => narrow(row, index % 2 ? [-2, -1, 0] : [0, 1, 2]));
+    add("riser", 18, -1, 1.45, 0.1);
+    add("verticalHammer", 31, 1, 1.35, 1.1);
+    add("laserCannon", 39, 0, 1.35, 0.2, 1, [-2, 0, 2]);
+    add("airCrusher", 59, -2, 1.5, 1.3);
+    add("floatingSpikes", 72, 1, 1, 0);
+    add("horizontalHammer", 84, 0, 1.45, 2.4, 2);
+    add("wheel", 99, 0, 1.55, 0.7, 1.7);
+    add("signalBlock", 111, -1, 1.7, 1.9);
+    add("slasher", 125, 0, 1.8, 1.2, 2.2);
+    add("laserCannon", 145, 0, 1.65, 2.1, 1, [-1, 0, 1]);
+  } else {
+    for (let row = 18; row < length - 8; row += 9) {
+      hole(row, LANES[(row + 2) % 5]);
+      if (row % 18 === 0) hole(row + 1, LANES[(row + 4) % 5]);
+    }
+    [
+      [20, -2, [-2], true],
+      [38, 1, [0, 1], true],
+      [57, -1, [-1], true],
+      [79, 2, [1, 2], false],
+      [101, 0, [0], true],
+      [126, -2, [-2, -1], true],
+      [151, 2, [2], true],
+      [169, -1, [-1, 0], true],
+    ].forEach(([row, lane, lands, fall]) => jump(row as number, lane as number, lands as number[], fall as boolean));
+    [17, 36, 55, 76, 98, 123, 148, 166].forEach((row, index) => narrow(row, [LANES[index % 5], LANES[(index + 1) % 5], LANES[(index + 2) % 5]]));
+    for (let row = 28; row < length - 6; row += 6) falling(row, LANES[(row * 2) % 5]);
+    [65, 66, 67, 112, 113, 140, 141, 142, 162, 163].forEach((row, index) => narrow(row, index % 2 ? [-2, -1] : [1, 2]));
+    add("riser", 24, 0, 1.7, 0.4);
+    add("laserCannon", 32, 0, 1.8, 0.2, 1, [-2, -1, 1, 2]);
+    add("airCrusher", 45, 2, 1.7, 1.5);
+    add("verticalHammer", 53, -1, 1.8, 0.6);
+    add("horizontalHammer", 70, 0, 1.75, 2.2, 2.2);
+    add("floatingSpikes", 82, 1, 1, 0);
+    add("wheel", 91, 0, 1.85, 1.3, 2);
+    add("signalBlock", 106, -2, 2, 0.7);
+    add("slasher", 118, 0, 2.1, 1.6, 2.25);
+    add("laserCannon", 135, 0, 2, 2.5, 1, [-2, 0, 2]);
+    add("airCrusher", 150, -1, 1.95, 0.8);
+    add("horizontalHammer", 160, 0, 2.05, 1.1, 2.35);
+    add("slasher", 173, 0, 2.35, 2.6, 2.35);
+  }
+
   const rows: Row[] = [];
   const gems: GemItem[] = [];
-
-  pattern.forEach((line, index) => {
+  cells.forEach((line, index) => {
     const lanes: number[] = [];
-    const falling: number[] = [];
+    const fallingTiles: number[] = [];
     const jumps: number[] = [];
-
-    [...line.padEnd(5, " ").slice(0, 5)].forEach((cell, cellIndex) => {
+    line.forEach((cell, cellIndex) => {
       if (cell === " ") return;
       const lane = LANES[cellIndex];
       lanes.push(lane);
-      if (cell === "F") falling.push(lane);
+      if (cell === "F") fallingTiles.push(lane);
       if (cell === "J") jumps.push(lane);
       if (cell === "G") gems.push({ row: index, lane, id: `${id}-${index}-${lane}` });
     });
-
-    rows.push({ index, lanes, falling, jumps });
+    rows.push({ index, lanes, falling: fallingTiles, jumps });
   });
 
   return {
@@ -207,13 +283,11 @@ function buildLevel(id: number): Level {
     title: THEMES[id - 1]?.name ?? THEMES[THEMES.length - 1].name,
     rows,
     gems,
-    obstacles: OBSTACLES[id - 1] ?? OBSTACLES[OBSTACLES.length - 1],
-    speed: 11.7 + id * 1.25,
+    obstacles,
+    speed: id === 1 ? 12.4 : id === 2 ? 14.2 : 16.1,
     theme: THEMES[id - 1] ?? THEMES[THEMES.length - 1],
   };
 }
-
-const LEVEL_COUNT = LEVEL_PATTERNS.length;
 
 function laneToX(lane: number) {
   return lane * LANE_WIDTH;
@@ -245,6 +319,183 @@ function makeMaterial(color: string, emissive: string, emissiveIntensity = 0.7) 
   });
 }
 
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function createObstacleGroup(obstacle: Obstacle, theme: Theme) {
+  const group = new THREE.Group();
+  const danger = makeMaterial(theme.obstacle, theme.obstacleGlow, 1);
+  const warning = makeMaterial("#fef08a", "#facc15", 1.1);
+  const safe = makeMaterial("#4ade80", "#16a34a", 1);
+  const dark = makeMaterial("#111827", theme.tileGlow, 0.55);
+
+  if (obstacle.kind === "riser") {
+    const block = new THREE.Mesh(new THREE.BoxGeometry(1.45, 1.8, 1.45), danger);
+    block.name = "block";
+    block.position.y = -0.62;
+    group.add(block);
+  }
+  if (obstacle.kind === "airCrusher") {
+    const head = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 2.2), danger);
+    head.name = "head";
+    const warningPlate = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.05, 2.4), warning);
+    warningPlate.name = "warning";
+    warningPlate.position.y = 0.23;
+    group.add(head, warningPlate);
+  }
+  if (obstacle.kind === "verticalHammer") {
+    const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.35, 2.2, 0.35), dark);
+    shaft.name = "shaft";
+    const head = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.75, 1.7), danger);
+    head.name = "head";
+    group.add(shaft, head);
+  }
+  if (obstacle.kind === "horizontalHammer") {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(3.25, 0.6, 1.1), danger);
+    bar.name = "bar";
+    bar.position.y = 1.05;
+    group.add(bar);
+  }
+  if (obstacle.kind === "laserCannon") {
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(LANE_WIDTH * 5.2, 0.16, 0.28), danger);
+    beam.name = "beam";
+    beam.position.y = 1.08;
+    const warningLine = new THREE.Mesh(new THREE.BoxGeometry(LANE_WIDTH * 5.2, 0.04, 0.34), warning);
+    warningLine.name = "warning";
+    warningLine.position.y = 0.34;
+    const cannonA = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.1, 0.7), dark);
+    cannonA.position.set(laneToX(-2.45), 0.8, 0);
+    const cannonB = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.1, 0.7), dark);
+    cannonB.position.set(laneToX(2.45), 0.8, 0);
+    group.add(beam, warningLine, cannonA, cannonB);
+  }
+  if (obstacle.kind === "signalBlock") {
+    const block = new THREE.Mesh(new THREE.BoxGeometry(1.45, 1.45, 1.45), safe);
+    block.name = "signal";
+    block.position.y = 0.95;
+    group.add(block);
+  }
+  if (obstacle.kind === "floatingSpikes") {
+    [-0.48, 0, 0.48].forEach((offset) => {
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.34, 1, 4), danger);
+      spike.position.set(offset, 2.25, 0);
+      spike.rotation.x = Math.PI;
+      group.add(spike);
+    });
+  }
+  if (obstacle.kind === "wheel") {
+    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.78, 0.2, 12, 28), danger);
+    wheel.name = "wheel";
+    wheel.position.y = 0.9;
+    wheel.rotation.y = Math.PI / 2;
+    group.add(wheel);
+  }
+  if (obstacle.kind === "slasher") {
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.18, 0.78), danger);
+    blade.name = "blade";
+    blade.position.y = 1.18;
+    blade.rotation.z = 0.55;
+    group.add(blade);
+  }
+
+  group.position.set(laneToX(obstacle.lane), 0, rowToZ(obstacle.row));
+  return group;
+}
+
+function updateObstacleGroup(obstacle: Obstacle, group: THREE.Group, time: number, progress: number, ballLane: number, ballY: number) {
+  const seconds = time * 0.001;
+  const phaseTime = seconds * obstacle.speed + obstacle.phase;
+  const zDistance = progress + rowToZ(obstacle.row);
+  const range = obstacle.range ?? 1;
+  const laneX = laneToX(ballLane);
+  let hit = false;
+
+  group.visible = true;
+  group.position.z = rowToZ(obstacle.row);
+
+  if (obstacle.kind === "riser") {
+    const lift = clamp01((7 - Math.abs(zDistance)) / 7);
+    const block = group.getObjectByName("block");
+    group.position.x = laneToX(obstacle.lane);
+    if (block) block.position.y = -0.62 + lift * 1.6;
+    hit = Math.abs(zDistance) < 1.1 && Math.abs(ballLane - obstacle.lane) < 0.45 && lift > 0.62 && ballY < 2.25;
+  }
+
+  if (obstacle.kind === "airCrusher") {
+    const cycle = (Math.sin(phaseTime) + 1) / 2;
+    const slam = cycle > 0.58 ? clamp01((cycle - 0.58) / 0.42) : 0;
+    const head = group.getObjectByName("head");
+    const warning = group.getObjectByName("warning") as THREE.Mesh | undefined;
+    group.position.x = laneToX(obstacle.lane);
+    if (head) head.position.y = 3.2 - slam * 2.25;
+    if (warning?.material instanceof THREE.MeshStandardMaterial) warning.material.emissiveIntensity = 0.5 + cycle * 2;
+    hit = Math.abs(zDistance) < 1.2 && Math.abs(ballLane - obstacle.lane) < 0.5 && slam > 0.72 && ballY < 2.25;
+  }
+
+  if (obstacle.kind === "verticalHammer") {
+    const drop = (Math.sin(phaseTime) + 1) / 2;
+    const head = group.getObjectByName("head");
+    const shaft = group.getObjectByName("shaft");
+    group.position.x = laneToX(obstacle.lane);
+    if (head) head.position.y = 2.6 - drop * 1.75;
+    if (shaft) shaft.position.y = 2.05 - drop * 0.8;
+    hit = Math.abs(zDistance) < 1.05 && Math.abs(ballLane - obstacle.lane) < 0.5 && drop > 0.68 && ballY < 2.2;
+  }
+
+  if (obstacle.kind === "horizontalHammer") {
+    const x = laneToX(obstacle.lane) + Math.sin(phaseTime) * LANE_WIDTH * range;
+    group.position.x = x;
+    group.rotation.y += 0.02;
+    hit = Math.abs(zDistance) < 1.05 && Math.abs(laneX - x) < 1.55 && ballY < 2.1;
+  }
+
+  if (obstacle.kind === "laserCannon") {
+    const cycle = ((phaseTime % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const warning = cycle > Math.PI * 0.88 && cycle < Math.PI * 1.15;
+    const active = cycle >= Math.PI * 1.15 && cycle < Math.PI * 1.55;
+    const beam = group.getObjectByName("beam");
+    const warningLine = group.getObjectByName("warning");
+    group.position.x = 0;
+    if (beam) beam.visible = active;
+    if (warningLine) warningLine.visible = warning || active;
+    hit = active && Math.abs(zDistance) < 0.9 && (obstacle.lanes ?? LANES).includes(Math.round(ballLane)) && ballY < 2.0;
+  }
+
+  if (obstacle.kind === "signalBlock") {
+    const red = Math.sin(phaseTime) > 0.12;
+    const signal = group.getObjectByName("signal") as THREE.Mesh | undefined;
+    group.position.x = laneToX(obstacle.lane);
+    if (signal?.material instanceof THREE.MeshStandardMaterial) {
+      signal.material.color.set(red ? "#fb3867" : "#4ade80");
+      signal.material.emissive.set(red ? "#9f1239" : "#16a34a");
+    }
+    hit = red && Math.abs(zDistance) < 1.1 && Math.abs(ballLane - obstacle.lane) < 0.5 && ballY < 2.2;
+  }
+
+  if (obstacle.kind === "floatingSpikes") {
+    group.position.x = laneToX(obstacle.lane);
+    group.rotation.y = Math.sin(seconds * 1.8 + obstacle.phase) * 0.2;
+    hit = Math.abs(zDistance) < 1.05 && Math.abs(ballLane - obstacle.lane) < 0.55 && ballY > 2.05;
+  }
+
+  if (obstacle.kind === "wheel") {
+    const x = laneToX(obstacle.lane) + Math.sin(phaseTime) * LANE_WIDTH * range;
+    group.position.x = x;
+    group.rotation.z -= 0.11 * obstacle.speed;
+    hit = Math.abs(zDistance) < 1.05 && Math.abs(laneX - x) < 1.05 && ballY < 2.05;
+  }
+
+  if (obstacle.kind === "slasher") {
+    const x = laneToX(obstacle.lane) + Math.sin(phaseTime * 1.55) * LANE_WIDTH * range;
+    group.position.x = x;
+    group.rotation.y = Math.sin(phaseTime) * 0.55;
+    hit = Math.abs(zDistance) < 1.1 && Math.abs(laneX - x) < 1.45 && ballY < 2.25;
+  }
+
+  return hit;
+}
+
 export function NeonRunnerGame() {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<{
@@ -252,7 +503,7 @@ export function NeonRunnerGame() {
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
     ball: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
-    obstacleMeshes: THREE.Mesh[];
+    obstacleMeshes: THREE.Group[];
     gemMeshes: Map<string, THREE.Mesh>;
     tileMeshes: Map<string, TileMesh>;
     frame: number;
@@ -510,13 +761,9 @@ export function NeonRunnerGame() {
     });
 
     const obstacleMeshes = level.obstacles.map((obstacle) => {
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(1.35, 1.35, 1.35),
-        makeMaterial(level.theme.obstacle, level.theme.obstacleGlow, 1),
-      );
-      mesh.position.set(laneToX(obstacle.lane), 0.95, rowToZ(obstacle.row));
-      scene.add(mesh);
-      return mesh;
+      const group = createObstacleGroup(obstacle, level.theme);
+      scene.add(group);
+      return group;
     });
 
     const gemMeshes = new Map<string, THREE.Mesh>();
@@ -588,9 +835,16 @@ export function NeonRunnerGame() {
           }
         });
 
-        level.obstacles.forEach((obstacle) => {
-          const movingLane = obstacle.lane + Math.sin(time * 0.001 * obstacle.speed + obstacle.shift) * obstacle.range;
-          if (!airborne && Math.abs(runtime.progress + rowToZ(obstacle.row)) < 1.25 && Math.abs(runtime.lane - movingLane) < 0.55) {
+        level.obstacles.forEach((obstacle, index) => {
+          const hit = updateObstacleGroup(
+            obstacle,
+            active.obstacleMeshes[index],
+            time,
+            runtime.progress,
+            runtime.lane,
+            BALL_Y + jumpLift,
+          );
+          if (hit) {
             syncState("gameOver");
           }
         });
@@ -614,12 +868,11 @@ export function NeonRunnerGame() {
       active.camera.position.z += (active.ball.position.z + 15 - active.camera.position.z) * 0.08;
       active.camera.lookAt(active.ball.position.x, 0.65, active.ball.position.z - 12);
 
-      level.obstacles.forEach((obstacle, index) => {
-        const mesh = active.obstacleMeshes[index];
-        mesh.position.x = laneToX(obstacle.lane + Math.sin(time * 0.001 * obstacle.speed + obstacle.shift) * obstacle.range);
-        mesh.rotation.y += delta * 2.5;
-        mesh.rotation.x += delta * 1.2;
-      });
+      if (runtime.state !== "playing") {
+        level.obstacles.forEach((obstacle, index) => {
+          updateObstacleGroup(obstacle, active.obstacleMeshes[index], time, runtime.progress, runtime.lane, BALL_Y + jumpLift);
+        });
+      }
       active.gemMeshes.forEach((mesh, id) => {
         if (!runtime.gems.has(id) && gemIds.has(id)) {
           mesh.rotation.y += delta * 2.8;
