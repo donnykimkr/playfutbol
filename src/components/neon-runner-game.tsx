@@ -322,6 +322,44 @@ function buildLevel(id: number): Level {
     }
   });
 
+  const protectedRows = new Set<number>();
+  cells.forEach((line, row) => {
+    if (line.includes("J") || line.every((cell) => cell === " ")) {
+      for (let offset = -1; offset <= 3; offset += 1) protectedRows.add(row + offset);
+    }
+  });
+  const pressureRow = (row: number, lanes: number[], fill = ".") => {
+    if (row < 6 || row >= length - 8 || protectedRows.has(row)) return;
+    cells[row] = [" ", " ", " ", " ", " "];
+    lanes.forEach((lane) => put(row, lane, fill));
+  };
+  const addPressure = (start: number, end: number, blockSize: number, width: 1 | 2, seed: number) => {
+    let lane = 0;
+    let segment = 0;
+    for (let row = start; row < end; row += blockSize) {
+      const desired = LANES[(segment * 2 + seed) % LANES.length];
+      lane += Math.sign(desired - lane);
+      const safeLanes = width === 1 ? [lane] : [lane, Math.max(MIN_LANE, Math.min(MAX_LANE, lane + (segment % 2 ? -1 : 1)))];
+      for (let offset = 0; offset < blockSize; offset += 1) {
+        const current = row + offset;
+        const useSingle = width === 1 || (offset === blockSize - 1 && segment % 3 === 0);
+        pressureRow(current, useSingle ? [lane] : safeLanes);
+        if (current % (id === 3 ? 5 : 7) === 0 && !protectedRows.has(current)) {
+          falling(current, safeLanes[0]);
+        }
+      }
+      if (segment % 2 === 0) add("riser", row + Math.max(2, blockSize - 1), lane, 1.55 + id * 0.22, segment * 0.37);
+      if (segment % 3 === 1) add("signalBlock", row + Math.max(3, blockSize), safeLanes[safeLanes.length - 1], 1.75 + id * 0.22, segment * 0.41);
+      if (segment % 4 === 2) addLaser(row + blockSize + 2, LANES.filter((value) => !safeLanes.includes(value)).slice(0, 3), segment * 0.27);
+      segment += 1;
+    }
+  };
+
+  addPressure(10, introEnd, id === 1 ? 7 : id === 2 ? 6 : 5, id === 1 ? 2 : 1, id);
+  addPressure(introEnd, mediumEnd, id === 1 ? 6 : id === 2 ? 5 : 4, 1, id + 1);
+  addPressure(mediumEnd, hardEnd, id === 1 ? 5 : id === 2 ? 4 : 3, 1, id + 2);
+  addPressure(hardEnd, length - 22, id === 1 ? 4 : 3, 1, id + 3);
+
   const rows: Row[] = [];
   const gems: GemItem[] = [];
   cells.forEach((line, index) => {
@@ -519,8 +557,8 @@ function updateObstacleGroup(obstacle: Obstacle, group: THREE.Group, time: numbe
   if (obstacle.kind === "laserCannon") {
     const targetedLanes = obstacle.lanes ?? [];
     const approach = -zDistance;
-    const warning = approach < 24 && approach > 4.2;
-    const active = approach <= 4.2 && approach > -1.05;
+    const warning = approach < 15 && approach > 3.4;
+    const active = approach <= 3.4 && approach > -0.95;
     group.position.x = 0;
     LANES.forEach((lane) => {
       const targeted = targetedLanes.includes(lane);
