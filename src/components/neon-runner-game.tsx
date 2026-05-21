@@ -360,6 +360,50 @@ function buildLevel(id: number): Level {
   addPressure(mediumEnd, hardEnd, id === 1 ? 5 : id === 2 ? 4 : 3, 1, id + 2);
   addPressure(hardEnd, length - 22, id === 1 ? 4 : 3, 1, id + 3);
 
+  const makeStartSurvivable = () => {
+    const opening = id === 1
+      ? [[0], [0], [0], [0], [0, 1], [0, 1], [0, 1], [0, 1], [0, 1], [0, 1], [1], [1], [1], [1, 2], [1, 2], [2], [2], [1, 2], [1], [0, 1], [0], [-1, 0], [-1], [-1, 0], [0], [0, 1], [1], [1]]
+      : [[0], [0, 1], [1], [1], [0, 1], [0], [-1, 0], [-1], [-1], [-1, 0], [0], [0, 1]];
+    opening.forEach((lanes, row) => {
+      narrow(row, lanes);
+    });
+  };
+
+  const validateAndRepairPath = () => {
+    const rowSafeLanes = (row: number) => cells[row]
+      .map((cell, index) => (cell === " " ? null : LANES[index]))
+      .filter((lane): lane is number => lane !== null);
+    const forceLane = (row: number, lane: number) => {
+      if (row < 0 || row >= length) return;
+      if (!rowSafeLanes(row).includes(lane)) put(row, lane, ".");
+    };
+
+    makeStartSurvivable();
+
+    let reachable = new Set<number>([0]);
+    for (let row = 0; row < length; row += 1) {
+      const safe = rowSafeLanes(row);
+      const reachableHere = new Set<number>();
+      reachable.forEach((lane) => {
+        [lane - 1, lane, lane + 1].forEach((nextLane) => {
+          if (safe.includes(nextLane)) reachableHere.add(nextLane);
+        });
+      });
+
+      if (safe.length === 0 || reachableHere.size === 0) {
+        const fallback = reachable.size > 0 ? [...reachable][0] : 0;
+        const repairLane = LANES.reduce((best, lane) => (Math.abs(lane - fallback) < Math.abs(best - fallback) ? lane : best), 0);
+        forceLane(row, repairLane);
+        reachableHere.add(repairLane);
+      }
+
+      if (row < 18 && !reachableHere.has(0) && id === 1) forceLane(row, Math.max(MIN_LANE, Math.min(MAX_LANE, [...reachableHere][0])));
+      reachable = reachableHere;
+    }
+  };
+
+  validateAndRepairPath();
+
   const rows: Row[] = [];
   const gems: GemItem[] = [];
   cells.forEach((line, index) => {
