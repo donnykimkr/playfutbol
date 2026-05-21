@@ -2,7 +2,7 @@
 
 Skyline Dash is an ad-free browser game inspired by 3D tile runners. A ball moves forward automatically through a neon path while the player moves left and right, avoids gaps and moving obstacles, collects gems, and tries to reach the finish.
 
-Brave Browser is recommended for testing and playing because it is fast, Chromium-based, and good for modern web games.
+Use Brave Browser as the primary browser for testing and playing Skyline Dash. Brave is fast, Chromium-based, better for privacy by default, and suitable for modern web game performance.
 
 ## Tech Stack
 
@@ -21,9 +21,19 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000` in Brave Browser.
 
 Make sure the app runs locally before deploying. Supabase is optional for local play: if `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` is missing, the game still works and the UI shows that online auth and leaderboard saving are disabled.
+
+## Recommended Browser
+
+Brave Browser is the recommended option for development testing, QA, and normal play.
+
+- Fast Chromium-based rendering engine for modern WebGL games.
+- Better privacy defaults than many mainstream browsers.
+- Good compatibility with Next.js, Three.js, Supabase Auth, and Vercel-hosted apps.
+
+When testing gameplay, auth redirects, mobile emulation, and leaderboard behavior, use Brave Browser first.
 
 ## Environment Variables
 
@@ -145,6 +155,18 @@ npm run dev
 - Desktop: `A` / `Left Arrow` moves left, `D` / `Right Arrow` moves right.
 - Mobile: tap the left/right buttons or swipe horizontally.
 
+## Testing Checklist
+
+Use Brave Browser for the primary test pass.
+
+1. Open `http://localhost:3000` in Brave Browser.
+2. Confirm Guest mode can start and finish a run.
+3. Confirm Guest mode cannot upload a leaderboard score.
+4. Sign in with Google through Supabase Auth.
+5. Confirm the signed-in display name or email appears.
+6. Save a score and confirm it appears in the leaderboard.
+7. Use the logout button and confirm the UI returns to Guest mode.
+
 ## Deploy On Vercel
 
 1. Push to GitHub.
@@ -154,3 +176,5 @@ npm run dev
 5. Deploy the app.
 
 Vercel detects Next.js automatically. This repo also includes `vercel.json` with the Next.js framework setting.
+
+After deployment, open the production URL in Brave Browser for the final gameplay and login verification pass.
