@@ -62,6 +62,9 @@ const GOAL_W = 16;
 const PLAYER_RADIUS = 1.15;
 const BALL_RADIUS = 0.72;
 const MATCH_SECONDS = 150;
+const BALL_MAX_SPEED = 20;
+const BALL_ROLLING_FRICTION = 0.72;
+const BALL_STOP_SPEED = 0.18;
 
 const HOME_COLOR = "#38bdf8";
 const AWAY_COLOR = "#fb7185";
@@ -80,7 +83,36 @@ function scoreMatch(goalsFor: number, goalsAgainst: number) {
   return Math.max(1, goalsFor * 1000 + Math.max(0, goalsFor - goalsAgainst) * 500 + (goalsFor > goalsAgainst ? 2000 : goalsFor === goalsAgainst ? 750 : 100));
 }
 
-function makeKit(team: TeamId, role: PlayerRole, accent: string) {
+function createNumberPanel(number: number, team: TeamId) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = team === "home" ? "#e0f2fe" : "#ffe4e6";
+    context.strokeStyle = "#020617";
+    context.lineWidth = 8;
+    context.font = "bold 74px Arial, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    const label = String(number);
+    context.strokeText(label, 64, 66);
+    context.fillText(label, 64, 66);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.66, 0.66),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }),
+  );
+  panel.name = "jersey-number";
+  panel.position.set(0, 1.55, -0.49);
+  panel.rotation.y = Math.PI;
+  return panel;
+}
+
+function makeKit(team: TeamId, role: PlayerRole, accent: string, number: number) {
   const color = role === "keeper" ? (team === "home" ? HOME_KEEPER_COLOR : AWAY_KEEPER_COLOR) : (team === "home" ? HOME_COLOR : AWAY_COLOR);
   const trim = team === "home" ? "#075985" : "#881337";
   const group = new THREE.Group();
@@ -88,14 +120,28 @@ function makeKit(team: TeamId, role: PlayerRole, accent: string) {
   bodyRoot.name = "body-root";
 
   const torso = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.66, 1.08, 4, 8),
+    new THREE.BoxGeometry(0.92, 1.14, 0.5),
     new THREE.MeshStandardMaterial({ color, roughness: 0.48, metalness: 0.05 }),
   );
-  torso.position.y = 1.45;
+  torso.position.y = 1.5;
   torso.castShadow = true;
 
+  const chest = new THREE.Mesh(
+    new THREE.BoxGeometry(1.02, 0.22, 0.54),
+    new THREE.MeshStandardMaterial({ color: trim, roughness: 0.5 }),
+  );
+  chest.position.y = 1.88;
+  chest.castShadow = true;
+
+  const shorts = new THREE.Mesh(
+    new THREE.BoxGeometry(0.78, 0.28, 0.46),
+    new THREE.MeshStandardMaterial({ color: role === "keeper" ? "#1f2937" : trim, roughness: 0.56 }),
+  );
+  shorts.position.y = 0.86;
+  shorts.castShadow = true;
+
   const head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.36, 10, 10),
+    new THREE.SphereGeometry(0.34, 10, 10),
     new THREE.MeshStandardMaterial({ color: "#f8d6b5", roughness: 0.5 }),
   );
   head.position.y = 2.35;
@@ -103,29 +149,36 @@ function makeKit(team: TeamId, role: PlayerRole, accent: string) {
 
   const armMaterial = new THREE.MeshStandardMaterial({ color: trim, roughness: 0.55 });
   [-1, 1].forEach((side) => {
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.13, 0.7, 3, 6), armMaterial);
-    arm.position.set(side * 0.68, 1.43, 0);
-    arm.rotation.z = side * 0.16;
+    const shoulder = new THREE.Group();
+    shoulder.name = side < 0 ? "left-arm" : "right-arm";
+    shoulder.position.set(side * 0.62, 1.8, 0);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.72, 3, 6), armMaterial);
+    arm.position.y = -0.38;
+    arm.rotation.z = side * 0.08;
     arm.castShadow = true;
-    bodyRoot.add(arm);
+    shoulder.add(arm);
+    bodyRoot.add(shoulder);
   });
 
   const legMaterial = new THREE.MeshStandardMaterial({ color: role === "keeper" ? "#111827" : "#0f172a", roughness: 0.58 });
   [-1, 1].forEach((side) => {
     const pivot = new THREE.Group();
     pivot.name = side < 0 ? "left-leg" : "right-leg";
-    pivot.position.set(side * 0.28, 0.88, 0);
-    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.85, 3, 6), legMaterial);
-    leg.position.y = -0.42;
-    leg.castShadow = true;
+    pivot.position.set(side * 0.25, 0.78, 0);
+    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.15, 0.48, 3, 6), legMaterial);
+    thigh.position.y = -0.24;
+    thigh.castShadow = true;
+    const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.13, 0.5, 3, 6), legMaterial);
+    shin.position.y = -0.76;
+    shin.castShadow = true;
     const boot = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.13, 0.42), new THREE.MeshStandardMaterial({ color: "#020617", roughness: 0.5 }));
-    boot.position.set(0, -0.9, 0.09);
+    boot.position.set(0, -1.08, 0.12);
     boot.castShadow = true;
-    pivot.add(leg, boot);
+    pivot.add(thigh, shin, boot);
     bodyRoot.add(pivot);
   });
 
-  bodyRoot.add(torso, head);
+  bodyRoot.add(torso, chest, shorts, head, createNumberPanel(number, team));
 
   const marker = new THREE.Mesh(
     new THREE.TorusGeometry(1.1, 0.05, 8, 32),
@@ -238,8 +291,8 @@ function addStadium(scene: THREE.Scene) {
   scene.add(railA, railB, railC, railD);
 }
 
-function createPlayer(id: string, team: TeamId, role: PlayerRole, x: number, z: number, controlledBy?: "p1" | "p2") {
-  const mesh = makeKit(team, role, controlledBy === "p2" ? "#fef08a" : "#ffffff");
+function createPlayer(id: string, team: TeamId, role: PlayerRole, x: number, z: number, number: number, controlledBy?: "p1" | "p2") {
+  const mesh = makeKit(team, role, controlledBy === "p2" ? "#fef08a" : "#ffffff", number);
   mesh.position.set(x, 0, z);
   const marker = mesh.getObjectByName("control-marker");
   if (marker) marker.visible = Boolean(controlledBy);
@@ -264,20 +317,20 @@ function playerStart(mode: GameMode) {
     { z: -8, xs: [-10, 10] },
     { z: -26, xs: [0] },
   ];
-  const players: PlayerBody[] = [createPlayer("home-gk", "home", "keeper", 0, FIELD_L / 2 - 4)];
+  const players: PlayerBody[] = [createPlayer("home-gk", "home", "keeper", 0, FIELD_L / 2 - 4, 1)];
   let homeIndex = 1;
   rows.forEach((row) => {
     row.xs.forEach((x) => {
-      players.push(createPlayer(`home-${homeIndex}`, "home", "field", x, row.z, homeIndex === 5 ? "p1" : undefined));
+      players.push(createPlayer(`home-${homeIndex}`, "home", "field", x, row.z, homeIndex + 1, homeIndex === 5 ? "p1" : undefined));
       homeIndex += 1;
     });
   });
 
-  players.push(createPlayer("away-gk", "away", "keeper", 0, -FIELD_L / 2 + 4));
+  players.push(createPlayer("away-gk", "away", "keeper", 0, -FIELD_L / 2 + 4, 1));
   let awayIndex = 1;
   rows.forEach((row) => {
     row.xs.forEach((x) => {
-      players.push(createPlayer(`away-${awayIndex}`, "away", "field", -x, -row.z, mode === "local" && awayIndex === 5 ? "p2" : undefined));
+      players.push(createPlayer(`away-${awayIndex}`, "away", "field", -x, -row.z, awayIndex + 1, mode === "local" && awayIndex === 5 ? "p2" : undefined));
       awayIndex += 1;
     });
   });
@@ -346,7 +399,7 @@ export function ArcadeSoccerGame() {
       animatePlayer(player, 0);
     });
     active.ballPos.set(0, BALL_RADIUS, 0);
-    active.ballVel.set(0, 0, servingTeam === "home" ? -6 : 6);
+    active.ballVel.set(0, 0, servingTeam === "home" ? -3.6 : 3.6);
     active.cooldown = 1.2;
     active.possession = null;
   }, []);
@@ -761,17 +814,20 @@ function updateMatch(active: MatchRuntime, keys: Set<string>, dt: number) {
       const normal = delta.normalize();
       ball.x = player.pos.x + normal.x * minDistance;
       ball.z = player.pos.z + normal.z * minDistance;
-      const push = Math.max(4, player.vel.length() * 0.85);
-      ballVel.x += normal.x * push * dt * 8;
-      ballVel.z += normal.z * push * dt * 8;
-      playKickSound(active, 0.45);
+      const approachSpeed = Math.max(0, player.vel.dot(normal) - ballVel.dot(normal) * 0.25);
+      const push = clamp(approachSpeed * 0.28, 0.5, 3.8);
+      ballVel.x += normal.x * push;
+      ballVel.z += normal.z * push;
+      if (push > 1.2) playKickSound(active, 0.35 + push * 0.08);
     }
   });
 
+  capBallVelocity(ballVel);
   ball.addScaledVector(ballVel, dt);
   ball.x = clamp(ball.x, -FIELD_W / 2, FIELD_W / 2);
   if (Math.abs(ball.x) >= FIELD_W / 2) ballVel.x *= -0.58;
-  ballVel.multiplyScalar(Math.pow(0.38, dt));
+  ballVel.multiplyScalar(Math.pow(BALL_ROLLING_FRICTION, dt));
+  if (ballVel.length() < BALL_STOP_SPEED) ballVel.set(0, 0, 0);
   active.ball.position.copy(ball);
   active.ball.rotation.x += ballVel.z * dt / BALL_RADIUS;
   active.ball.rotation.z -= ballVel.x * dt / BALL_RADIUS;
@@ -787,19 +843,29 @@ function updateMatch(active: MatchRuntime, keys: Set<string>, dt: number) {
   }
 }
 
+function capBallVelocity(ballVel: THREE.Vector3) {
+  const speed = ballVel.length();
+  if (speed > BALL_MAX_SPEED) ballVel.multiplyScalar(BALL_MAX_SPEED / speed);
+}
+
 function animatePlayer(player: PlayerBody, dt: number) {
   const speed = player.vel.length();
-  player.runPhase += speed * dt * 5.2;
-  const stride = speed > 0.35 ? Math.sin(player.runPhase) * 0.65 : 0;
+  player.runPhase += speed * dt * 4.6;
+  const stride = speed > 0.35 ? Math.sin(player.runPhase) * 0.52 : 0;
+  const armSwing = -stride * 0.72;
   const bodyRoot = player.mesh.getObjectByName("body-root");
   const leftLeg = player.mesh.getObjectByName("left-leg");
   const rightLeg = player.mesh.getObjectByName("right-leg");
+  const leftArm = player.mesh.getObjectByName("left-arm");
+  const rightArm = player.mesh.getObjectByName("right-arm");
   if (bodyRoot) {
-    bodyRoot.rotation.x = speed > 0.35 ? -0.14 : 0;
-    bodyRoot.rotation.z = clamp(-player.vel.x * 0.018, -0.16, 0.16);
+    bodyRoot.rotation.x = speed > 0.35 ? -0.09 : 0;
+    bodyRoot.rotation.z = clamp(-player.vel.x * 0.012, -0.12, 0.12);
   }
   if (leftLeg) leftLeg.rotation.x = stride;
   if (rightLeg) rightLeg.rotation.x = -stride;
+  if (leftArm) leftArm.rotation.x = armSwing;
+  if (rightArm) rightArm.rotation.x = -armSwing;
 }
 
 function ensureAudio(active: MatchRuntime) {
@@ -828,9 +894,39 @@ function playTone(active: MatchRuntime, frequency: number, duration: number, vol
 
 function playKickSound(active: MatchRuntime, volume = 0.35) {
   const now = performance.now();
-  if (now - active.lastKickSound < 110) return;
+  if (!active.audio || now - active.lastKickSound < 95) return;
   active.lastKickSound = now;
-  playTone(active, 92, 0.08, 0.035 * volume, "triangle");
+  const audio = active.audio;
+  const start = audio.currentTime;
+  const variation = 0.9 + Math.random() * 0.18;
+  const gain = audio.createGain();
+  const filter = audio.createBiquadFilter();
+  const thump = audio.createOscillator();
+  const noise = audio.createBufferSource();
+  const samples = Math.floor(audio.sampleRate * 0.055);
+  const buffer = audio.createBuffer(1, samples, audio.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < samples; i += 1) {
+    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / samples, 2.4);
+  }
+  filter.type = "bandpass";
+  filter.frequency.setValueAtTime(170 * variation, start);
+  filter.Q.setValueAtTime(1.1, start);
+  thump.type = "triangle";
+  thump.frequency.setValueAtTime(86 * variation, start);
+  thump.frequency.exponentialRampToValueAtTime(52 * variation, start + 0.075);
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(clamp(volume, 0.2, 0.8) * 0.18, start + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.11);
+  noise.buffer = buffer;
+  noise.connect(filter);
+  filter.connect(gain);
+  thump.connect(gain);
+  gain.connect(audio.destination);
+  noise.start(start);
+  thump.start(start);
+  noise.stop(start + 0.06);
+  thump.stop(start + 0.12);
 }
 
 function playGoalSound(active: MatchRuntime) {
@@ -877,9 +973,16 @@ function aiInput(player: PlayerBody, active: MatchRuntime) {
   }
 
   if (nearest?.id === player.id && active.ballPos.distanceTo(player.pos) < 2.8) {
+    if (active.cooldown > 0.05) {
+      const dir = target.sub(player.pos);
+      return { dir: dir.lengthSq() > 0.1 ? dir.normalize() : dir.set(0, 0, 0), sprint: false };
+    }
     const goalZ = player.team === "home" ? -FIELD_L / 2 : FIELD_L / 2;
-    active.ballVel.x += (0 - active.ballPos.x) * 0.08;
-    active.ballVel.z += Math.sign(goalZ - active.ballPos.z) * 12;
+    active.ballVel.x += clamp((0 - active.ballPos.x) * 0.04, -2.2, 2.2);
+    active.ballVel.z += Math.sign(goalZ - active.ballPos.z) * 7.5;
+    capBallVelocity(active.ballVel);
+    active.cooldown = 0.34;
+    playKickSound(active, 0.55);
   }
 
   const dir = target.sub(player.pos);
@@ -906,11 +1009,12 @@ function handleAction(player: PlayerBody | undefined, pressed: boolean, active: 
   const goalZ = player.team === "home" ? -FIELD_L / 2 : FIELD_L / 2;
   const forward = new THREE.Vector3(0, 0, Math.sign(goalZ - player.pos.z));
   const toGoal = new THREE.Vector3(-player.pos.x * 0.025, 0, forward.z).normalize();
-  const power = Math.abs(player.pos.z - goalZ) < 26 ? 26 : 16;
+  const power = Math.abs(player.pos.z - goalZ) < 26 ? 14.5 : 9.5;
   active.ballVel.x += toGoal.x * power;
   active.ballVel.z += toGoal.z * power;
-  active.cooldown = 0.22;
-  playKickSound(active, 1);
+  capBallVelocity(active.ballVel);
+  active.cooldown = 0.28;
+  playKickSound(active, power > 12 ? 0.78 : 0.58);
 }
 
 function resetRuntime(active: MatchRuntime, servingTeam: TeamId) {
@@ -922,7 +1026,7 @@ function resetRuntime(active: MatchRuntime, servingTeam: TeamId) {
     animatePlayer(player, 0);
   });
   active.ballPos.set(0, BALL_RADIUS, 0);
-  active.ballVel.set(0, 0, servingTeam === "home" ? -7 : 7);
+  active.ballVel.set(0, 0, servingTeam === "home" ? -4 : 4);
   active.cooldown = 1.15;
 }
 
