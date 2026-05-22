@@ -29,15 +29,22 @@ Supabase is optional for local play. If `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBL
 
 Player 1:
 
-- `WASD` moves the cyan player
+- `Arrow Keys` move the cyan player
 - Click the pitch to aim a pass or shot toward that point
-- `Space` makes a quick forward pass or shot near the ball
+- `S` makes a short pass
+- `A` makes a long pass or cross
+- `W` sends a through pass
+- `D` shoots; double tap `D` quickly for a low driven shot
+- `Z + D` curls a finesse shot
+- `Q + D` chips the ball
+- `C + S` starts a one-two pass and sends the original passer forward
+- `Q + S` sends a low through pass
 - `F` attempts a tackle when facing an opponent in possession
 - `Left Shift` sprints
 
 Player 2 in Local 1v1 Team Mode:
 
-- `Arrow Keys` move the rose player
+- `IJKL` move the rose player so Player 1 keeps the Arrow Keys
 - `Enter` or `Right Shift` makes a quick pass or shot
 - `.` or `Numpad 0` attempts a tackle
 - `/` or `Right Ctrl` sprints
