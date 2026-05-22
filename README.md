@@ -30,13 +30,16 @@ Supabase is optional for local play. If `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBL
 Player 1:
 
 - `WASD` moves the cyan player
-- `Space` passes, shoots, or tackles near the ball
+- Click the pitch to aim a pass or shot toward that point
+- `Space` makes a quick forward pass or shot near the ball
+- `F` attempts a tackle when facing an opponent in possession
 - `Left Shift` sprints
 
 Player 2 in Local 1v1 Team Mode:
 
 - `Arrow Keys` move the rose player
-- `Enter` or `Right Shift` passes, shoots, or tackles near the ball
+- `Enter` or `Right Shift` makes a quick pass or shot
+- `.` or `Numpad 0` attempts a tackle
 - `/` or `Right Ctrl` sprints
 
 ## Environment Variables
