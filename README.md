@@ -1,6 +1,6 @@
-# Skyline Dash
+# Fifaonline Arcade Soccer
 
-Skyline Dash is an ad-free 3D arcade soccer game for the browser. You control one active player while AI teammates and opponents play around you. It supports Player vs AI Team, local 1v1 Team Mode, Google login through Supabase Auth, and an optional online leaderboard.
+Fifaonline Arcade Soccer is an ad-free 3D arcade soccer game for the browser. You control one active player while AI teammates and opponents play around you. It supports Player vs AI Team, local 1v1 Team Mode, Google login through Supabase Auth, and an optional online leaderboard.
 
 Use Brave Browser as the primary browser for testing and playing. Brave is fast, Chromium-based, better for privacy by default, and suitable for modern WebGL game performance.
 
@@ -151,12 +151,12 @@ The app validates nicknames as 2-16 characters and only submits positive integer
 4. Add the Google Client ID and Client Secret to the Supabase Google provider.
 5. In Supabase Authentication -> URL Configuration, set:
    - Site URL for local testing: `http://localhost:3000`
-   - Site URL for production: `https://skyline-dash.vercel.app`
+   - Site URL for production: `https://fifaonline.vercel.app`
    - Redirect URLs:
      - `http://localhost:3000`
      - `http://localhost:3000/**`
-     - `https://skyline-dash.vercel.app`
-     - `https://skyline-dash.vercel.app/**`
+     - `https://fifaonline.vercel.app`
+     - `https://fifaonline.vercel.app/**`
 
 If you deploy to a different Vercel domain, add that exact domain and wildcard redirect URL too.
 
@@ -170,6 +170,7 @@ If you deploy to a different Vercel domain, add that exact domain and wildcard r
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 6. Deploy.
+7. Add `fifaonline.vercel.app` as the production domain in Vercel Project Settings -> Domains. If Vercel reports the subdomain is taken, choose the closest available `fifaonline-*` alternative and add that exact URL to Supabase Auth redirects.
 
 If you use the Supabase integration from Vercel Marketplace, Supabase can synchronize environment variables to Vercel for connected projects. Confirm the public client variables above exist with the `NEXT_PUBLIC_` prefix.
 
@@ -204,4 +205,4 @@ Use Brave Browser for the primary test pass.
 
 Vercel detects Next.js automatically. This repo also includes `vercel.json` with the Next.js framework setting.
 
-After deployment, open the production URL in Brave Browser for the final gameplay and login verification pass.
+After deployment, open `https://fifaonline.vercel.app` in Brave Browser for the final gameplay and login verification pass. If Vercel cannot assign that exact domain, use the closest available Vercel domain shown in the deployment output and update Supabase redirects to match.
