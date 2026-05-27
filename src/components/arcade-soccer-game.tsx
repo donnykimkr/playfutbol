@@ -1007,27 +1007,6 @@ export function ArcadeSoccerGame() {
     setFirstPerson(firstPersonRef.current);
   }, []);
 
-  const switchControlledPlayer = useCallback(() => {
-    const active = sceneRef.current;
-    if (!active || active.state !== "playing") return;
-    const current = active.players.find((player) => player.controlledBy === "p1");
-    const flatBall = new THREE.Vector3(active.ballPos.x, 0, active.ballPos.z);
-    const candidates = active.players
-      .filter((player) => player.team === "home" && player.role !== "keeper" && !player.sentOff && player.id !== current?.id)
-      .sort((a, b) => a.pos.distanceTo(flatBall) - b.pos.distanceTo(flatBall));
-    const next = candidates[0];
-    if (!next) return;
-    if (current) {
-      current.controlledBy = undefined;
-      const marker = current.mesh.getObjectByName("control-marker");
-      if (marker) marker.visible = false;
-    }
-    next.controlledBy = "p1";
-    const marker = next.mesh.getObjectByName("control-marker");
-    if (marker) marker.visible = true;
-    firstPersonYawRef.current = next.heading;
-  }, []);
-
   const requestGameFullscreen = useCallback(async () => {
     if (typeof document === "undefined") return;
     const root = mountRef.current?.parentElement ?? document.documentElement;
@@ -1048,26 +1027,18 @@ export function ArcadeSoccerGame() {
     }
   }, []);
 
-  const performMobileAction = useCallback((action: "pass" | "shoot" | "tackle" | "switch" | "first-person" | "fullscreen") => {
+  const performMobileAction = useCallback((action: "pass" | "through" | "shoot" | "fullscreen") => {
     const active = sceneRef.current;
     const p1 = active?.players.find((player) => player.controlledBy === "p1");
     if (action === "fullscreen") {
       void requestGameFullscreen();
       return;
     }
-    if (action === "first-person") {
-      toggleFirstPerson();
-      return;
-    }
-    if (action === "switch") {
-      switchControlledPlayer();
-      return;
-    }
     if (!active || !p1 || active.state !== "playing" || active.phase !== "open") return;
     if (action === "pass") performPass(p1, active, "short");
+    if (action === "through") performPass(p1, active, "through");
     if (action === "shoot") shoot(p1, active, "shot");
-    if (action === "tackle") attemptTackle(p1, active);
-  }, [requestGameFullscreen, switchControlledPlayer, toggleFirstPerson]);
+  }, [requestGameFullscreen]);
 
   const resetPositions = useCallback((servingTeam: TeamId = "home") => {
     const active = sceneRef.current;
@@ -1499,14 +1470,16 @@ export function ArcadeSoccerGame() {
             <Metric label="Home" value={score.home} color="text-cyan-200" />
             <Metric label="Match" value={formatSoccerClock(gameClock)} />
             <Metric label="Away" value={score.away} color="text-rose-200" />
-            <button
-              className={`pointer-events-auto rounded-md border px-3 py-2 text-xs font-bold shadow-2xl backdrop-blur transition ${
-                firstPerson ? "border-cyan-200 bg-cyan-300/20 text-cyan-50" : "border-white/10 bg-black/40 text-white hover:bg-white/10"
-              }`}
-              onClick={toggleFirstPerson}
-            >
-              {firstPerson ? "First-person" : "Broadcast"}
-            </button>
+            {!showTouchControls && (
+              <button
+                className={`pointer-events-auto rounded-md border px-3 py-2 text-xs font-bold shadow-2xl backdrop-blur transition ${
+                  firstPerson ? "border-cyan-200 bg-cyan-300/20 text-cyan-50" : "border-white/10 bg-black/40 text-white hover:bg-white/10"
+                }`}
+                onClick={toggleFirstPerson}
+              >
+                {firstPerson ? "First-person" : "Broadcast"}
+              </button>
+            )}
             <div className="pointer-events-auto flex min-w-48 max-w-full items-center gap-2 rounded-md border border-white/10 bg-black/40 px-3 py-2 shadow-2xl backdrop-blur">
               <UserCircle size={18} className="shrink-0 text-cyan-200" />
               <div className="min-w-0 flex-1">
@@ -1595,6 +1568,7 @@ export function ArcadeSoccerGame() {
             }}
           >
             <div className="absolute inset-4 rounded-full border border-white/10 bg-cyan-200/5" />
+            <div className="absolute inset-0 grid place-items-center text-xs font-black uppercase text-white/50">Move</div>
             <div
               className="absolute left-1/2 top-1/2 h-14 w-14 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-100/45 bg-cyan-200/35 shadow-[0_0_24px_rgba(103,232,249,0.25)] sm:h-16 sm:w-16"
               style={{ transform: `translate(calc(-50% + ${joystickKnob.x}px), calc(-50% + ${joystickKnob.y}px))` }}
@@ -1602,23 +1576,31 @@ export function ArcadeSoccerGame() {
           </div>
 
           <div
-            className="pointer-events-auto absolute grid grid-cols-3 gap-2 max-[560px]:grid-cols-2 sm:gap-3"
-            style={{ right: "calc(env(safe-area-inset-right) + 4.25rem)", bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
+            className="pointer-events-auto absolute h-56 w-60 sm:h-60 sm:w-64"
+            style={{ right: "calc(env(safe-area-inset-right) + 1rem)", bottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}
           >
-            <TouchButton label="Pass" onPress={() => performMobileAction("pass")} />
-            <TouchButton label="Shoot" strong onPress={() => performMobileAction("shoot")} />
-            <TouchButton
-              label="Sprint"
-              onDown={() => {
-                virtualControlsRef.current.sprint = true;
-              }}
-              onUp={() => {
-                virtualControlsRef.current.sprint = false;
-              }}
-            />
-            <TouchButton label="Switch" onPress={() => performMobileAction("switch")} />
-            <TouchButton label={firstPerson ? "View" : "FPV"} active={firstPerson} onPress={() => performMobileAction("first-person")} />
-            <TouchButton label="Tackle" onPress={() => performMobileAction("tackle")} />
+            <div className="absolute left-2 top-14 sm:left-4 sm:top-16">
+              <TouchButton label="Through" tone="yellow" onPress={() => performMobileAction("through")} />
+            </div>
+            <div className="absolute bottom-1 left-0 sm:bottom-2 sm:left-2">
+              <TouchButton label="Pass" tone="cyan" onPress={() => performMobileAction("pass")} />
+            </div>
+            <div className="absolute right-1 top-4 sm:right-2 sm:top-6">
+              <TouchButton label="Shoot" tone="red" strong onPress={() => performMobileAction("shoot")} />
+            </div>
+            <div className="absolute bottom-0 right-0 sm:bottom-1">
+              <TouchButton
+                label="Sprint Skill"
+                tone="green"
+                large
+                onDown={() => {
+                  virtualControlsRef.current.sprint = true;
+                }}
+                onUp={() => {
+                  virtualControlsRef.current.sprint = false;
+                }}
+              />
+            </div>
           </div>
 
           <button
@@ -3409,6 +3391,8 @@ function TouchButton({
   label,
   active = false,
   strong = false,
+  large = false,
+  tone = "neutral",
   onPress,
   onDown,
   onUp,
@@ -3416,19 +3400,28 @@ function TouchButton({
   label: string;
   active?: boolean;
   strong?: boolean;
+  large?: boolean;
+  tone?: "neutral" | "cyan" | "green" | "red" | "yellow";
   onPress?: () => void;
   onDown?: () => void;
   onUp?: () => void;
 }) {
+  const toneClass = active
+    ? "border-cyan-100 bg-cyan-300/35 text-cyan-50"
+    : tone === "cyan"
+      ? "border-cyan-100/40 bg-cyan-300/22 text-cyan-50 shadow-[0_0_28px_rgba(34,211,238,0.2)]"
+      : tone === "green"
+        ? "border-lime-100/45 bg-lime-300/22 text-lime-50 shadow-[0_0_28px_rgba(132,204,22,0.22)]"
+        : tone === "red" || strong
+          ? "border-rose-100/45 bg-rose-300/24 text-rose-50 shadow-[0_0_28px_rgba(244,63,94,0.22)]"
+          : tone === "yellow"
+            ? "border-yellow-100/45 bg-yellow-300/22 text-yellow-50 shadow-[0_0_28px_rgba(250,204,21,0.2)]"
+            : "border-white/15 bg-black/35 text-white";
   return (
     <button
-      className={`grid h-14 w-14 place-items-center rounded-full border text-[10px] font-black uppercase tracking-normal shadow-2xl backdrop-blur-md active:scale-95 sm:h-16 sm:w-16 sm:text-[11px] ${
-        active
-          ? "border-cyan-100 bg-cyan-300/35 text-cyan-50"
-          : strong
-            ? "border-rose-100/35 bg-rose-300/25 text-rose-50"
-            : "border-white/15 bg-black/35 text-white"
-      }`}
+      className={`grid place-items-center rounded-full border text-center font-black uppercase leading-tight tracking-normal shadow-2xl backdrop-blur-md active:scale-95 ${
+        large ? "h-24 w-24 text-[13px] sm:h-28 sm:w-28 sm:text-sm" : "h-16 w-16 text-[11px] sm:h-20 sm:w-20 sm:text-xs"
+      } ${toneClass}`}
       onPointerDown={(event) => {
         event.preventDefault();
         event.stopPropagation();
