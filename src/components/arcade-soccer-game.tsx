@@ -1450,15 +1450,15 @@ export function ArcadeSoccerGame() {
         const playerFocus = controlledFocus?.pos ?? active.ballPos;
         const blendedFocus = active.ballPos.clone().lerp(playerFocus, active.mode === "local" ? 0.18 : 0.24);
         const desired = new THREE.Vector3(
-          -FIELD_W / 2 - 32,
-          34,
+          -FIELD_W / 2 - 28,
+          40,
           blendedFocus.z + 5,
         );
         desired.z = clamp(desired.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
         active.camera.position.lerp(desired, 0.065);
         active.camera.lookAt(
           clamp(blendedFocus.x * 0.22, -10, 10),
-          0.6,
+          0.9,
           blendedFocus.z,
         );
       }
@@ -2260,12 +2260,14 @@ function resumeRestart(active: MatchRuntime) {
   if (restartingPhase === "goal-kick" && actor) {
     actor.heading = headingFromDirection(active.restartDirection);
     actor.mesh.rotation.y = actor.heading;
-    active.ballPos.copy(active.restartSpot);
+    active.ballPos.copy(active.restartSpot).setY(BALL_RADIUS);
   }
   const power = restartingPhase === "corner" ? 12 : restartingPhase === "goal-kick" ? 39 : restartingPhase === "throw-in" ? 9.2 : restartingPhase === "penalty" ? 18 : restartingPhase === "free-kick" ? 11 : 4.2;
   const releasePoint = active.phase === "throw-in" && actor
     ? throwInHandPoint(actor, active.restartDirection).add(active.restartDirection.clone().multiplyScalar(0.38))
-    : active.restartSpot;
+    : restartingPhase === "goal-kick"
+      ? active.restartSpot.clone().add(active.restartDirection.clone().multiplyScalar(1.15)).setY(BALL_RADIUS)
+      : active.restartSpot;
   active.ballPos.copy(releasePoint);
   active.ballVel.copy(active.restartDirection).multiplyScalar(power);
   active.ballVel.y = restartingPhase === "goal-kick" ? 12.8 : restartingPhase === "corner" ? 6.5 : restartingPhase === "throw-in" ? 4.8 : restartingPhase === "penalty" ? 1.4 : restartingPhase === "free-kick" ? 4.8 : 0;
@@ -2286,12 +2288,15 @@ function resumeRestart(active: MatchRuntime) {
   active.eventTimer = showSecondHalfBanner ? 1.4 : 0;
   active.cooldown = 0.35;
   if (actor) {
-    actor.kickTimer = restartingPhase === "throw-in" ? 0 : 0.46;
+    actor.kickTimer = restartingPhase === "goal-kick" ? 0.62 : restartingPhase === "throw-in" ? 0 : 0.46;
     if (restartingPhase === "throw-in") {
       actor.catchTimer = 0.18;
       poseThrower(actor, true);
     }
-    if (restartingPhase === "goal-kick") actor.catchTimer = 0.2;
+    if (restartingPhase === "goal-kick") {
+      actor.catchTimer = 0;
+      actor.recoveryTimer = 0.12;
+    }
   }
   if (restartingPhase === "kickoff" && actor) {
     active.ballIgnorePlayerId = null;
@@ -2487,13 +2492,20 @@ function handleGoalkeeperActions(active: MatchRuntime) {
         const lateralGap = predictedX - keeper.pos.x;
         const canDive = Math.abs(lateralGap) < 2.65 && Math.abs(active.ballPos.z - ownZ) < 11.5;
         const wellPositioned = Math.abs(lateralGap) < 1.05 && Math.abs(active.ballPos.z - ownZ) < 9.8;
-        if (!wellPositioned && !canDive) return;
+        if (canDive && keeper.diveTimer <= 0.05) {
+          keeper.diveSide = Math.sign(lateralGap || keeper.diveSide || 1);
+          keeper.diveTimer = 0.7;
+          keeper.recoveryTimer = Math.max(keeper.recoveryTimer, 0.28);
+          keeper.vel.x = clamp(keeper.vel.x + keeper.diveSide * clamp(Math.abs(lateralGap) * 1.15, 0.8, 2.25), -4.2, 4.2);
+          keeper.pos.x = clamp(keeper.pos.x + keeper.diveSide * clamp(Math.abs(lateralGap) * 0.12, 0.08, 0.28), -GOAL_W / 2 + 0.8, GOAL_W / 2 - 0.8);
+        }
+        const handContact = active.ballPos.distanceTo(keeperHandPoint(keeper)) < 1.1;
+        const bodyContact = keeper.pos.distanceTo(flatBall) < 1.35 && active.ballPos.y < 2.15;
+        const divingContact = keeper.diveTimer > 0 && Math.abs(active.ballPos.x - keeper.pos.x) < 1.75 && Math.abs(active.ballPos.z - keeper.pos.z) < 1.25 && active.ballPos.y < 2.45;
+        if (!handContact && !bodyContact && !divingContact) return;
         keeper.diveSide = Math.sign(lateralGap || keeper.diveSide || 1);
-        keeper.diveTimer = 0.7;
         keeper.catchTimer = 0.46;
         keeper.recoveryTimer = Math.max(keeper.recoveryTimer, 0.36);
-        keeper.vel.x = clamp(keeper.vel.x + keeper.diveSide * clamp(Math.abs(lateralGap) * 1.45, 1.2, 2.8), -5.2, 5.2);
-        keeper.pos.x = clamp(keeper.pos.x + keeper.diveSide * clamp(Math.abs(lateralGap) * 0.18, 0.12, 0.42), -GOAL_W / 2 + 0.8, GOAL_W / 2 - 0.8);
         active.ballVel.x += keeper.diveSide * clamp(shotSpeed * 0.22, 2.2, 4.6);
         active.ballVel.z *= wellPositioned ? -0.48 : -0.3;
         active.ballVel.y = Math.max(active.ballVel.y, 1.8);
@@ -2545,6 +2557,9 @@ function movePlayer(player: PlayerBody, moveDir: THREE.Vector3, maxSpeed: number
       : teamGoalZ(player.team, active.half) > 0 ? Math.PI : 0;
   } else if (hasIntent) {
     desiredHeading = Math.atan2(dir.x, dir.z);
+  } else if (player.vel.lengthSq() < 0.04) {
+    const lookAtBall = active.ballPos.clone().setY(0).sub(player.pos);
+    if (lookAtBall.lengthSq() > 6) desiredHeading = Math.atan2(lookAtBall.x, lookAtBall.z);
   }
   const turnSpeed = player.line === "referee" ? 5.4 : player.role === "keeper" ? 3.9 : player.controlledBy ? 6.2 : 5.15;
   const turnGap = Math.abs(setPlayerHeading(player, desiredHeading, dt, turnSpeed));
@@ -2998,7 +3013,7 @@ function aiInput(player: PlayerBody, active: MatchRuntime) {
   }
 
   const dir = target.sub(player.pos);
-  return { dir: dir.lengthSq() > 0.06 ? dir.normalize() : activeShapeNudge(player, active), sprint: isPressing || player.supportRunTimer > 0 };
+  return { dir: dir.lengthSq() > 0.06 ? dir.normalize() : activeShapeNudge(), sprint: isPressing || player.supportRunTimer > 0 };
 }
 
 function canDribbleIntoSpace(player: PlayerBody, active: MatchRuntime) {
@@ -3128,11 +3143,8 @@ function addFormationMotion(player: PlayerBody, target: THREE.Vector3, active: M
   target.z += Math.cos(beat * 0.72) * depth * 0.35 + phaseDepth;
 }
 
-function activeShapeNudge(player: PlayerBody, active: MatchRuntime) {
-  if (player.role === "keeper") return new THREE.Vector3();
-  const beat = active.gameClock * 0.08 + player.number * 0.91;
-  const attackSign = Math.sign(attackingGoalZ(player.team, active.half));
-  return new THREE.Vector3(Math.sin(beat), 0, attackSign * 0.55 + Math.cos(beat) * 0.25).normalize();
+function activeShapeNudge() {
+  return new THREE.Vector3();
 }
 
 function pressureFieldPlayers(players: PlayerBody[], team: TeamId, ball: THREE.Vector3, count: number) {
@@ -3193,9 +3205,13 @@ function controlledBallPoint(player: PlayerBody) {
 }
 
 function releasePossession(active: MatchRuntime, ballState: BallState) {
+  const previousOwner = active.ballOwnerId ? active.players.find((player) => player.id === active.ballOwnerId) : null;
   active.ballState = ballState;
   active.ballOwnerId = null;
   active.possession = null;
+  if (ballState === "loose" && previousOwner?.team === "home") {
+    switchToClosestTeammateToBall(active, "home", "p1");
+  }
 }
 
 function setControlledPlayer(active: MatchRuntime, player: PlayerBody, controller: "p1" | "p2") {
@@ -3230,9 +3246,22 @@ function switchToBestManualPlayer(active: MatchRuntime, controller: "p1" | "p2")
   if (next) setControlledPlayer(active, next, controller);
 }
 
+function switchToClosestTeammateToBall(active: MatchRuntime, team: TeamId, controller: "p1" | "p2") {
+  const flatBall = new THREE.Vector3(active.ballPos.x, 0, active.ballPos.z);
+  const next = active.players
+    .filter((player) => player.team === team && player.role !== "keeper" && !player.sentOff)
+    .sort((a, b) => a.pos.distanceTo(flatBall) - b.pos.distanceTo(flatBall))[0];
+  if (next) setControlledPlayer(active, next, controller);
+}
+
 function autoSwitchToPossessor(active: MatchRuntime, player: PlayerBody) {
-  if (player.role === "keeper" || player.sentOff) return;
+  if (player.sentOff) return;
+  if (player.role === "keeper") {
+    if (player.team !== "home") switchToClosestTeammateToBall(active, "home", "p1");
+    return;
+  }
   if (player.team === "home") setControlledPlayer(active, player, "p1");
+  else switchToClosestTeammateToBall(active, "home", "p1");
   if (active.mode === "local" && player.team === "away") setControlledPlayer(active, player, "p2");
 }
 
@@ -3374,6 +3403,9 @@ function kickTowardPoint(player: PlayerBody, target: THREE.Vector3, active: Matc
   active.ballPos.y = BALL_RADIUS;
   active.ballVel.copy(direction.normalize().multiplyScalar(power)).add(player.vel.clone().multiplyScalar(style === "driven" ? 0.06 : 0.12));
   active.ballVel.y = ballLiftForKick(style, distance);
+  if (style === "shot") active.ballVel.y = clamp(active.ballVel.y + Math.max(0, powerScale - 0.72) * 2.2, 2.4, 6.2);
+  if (style === "finesse") active.ballVel.y = clamp(active.ballVel.y + Math.max(0, powerScale - 0.86) * 1.4, 2.2, 4.8);
+  if (style === "driven") active.ballVel.y = Math.min(active.ballVel.y, 0.55);
   capBallVelocity(active.ballVel);
   active.cooldown = style === "short" || style === "low-through" ? 0.2 : 0.28;
   active.ballIgnorePlayerId = player.id;
