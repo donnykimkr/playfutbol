@@ -140,7 +140,7 @@ const FIELD_W = 64;
 const FIELD_L = 96;
 const GOAL_W = 16;
 const PLAYER_RADIUS = 1.08;
-const BALL_RADIUS = 0.46;
+const BALL_RADIUS = 0.36;
 const CLOCK_SPEED = 18;
 const HALF_TIME_SECONDS = 45 * 60;
 const FULL_TIME_SECONDS = 90 * 60;
@@ -181,6 +181,10 @@ function headingForHome(z: number) {
 
 function forwardFromHeading(heading: number) {
   return new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading));
+}
+
+function headingFromDirection(direction: THREE.Vector3) {
+  return Math.atan2(direction.x, direction.z);
 }
 
 function nicknameIsValid(value: string) {
@@ -438,6 +442,23 @@ function makeHumanFigure({
     marker.name = "control-marker";
     marker.visible = false;
     group.add(marker);
+    const aimArrow = new THREE.Group();
+    aimArrow.name = "aim-arrow";
+    aimArrow.visible = false;
+    const shaft = new THREE.Mesh(
+      new THREE.BoxGeometry(0.14, 0.07, 1.05),
+      new THREE.MeshBasicMaterial({ color: "#bef264", transparent: true, opacity: 0.86 }),
+    );
+    shaft.position.z = 0.46;
+    const head = new THREE.Mesh(
+      new THREE.ConeGeometry(0.28, 0.56, 3),
+      new THREE.MeshBasicMaterial({ color: "#22d3ee", transparent: true, opacity: 0.92 }),
+    );
+    head.position.z = 1.16;
+    head.rotation.x = Math.PI / 2;
+    aimArrow.position.y = 3.08;
+    aimArrow.add(shaft, head);
+    group.add(aimArrow);
   }
   return group;
 }
@@ -1423,20 +1444,20 @@ export function ArcadeSoccerGame() {
       } else {
         if (controlledFocus) controlledFocus.mesh.visible = true;
         if (controlledFocus) firstPersonYawRef.current = controlledFocus.heading;
-        const cameraTeam = controlledFocus?.team ?? active.lastTouchTeam;
-        const attackSign = Math.sign(attackingGoalZ(cameraTeam, active.half));
         const playerFocus = controlledFocus?.pos ?? active.ballPos;
-        const blendedFocus = playerFocus.clone().lerp(active.ballPos, active.mode === "local" ? 0.5 : 0.32);
+        const blendedFocus = active.ballPos.clone().lerp(playerFocus, active.mode === "local" ? 0.18 : 0.24);
         const desired = new THREE.Vector3(
-          blendedFocus.x * 0.62,
-          31,
-          blendedFocus.z - attackSign * 36,
+          -FIELD_W / 2 - 46,
+          45,
+          blendedFocus.z + 5,
         );
-        desired.x = clamp(desired.x, -FIELD_W / 2 + 10, FIELD_W / 2 - 10);
-        desired.z = clamp(desired.z, -FIELD_L / 2 - 14, FIELD_L / 2 + 14);
-        active.camera.position.lerp(desired, 0.055);
-        const lookAhead = blendedFocus.clone().add(new THREE.Vector3(0, 0, attackSign * 18));
-        active.camera.lookAt(lookAhead.x, 0.65, lookAhead.z);
+        desired.z = clamp(desired.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
+        active.camera.position.lerp(desired, 0.065);
+        active.camera.lookAt(
+          clamp(blendedFocus.x * 0.22, -10, 10),
+          0.6,
+          blendedFocus.z,
+        );
       }
       active.renderer.render(active.scene, active.camera);
       active.frame = requestAnimationFrame(frame);
@@ -1838,6 +1859,7 @@ function updateMatch(
   handleGoalkeeperActions(active);
   updateReferee(active, dt);
   updateAssistantReferees(active, dt);
+  updateAimIndicators(active, keys);
 
   if (active.phase === "open") {
     encourageAiFinishing(active);
@@ -2124,8 +2146,17 @@ function arrangeSetPieceShape(active: MatchRuntime, phase: PlayPhase, team: Team
   active.players.forEach((player) => {
     if (player.sentOff) return;
     if (player.id === active.restartActorId) {
-      player.pos.copy(spot).setY(0);
-      if (phase === "throw-in") player.pos.x = Math.sign(spot.x || 1) * (FIELD_W / 2 - 2.1);
+      if (phase === "goal-kick") {
+        const goalZ = teamGoalZ(team, active.half);
+        player.pos.set(
+          clamp(spot.x - Math.sign(player.home.x || 1) * 1.6, -GOAL_W / 2 + 1, GOAL_W / 2 - 1),
+          0,
+          goalZ - Math.sign(goalZ) * 3.6,
+        );
+      } else {
+        player.pos.copy(spot).setY(0);
+        if (phase === "throw-in") player.pos.x = Math.sign(spot.x || 1) * (FIELD_W / 2 - 2.1);
+      }
       player.vel.set(0, 0, 0);
       player.mesh.position.copy(player.pos);
       return;
@@ -2202,27 +2233,27 @@ function resumeRestart(active: MatchRuntime) {
     if (receiver) active.restartDirection.copy(receiver.pos.clone().sub(actor.pos).setY(0).normalize());
   }
   if (restartingPhase === "goal-kick" && actor) {
-    actor.heading = Math.atan2(active.restartDirection.x, active.restartDirection.z);
+    actor.heading = headingFromDirection(active.restartDirection);
     actor.mesh.rotation.y = actor.heading;
-    active.ballPos.copy(actor.pos.clone().add(active.restartDirection.clone().multiplyScalar(1.05)).setY(BALL_RADIUS));
+    active.ballPos.copy(active.restartSpot);
   }
-  const power = restartingPhase === "corner" ? 12 : restartingPhase === "goal-kick" ? 34 : restartingPhase === "throw-in" ? 9.2 : restartingPhase === "penalty" ? 18 : restartingPhase === "free-kick" ? 11 : 4.2;
+  const power = restartingPhase === "corner" ? 12 : restartingPhase === "goal-kick" ? 39 : restartingPhase === "throw-in" ? 9.2 : restartingPhase === "penalty" ? 18 : restartingPhase === "free-kick" ? 11 : 4.2;
   const releasePoint = active.phase === "throw-in" && actor
     ? throwInHandPoint(actor, active.restartDirection).add(active.restartDirection.clone().multiplyScalar(0.38))
     : active.restartSpot;
   active.ballPos.copy(releasePoint);
   active.ballVel.copy(active.restartDirection).multiplyScalar(power);
-  active.ballVel.y = restartingPhase === "goal-kick" ? 14.8 : restartingPhase === "corner" ? 6.5 : restartingPhase === "throw-in" ? 4.8 : restartingPhase === "penalty" ? 1.4 : restartingPhase === "free-kick" ? 4.8 : 0;
+  active.ballVel.y = restartingPhase === "goal-kick" ? 12.8 : restartingPhase === "corner" ? 6.5 : restartingPhase === "throw-in" ? 4.8 : restartingPhase === "penalty" ? 1.4 : restartingPhase === "free-kick" ? 4.8 : 0;
   active.lastTouchTeam = active.restartTeam;
   active.lastTouchPlayerId = active.restartActorId;
   active.restartActorId = null;
   active.ballState = "kicked";
   active.ballOwnerId = null;
   active.ballIgnorePlayerId = actor?.id ?? null;
-  active.ballIgnoreTimer = restartingPhase === "goal-kick" ? 1.15 : restartingPhase === "throw-in" ? 0.52 : restartingPhase === "penalty" ? 0.72 : 0.34;
+  active.ballIgnoreTimer = restartingPhase === "goal-kick" ? 1.55 : restartingPhase === "throw-in" ? 0.52 : restartingPhase === "penalty" ? 0.72 : 0.34;
   if (restartingPhase === "goal-kick") {
     active.restartProtectionTeam = active.restartTeam;
-    active.restartProtectionTimer = 1.45;
+    active.restartProtectionTimer = 2.2;
   }
   active.phase = "open";
   active.phaseTimer = 0;
@@ -2250,6 +2281,9 @@ function restartShapeInput(player: PlayerBody, active: MatchRuntime) {
   const target = player.home.clone();
   if (player.id === active.restartActorId) {
     target.copy(active.restartSpot);
+    if (active.phase === "goal-kick") {
+      target.sub(active.restartDirection.clone().multiplyScalar(1.08));
+    }
     target.z = clamp(target.z, -GOAL_BACK_Z + 2, GOAL_BACK_Z - 2);
     if (active.phase === "throw-in") target.x = Math.sign(active.restartSpot.x || 1) * (FIELD_W / 2 - 2.1);
   } else if (active.phase !== "halftime" && player.line !== "keeper") {
@@ -3164,6 +3198,34 @@ function autoSwitchToPossessor(active: MatchRuntime, player: PlayerBody) {
   if (active.mode === "local" && player.team === "away") setControlledPlayer(active, player, "p2");
 }
 
+function currentAimDirection(player: PlayerBody, active: MatchRuntime, keys?: Set<string>) {
+  if (active.pendingKickTarget && player.pos.distanceTo(active.pendingKickTarget) > 0.4) {
+    return active.pendingKickTarget.clone().sub(player.pos).setY(0).normalize();
+  }
+  const keyboardDir = new THREE.Vector3();
+  if (keys) {
+    if (keys.has("ArrowUp")) keyboardDir.z -= 1;
+    if (keys.has("ArrowDown")) keyboardDir.z += 1;
+    if (keys.has("ArrowLeft")) keyboardDir.x -= 1;
+    if (keys.has("ArrowRight")) keyboardDir.x += 1;
+  }
+  if (keyboardDir.lengthSq() > 0.02) return keyboardDir.normalize();
+  return facingDirection(player);
+}
+
+function updateAimIndicators(active: MatchRuntime, keys: Set<string>) {
+  active.players.forEach((player) => {
+    const arrow = player.mesh.getObjectByName("aim-arrow");
+    if (!arrow) return;
+    const visible = player.controlledBy === "p1" && active.ballOwnerId === player.id && active.state === "playing" && active.phase === "open" && !player.sentOff;
+    arrow.visible = visible;
+    if (!visible) return;
+    const aim = currentAimDirection(player, active, keys);
+    arrow.rotation.y = headingFromDirection(aim) - player.heading;
+    arrow.position.y = 3.04 + Math.sin(active.gameClock * 0.12) * 0.05;
+  });
+}
+
 function takePossession(player: PlayerBody, active: MatchRuntime) {
   active.ballState = "possessed";
   active.ballOwnerId = player.id;
@@ -3171,6 +3233,7 @@ function takePossession(player: PlayerBody, active: MatchRuntime) {
   active.lastTouchTeam = player.team;
   active.lastTouchPlayerId = player.id;
   active.ballVel.copy(player.vel).multiplyScalar(0.78);
+  active.pendingKickTarget = null;
   if (player.role === "keeper") {
     active.restartProtectionTeam = player.team;
     active.restartProtectionTimer = 1.6;
@@ -3238,6 +3301,31 @@ function kickTowardPoint(player: PlayerBody, target: THREE.Vector3, active: Matc
   player.actionCooldown = style === "short" || style === "low-through" ? ACTION_COOLDOWN : 0.34;
   playKickSound(active, power > 12 ? 0.78 : 0.58);
   return true;
+}
+
+function kickTargetForStyle(player: PlayerBody, active: MatchRuntime, teammate: PlayerBody, style: "short" | "long" | "through" | "low-through") {
+  const attackSign = Math.sign(attackingGoalZ(player.team, active.half));
+  const receiverLead = teammate.vel.clone().multiplyScalar(style === "long" ? 0.42 : style === "through" ? 0.32 : 0.2);
+  const forwardLead = style === "through"
+    ? 8.5
+    : style === "low-through"
+      ? 5.2
+      : style === "long"
+        ? 4.4
+        : 1.1;
+  const target = teammate.pos.clone()
+    .add(receiverLead)
+    .add(new THREE.Vector3(0, BALL_RADIUS, attackSign * forwardLead));
+  if (style === "long" && (teammate.line === "forward" || Math.abs(teammate.pos.x) > FIELD_W * 0.26)) {
+    target.x = clamp(teammate.pos.x + Math.sign(teammate.pos.x || player.pos.x || 1) * 2.2, -FIELD_W / 2 + 4, FIELD_W / 2 - 4);
+    target.z = clamp(teammate.pos.z + attackSign * 6.5, -FIELD_L / 2 + 4, FIELD_L / 2 - 4);
+  }
+  if (style === "through" || style === "low-through") {
+    target.z = clamp(Math.max((target.z - player.pos.z) * attackSign, 7) * attackSign + player.pos.z, -FIELD_L / 2 + 4, FIELD_L / 2 - 4);
+  }
+  target.x = clamp(target.x, -FIELD_W / 2 + 3, FIELD_W / 2 - 3);
+  target.z = clamp(target.z, -FIELD_L / 2 + 3, FIELD_L / 2 - 3);
+  return target;
 }
 
 function ballLiftForKick(style: KickStyle, distance: number) {
@@ -3314,10 +3402,8 @@ function performPass(player: PlayerBody, active: MatchRuntime, style: "short" | 
   const teammate = choosePassTarget(player, active, style);
   if (!teammate) return false;
   const attackSign = Math.sign(attackingGoalZ(player.team, active.half));
-  const lead = style === "through" ? 7.2 : style === "low-through" ? 4.6 : style === "long" ? 2.8 : 0.9;
-  const target = teammate.pos.clone()
-    .add(teammate.vel.clone().multiplyScalar(style === "long" ? 0.3 : 0.18))
-    .add(new THREE.Vector3(0, BALL_RADIUS, attackSign * lead));
+  const target = kickTargetForStyle(player, active, teammate, style);
+  active.pendingKickTarget = target.clone();
   const passed = kickTowardPoint(player, target, active, style, teammate);
   if (passed && oneTwo) {
     player.supportRunTimer = 1.9;
@@ -3336,14 +3422,20 @@ function choosePassTarget(player: PlayerBody, active: MatchRuntime, style: "shor
       const open = nearestOpponentDistance(teammate, active.players);
       const laneGap = Math.abs(teammate.pos.x - player.pos.x);
       const laneBlockers = opponentsBetween(player, teammate.pos, active.players, style === "short" ? 2.6 : 4.2);
-      const targetDistance = style === "short" ? 14 : style === "long" ? 34 : 24;
-      const distanceScore = 32 - Math.abs(distance - targetDistance);
-      const forwardScore = style === "short" ? clamp(forward, -8, 10) : clamp(forward * 1.05, -12, 24);
-      const recycleBonus = player.line === "forward" && forward < 0 ? 4 : 0;
-      const laneBonus = style === "long" ? clamp(laneGap * 0.25, 0, 5) : 0;
-      return { teammate, score: distanceScore + forwardScore + clamp(open, 0, 12) * 1.55 + recycleBonus + laneBonus - laneBlockers * 7.5 };
+      const targetDistance = style === "short" ? 12 : style === "long" ? 36 : 23;
+      const distanceScore = 38 - Math.abs(distance - targetDistance) * (style === "short" ? 1.8 : 1.05);
+      const forwardScore = style === "short"
+        ? clamp(forward, -9, 8)
+        : style === "long"
+          ? clamp(forward * 0.72 + laneGap * 0.22, -8, 18)
+          : clamp(forward * 1.35, -10, 28);
+      const openScore = clamp(open, 0, 14) * (style === "short" ? 1.9 : 1.5);
+      const recycleBonus = player.line === "forward" && forward < 0 && style === "short" ? 5 : 0;
+      const throughRunBonus = (style === "through" || style === "low-through") && teammate.line === "forward" && forward > 3 ? 8 : 0;
+      const sameLanePenalty = style !== "short" && laneGap < 2.4 ? 3 : 0;
+      return { teammate, score: distanceScore + forwardScore + openScore + recycleBonus + throughRunBonus - sameLanePenalty - laneBlockers * (style === "short" ? 8.5 : 6.8) };
     })
-    .filter(({ teammate }) => style !== "short" || teammate.pos.distanceTo(player.pos) < 27)
+    .filter(({ teammate }) => style !== "short" || teammate.pos.distanceTo(player.pos) < 24)
     .filter(({ teammate }) => style === "short" || passIsUseful(player, teammate, active, style))
     .sort((a, b) => b.score - a.score)[0]?.teammate ?? null;
 }
@@ -3353,9 +3445,9 @@ function passIsUseful(player: PlayerBody, receiver: PlayerBody, active: MatchRun
   const forward = (receiver.pos.z - player.pos.z) * attackSign;
   const distance = receiver.pos.distanceTo(player.pos);
   const open = nearestOpponentDistance(receiver, active.players);
-  if (style === "short") return distance < 27 && open > 2.2;
-  if (style === "long") return distance > 12 && distance < 52 && open > 2.8 && forward > -10 && opponentsBetween(player, receiver.pos, active.players, 4.8) < 3;
-  if (style === "through" || style === "low-through") return distance > 8 && distance < 42 && open > 2.4 && forward > -4 && opponentsBetween(player, receiver.pos, active.players, 3.8) < 2;
+  if (style === "short") return distance < 24 && open > 1.9 && opponentsBetween(player, receiver.pos, active.players, 2.6) < 2;
+  if (style === "long") return distance > 11 && distance < 58 && open > 2.4 && forward > -12 && opponentsBetween(player, receiver.pos, active.players, 5.4) < 3;
+  if (style === "through" || style === "low-through") return distance > 7 && distance < 45 && open > 2.1 && forward > -2 && opponentsBetween(player, receiver.pos, active.players, 4.1) < 2;
   return true;
 }
 
