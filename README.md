@@ -39,7 +39,7 @@ Player 1:
 - `Q + D` chips the ball
 - `C + S` starts a one-two pass and sends the original passer forward
 - `Q + S` sends a low through pass
-- `F` attempts a tackle when facing an opponent in possession
+- `Spacebar` attempts a tackle or press when defending
 - `Left Shift` sprints
 
 Player 2 in Local 1v1 Team Mode:

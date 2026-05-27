@@ -1836,7 +1836,7 @@ function updateMatch(
   } else {
     const actor = active.restartActorId ? active.players.find((player) => player.id === active.restartActorId) : null;
     const actorNeedsSpot = active.phase === "throw-in" || active.phase === "kickoff" || active.phase === "goal-kick";
-    const readyDistance = active.phase === "throw-in" ? 3.2 : 1.95;
+    const readyDistance = active.phase === "throw-in" ? 3.2 : active.phase === "goal-kick" ? 2.1 : 1.95;
     const actorReady = !actorNeedsSpot || Boolean(actor && actor.pos.distanceTo(active.restartSpot) < readyDistance);
     active.phaseTimer = Math.max(0, active.phaseTimer - dt * (actorReady ? 1 : 0.42));
     if (active.phaseTimer <= 0) resumeRestart(active);
@@ -1897,7 +1897,7 @@ function updateMatch(
     encourageAiFinishing(active);
     createLateAiChance(active);
     handleAction(p2, keys.has("Enter") || keys.has("ShiftRight"), active);
-    if (keys.has("KeyF") && p1) attemptTackle(p1, active);
+    if (keys.has("Space") && p1) attemptTackle(p1, active);
     if ((keys.has("Period") || keys.has("Numpad0")) && p2) attemptTackle(p2, active);
     keepIdleControlledPossessionMoving(p1, keys, active);
   }
@@ -2271,13 +2271,19 @@ function resumeRestart(active: MatchRuntime) {
   if (restartingPhase === "goal-kick" && actor) {
     actor.heading = headingFromDirection(active.restartDirection);
     actor.mesh.rotation.y = actor.heading;
-    active.ballPos.copy(active.restartSpot).setY(BALL_RADIUS);
+    const keeperSpot = active.restartSpot.clone().sub(active.restartDirection.clone().multiplyScalar(1.85)).setY(0);
+    actor.pos.copy(keeperSpot);
+    actor.vel.set(0, 0, 0);
+    actor.mesh.position.copy(actor.pos);
+    active.ballPos.copy(actor.pos).add(active.restartDirection.clone().multiplyScalar(2.4)).setY(BALL_RADIUS);
   }
   const power = restartingPhase === "corner" ? 12 : restartingPhase === "goal-kick" ? 39 : restartingPhase === "throw-in" ? 9.2 : restartingPhase === "penalty" ? 18 : restartingPhase === "free-kick" ? 11 : 4.2;
       const releasePoint = active.phase === "throw-in" && actor
     ? throwInHandPoint(actor, active.restartDirection).add(active.restartDirection.clone().multiplyScalar(0.38))
     : restartingPhase === "goal-kick"
-      ? active.restartSpot.clone().add(active.restartDirection.clone().multiplyScalar(2.35)).setY(BALL_RADIUS)
+      ? (actor
+        ? actor.pos.clone().add(active.restartDirection.clone().multiplyScalar(2.65)).setY(BALL_RADIUS)
+        : active.restartSpot.clone().add(active.restartDirection.clone().multiplyScalar(3.3)).setY(BALL_RADIUS))
       : active.restartSpot;
   active.ballPos.copy(releasePoint);
   active.ballVel.copy(active.restartDirection).multiplyScalar(power);
@@ -2288,7 +2294,7 @@ function resumeRestart(active: MatchRuntime) {
   active.ballState = "kicked";
   active.ballOwnerId = null;
   active.ballIgnorePlayerId = actor?.id ?? null;
-  active.ballIgnoreTimer = restartingPhase === "goal-kick" ? 2.4 : restartingPhase === "throw-in" ? 0.52 : restartingPhase === "penalty" ? 0.72 : 0.34;
+  active.ballIgnoreTimer = restartingPhase === "goal-kick" ? 2.8 : restartingPhase === "throw-in" ? 0.52 : restartingPhase === "penalty" ? 0.72 : 0.34;
   if (restartingPhase === "goal-kick") {
     active.restartProtectionTeam = active.restartTeam;
     active.restartProtectionTimer = 2.2;
@@ -2307,6 +2313,8 @@ function resumeRestart(active: MatchRuntime) {
     if (restartingPhase === "goal-kick") {
       actor.catchTimer = 0;
       actor.recoveryTimer = 0.12;
+      actor.heading = headingFromDirection(active.restartDirection);
+      actor.mesh.rotation.y = actor.heading;
     }
   }
   if (restartingPhase === "kickoff" && actor) {
@@ -2323,7 +2331,7 @@ function restartShapeInput(player: PlayerBody, active: MatchRuntime) {
   if (player.id === active.restartActorId) {
     target.copy(active.restartSpot);
     if (active.phase === "goal-kick") {
-      target.sub(active.restartDirection.clone().multiplyScalar(1.08));
+      target.sub(active.restartDirection.clone().multiplyScalar(1.75));
     }
     target.z = clamp(target.z, -GOAL_BACK_Z + 2, GOAL_BACK_Z - 2);
     if (active.phase === "throw-in") target.x = Math.sign(active.restartSpot.x || 1) * (FIELD_W / 2 - 2.1);
@@ -2501,18 +2509,18 @@ function handleGoalkeeperActions(active: MatchRuntime) {
         const timeToGoal = Math.abs((ownZ - active.ballPos.z) / (active.ballVel.z || Math.sign(ownZ - active.ballPos.z) * 0.1));
         const predictedX = clamp(active.ballPos.x + active.ballVel.x * clamp(timeToGoal, 0, 0.62), -GOAL_W / 2 + 0.65, GOAL_W / 2 - 0.65);
         const lateralGap = predictedX - keeper.pos.x;
-        const canDive = Math.abs(lateralGap) < 2.65 && Math.abs(active.ballPos.z - ownZ) < 11.5;
-        const wellPositioned = Math.abs(lateralGap) < 1.05 && Math.abs(active.ballPos.z - ownZ) < 9.8;
+        const canDive = Math.abs(lateralGap) < 3.35 && Math.abs(active.ballPos.z - ownZ) < 13.8;
+        const wellPositioned = Math.abs(lateralGap) < 1.12 && Math.abs(active.ballPos.z - ownZ) < 10.8;
         if (canDive && keeper.diveTimer <= 0.05) {
           keeper.diveSide = Math.sign(lateralGap || keeper.diveSide || 1);
           keeper.diveTimer = 0.7;
           keeper.recoveryTimer = Math.max(keeper.recoveryTimer, 0.28);
-          keeper.vel.x = clamp(keeper.vel.x + keeper.diveSide * clamp(Math.abs(lateralGap) * 1.15, 0.8, 2.25), -4.2, 4.2);
-          keeper.pos.x = clamp(keeper.pos.x + keeper.diveSide * clamp(Math.abs(lateralGap) * 0.12, 0.08, 0.28), -GOAL_W / 2 + 0.8, GOAL_W / 2 - 0.8);
+          keeper.vel.x = clamp(keeper.vel.x + keeper.diveSide * clamp(Math.abs(lateralGap) * 1.28, 1, 2.85), -4.8, 4.8);
+          keeper.pos.x = clamp(keeper.pos.x + keeper.diveSide * clamp(Math.abs(lateralGap) * 0.14, 0.1, 0.34), -GOAL_W / 2 + 0.8, GOAL_W / 2 - 0.8);
         }
         const handContact = active.ballPos.distanceTo(keeperHandPoint(keeper)) < 1.1;
         const bodyContact = keeper.pos.distanceTo(flatBall) < 1.35 && active.ballPos.y < 2.15;
-        const divingContact = keeper.diveTimer > 0 && Math.abs(active.ballPos.x - keeper.pos.x) < 1.75 && Math.abs(active.ballPos.z - keeper.pos.z) < 1.25 && active.ballPos.y < 2.45;
+        const divingContact = keeper.diveTimer > 0 && Math.abs(active.ballPos.x - keeper.pos.x) < 1.95 && Math.abs(active.ballPos.z - keeper.pos.z) < 1.32 && active.ballPos.y < 2.48;
         if (!handContact && !bodyContact && !divingContact) return;
         keeper.diveSide = Math.sign(lateralGap || keeper.diveSide || 1);
         keeper.catchTimer = 0.46;
@@ -2857,6 +2865,9 @@ function playerInput(keys: Set<string>, player: "p1" | "p2", firstPersonMode = f
         const forward = forwardFromHeading(firstPersonYaw);
         const right = new THREE.Vector3(forward.z, 0, -forward.x);
         virtualDir.copy(right.multiplyScalar(virtualControls.dir.x).add(forward.multiplyScalar(-virtualControls.dir.z)));
+      } else {
+        const axis = cameraRelativeAxis(camera);
+        virtualDir.copy(axis.right.multiplyScalar(virtualControls.dir.x).add(axis.up.multiplyScalar(-virtualControls.dir.z)));
       }
       return {
         dir: virtualDir.lengthSq() > 0 ? virtualDir.normalize() : virtualDir,
@@ -2927,6 +2938,11 @@ function aiInput(player: PlayerBody, active: MatchRuntime) {
       }
       if (player.line === "midfielder") target.z += attackSign * Math.sin(active.gameClock * 0.08 + player.number) * 4.8;
     }
+    if (player.line === "defender") {
+      const upfieldProgress = clamp((active.ballPos.z - ownZ) * attackSign, 0, 54);
+      target.z += attackSign * clamp(5 + upfieldProgress * 0.16, 5, 13);
+      target.x = target.x * 0.76 + (player.home.x + weakSide * 1.8) * 0.24;
+    }
   } else if (isPressing && (opponentHasBall || distanceToBall < 18)) {
     target.copy(pressingTarget(player, active));
     target.x += Math.sign(player.home.x || player.pos.x || 1) * 1.4;
@@ -2941,6 +2957,13 @@ function aiInput(player: PlayerBody, active: MatchRuntime) {
     const influence = formationBallInfluence(player, phase);
     const coverTarget = opponentHasBall ? defensiveCoverTarget(player, active) : flatBall;
     target.lerp(coverTarget, influence);
+    if (player.line === "defender" && opponentHasBall) {
+      const ballAwayFromOwnGoal = clamp((active.ballPos.z - ownZ) * attackSign, 0, 48);
+      if (ballAwayFromOwnGoal > 16) {
+        const pushedLine = ownZ + attackSign * clamp(12 + ballAwayFromOwnGoal * 0.34, 12, 30);
+        target.z = target.z * 0.55 + pushedLine * 0.45;
+      }
+    }
     if (!opponentHasBall && !active.ballOwnerId && distanceToBall < (player.line === "forward" ? 20 : 16)) {
       target.lerp(flatBall, 0.34);
     }
@@ -2991,6 +3014,15 @@ function aiInput(player: PlayerBody, active: MatchRuntime) {
       && Math.abs(player.pos.x) < GOAL_W * 2.35
       && blockers <= (goalDistance < 24 ? 3 : 2)
       && opponentPressure(player, active.players, 4.4) < 5;
+    const opponentKeeper = active.players.find((item) => item.team === opponent(player.team) && item.role === "keeper");
+    const keeperPoorPosition = Boolean(opponentKeeper && Math.abs(opponentKeeper.pos.x - player.pos.x * 0.18) > 2.7);
+    const midRangeShot = player.role !== "keeper"
+      && goalDistance >= 24
+      && goalDistance < 48
+      && Math.abs(player.pos.x) < GOAL_W * 2.15
+      && blockers <= 1
+      && opponentPressure(player, active.players, 5.4) < 3
+      && (keeperPoorPosition || nearestOpponentDistance(player, active.players) > 5.8);
     if (player.decisionCooldown <= 0) {
       let acted = false;
       const ownGoalDistance = Math.abs(teamGoalZ(player.team, active.half) - player.pos.z);
@@ -3011,8 +3043,11 @@ function aiInput(player: PlayerBody, active: MatchRuntime) {
         acted = beginAiSkillMove(player, active, goalDistance, pressured, blockers);
         if (acted) return { dir: aiSkillDirection(player, active), sprint: true, speedScale: 0.92 };
       }
+      if (!acted && midRangeShot && player.carryTimer > 0.72) {
+        acted = shoot(player, active, "shot", keeperPoorPosition ? 1.52 : 1.35);
+      }
       if (!acted && (shootingLane || closeShootingChance) && player.carryTimer > (goalDistance < 22 ? 0.38 : 0.58)) {
-        acted = shoot(player, active, chooseAiShotStyle(player, active, goalDistance, blockers));
+        acted = shoot(player, active, chooseAiShotStyle(player, active, goalDistance, blockers), goalDistance > 30 ? 1.24 : 1);
       }
       if (!acted && passOpportunity) {
         acted = performPass(player, active, passStyle);
@@ -3406,9 +3441,12 @@ function takePossession(player: PlayerBody, active: MatchRuntime) {
 
 function canControlBall(player: PlayerBody, active: MatchRuntime) {
   if (active.ballOwnerId || active.phase !== "open") return false;
-  if (player.id === active.ballIgnorePlayerId && active.ballIgnoreTimer > 0) return false;
   const flatBall = new THREE.Vector3(active.ballPos.x, 0, active.ballPos.z);
-  if (player.id === active.ballIgnorePlayerId && active.ballState === "kicked" && player.pos.distanceTo(flatBall) < PLAYER_RADIUS + BALL_RADIUS + 1.25) return false;
+  if (player.id === active.ballIgnorePlayerId) {
+    const ignoreDistance = player.pos.distanceTo(flatBall);
+    if (active.ballIgnoreTimer > 0 || (active.ballState === "kicked" && ignoreDistance < PLAYER_RADIUS + BALL_RADIUS + 1.25)) return false;
+    active.ballIgnorePlayerId = null;
+  }
   if (active.restartProtectionTimer > 0 && active.restartProtectionTeam && player.team !== active.restartProtectionTeam) return false;
   const controlRange = active.ballState === "kicked" ? CONTROL_TOUCH_DISTANCE : CONTROL_TOUCH_DISTANCE + 0.32;
   const speedLimit = active.ballState === "kicked" ? (player.role === "keeper" ? 10.5 : 15.2) : 10.2;
@@ -3454,7 +3492,7 @@ function kickTowardPoint(player: PlayerBody, target: THREE.Vector3, active: Matc
   active.ballPos.y = BALL_RADIUS;
   active.ballVel.copy(direction.normalize().multiplyScalar(power)).add(player.vel.clone().multiplyScalar(style === "driven" ? 0.06 : 0.12));
   active.ballVel.y = ballLiftForKick(style, distance);
-  if (style === "shot") active.ballVel.y = clamp(active.ballVel.y + Math.max(0, powerScale - 0.9) * 3.2, 3.2, 8.2);
+  if (style === "shot") active.ballVel.y = clamp(active.ballVel.y + Math.max(0, powerScale - 0.9) * 4.15, 3.4, 9.7);
   if (style === "finesse") active.ballVel.y = clamp(active.ballVel.y + Math.max(0, powerScale - 0.86) * 1.8, 2.4, 5.6);
   if (style === "driven") active.ballVel.y = Math.min(active.ballVel.y, 0.65);
   capBallVelocity(active.ballVel);
