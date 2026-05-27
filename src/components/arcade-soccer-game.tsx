@@ -116,6 +116,9 @@ type MatchRuntime = {
   ballIgnoreTimer: number;
   pendingKickTarget: THREE.Vector3 | null;
   lastShotTap: number;
+  shotCharge: number;
+  shotChargingPlayerId: string | null;
+  shotConsumed: boolean;
   tackleLockTimer: number;
   audio: AudioContext | null;
   lastKickSound: number;
@@ -435,7 +438,7 @@ function makeHumanFigure({
   if (accent) {
     const marker = new THREE.Mesh(
       new THREE.TorusGeometry(1.08, 0.05, 8, 32),
-      new THREE.MeshBasicMaterial({ color: accent }),
+      new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.95 }),
     );
     marker.rotation.x = Math.PI / 2;
     marker.position.y = 0.08;
@@ -445,19 +448,14 @@ function makeHumanFigure({
     const aimArrow = new THREE.Group();
     aimArrow.name = "aim-arrow";
     aimArrow.visible = false;
-    const shaft = new THREE.Mesh(
-      new THREE.BoxGeometry(0.14, 0.07, 1.05),
-      new THREE.MeshBasicMaterial({ color: "#bef264", transparent: true, opacity: 0.86 }),
-    );
-    shaft.position.z = 0.46;
     const head = new THREE.Mesh(
-      new THREE.ConeGeometry(0.28, 0.56, 3),
-      new THREE.MeshBasicMaterial({ color: "#22d3ee", transparent: true, opacity: 0.92 }),
+      new THREE.ConeGeometry(0.2, 0.42, 3),
+      new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.96 }),
     );
-    head.position.z = 1.16;
+    head.position.z = 1.12;
     head.rotation.x = Math.PI / 2;
-    aimArrow.position.y = 3.08;
-    aimArrow.add(shaft, head);
+    aimArrow.position.y = 0.13;
+    aimArrow.add(head);
     group.add(aimArrow);
   }
   return group;
@@ -976,7 +974,6 @@ export function ArcadeSoccerGame() {
   const [matchState, setMatchState] = useState<MatchState>("menu");
   const [score, setScore] = useState({ home: 0, away: 0 });
   const [gameClock, setGameClock] = useState(0);
-  const [eventText, setEventText] = useState("Kickoff");
   const [cardNotice, setCardNotice] = useState("");
   const [leaderboard, setLeaderboard] = useState<ScoreRow[]>([]);
   const [nickname, setNickname] = useState("");
@@ -985,6 +982,7 @@ export function ArcadeSoccerGame() {
   const [authStatus, setAuthStatus] = useState("");
   const [firstPerson, setFirstPerson] = useState(false);
   const [showTouchControls, setShowTouchControls] = useState(false);
+  const [shotChargeUi, setShotChargeUi] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [joystickKnob, setJoystickKnob] = useState({ x: 0, y: 0 });
   const firstPersonRef = useRef(false);
@@ -1120,6 +1118,9 @@ export function ArcadeSoccerGame() {
     active.restartProtectionTimer = 0;
     active.pendingKickTarget = null;
     active.lastShotTap = 0;
+    active.shotCharge = 0;
+    active.shotChargingPlayerId = null;
+    active.shotConsumed = false;
     active.tackleLockTimer = 0;
     active.lastTouchTeam = servingTeam;
     active.lastTouchPlayerId = null;
@@ -1178,7 +1179,6 @@ export function ArcadeSoccerGame() {
     setMode(nextMode);
     setScore({ home: 0, away: 0 });
     setGameClock(0);
-    setEventText("KICKOFF");
     setSaveStatus("");
     resetPositions("home");
     active.restartActorId = kickoffTaker(active.players, "home", active.restartSpot)?.id ?? null;
@@ -1386,6 +1386,9 @@ export function ArcadeSoccerGame() {
       ballIgnoreTimer: 0,
       pendingKickTarget: null,
       lastShotTap: 0,
+      shotCharge: 0,
+      shotChargingPlayerId: null,
+      shotConsumed: false,
       tackleLockTimer: 0,
       audio: null,
       lastKickSound: 0,
@@ -1421,7 +1424,7 @@ export function ArcadeSoccerGame() {
         animateCrowd(active, dt);
         setScore({ ...active.score });
         setGameClock(active.gameClock);
-        setEventText(active.eventText);
+        setShotChargeUi(active.shotChargingPlayerId ? active.shotCharge : 0);
         setCardNotice(active.cardTimer > 0 ? active.cardNotice : "");
         if (active.frame % 8 === 0) {
           active.stadiumBoards.forEach((board) => drawStadiumScoreboard(board, active.score, active.gameClock, active.eventText));
@@ -1447,8 +1450,8 @@ export function ArcadeSoccerGame() {
         const playerFocus = controlledFocus?.pos ?? active.ballPos;
         const blendedFocus = active.ballPos.clone().lerp(playerFocus, active.mode === "local" ? 0.18 : 0.24);
         const desired = new THREE.Vector3(
-          -FIELD_W / 2 - 46,
-          45,
+          -FIELD_W / 2 - 32,
+          34,
           blendedFocus.z + 5,
         );
         desired.z = clamp(desired.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
@@ -1494,11 +1497,23 @@ export function ArcadeSoccerGame() {
           return;
         }
         const p1 = active.players.find((player) => player.controlledBy === "p1");
+        if (event.code === "KeyD" && p1) {
+          beginShotCharge(p1, active, keysRef.current);
+          event.preventDefault();
+          return;
+        }
         if (p1) handleFifaActionKey(p1, event.code, keysRef.current, active);
       }
       if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "KeyA", "KeyD", "KeyE", "KeyS", "KeyW"].includes(event.code)) event.preventDefault();
     };
-    const up = (event: KeyboardEvent) => keysRef.current.delete(event.code);
+    const up = (event: KeyboardEvent) => {
+      const active = sceneRef.current;
+      if (event.code === "KeyD" && active?.state === "playing") {
+        releaseShotCharge(active, keysRef.current);
+        event.preventDefault();
+      }
+      keysRef.current.delete(event.code);
+    };
     window.addEventListener("keydown", down, { passive: false });
     window.addEventListener("keyup", up);
     return () => {
@@ -1515,11 +1530,17 @@ export function ArcadeSoccerGame() {
           <div>
             <h1 className="text-2xl font-black tracking-normal sm:text-4xl">Fifa Online</h1>
             <p className="mt-1 text-sm text-emerald-100/70">11v11 arcade soccer · one active player · AI teammates</p>
+            {matchState === "playing" && (
+              <div className="mt-3 inline-flex items-center rounded-md border border-white/15 bg-black/55 px-3 py-2 text-sm font-black text-white shadow-2xl backdrop-blur">
+                <span className="text-cyan-100">Home</span>
+                <span className="mx-2 font-mono text-lg">{score.home} - {score.away}</span>
+                <span className="text-rose-100">Away</span>
+                <span className="mx-2 text-white/35">|</span>
+                <span className="font-mono text-emerald-100">{formatSoccerClock(gameClock)}</span>
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap justify-end gap-2">
-            <Metric label="Home" value={score.home} color="text-cyan-200" />
-            <Metric label="Match" value={formatSoccerClock(gameClock)} />
-            <Metric label="Away" value={score.away} color="text-rose-200" />
             {!showTouchControls && (
               <button
                 className={`pointer-events-auto rounded-md border px-3 py-2 text-xs font-bold shadow-2xl backdrop-blur transition ${
@@ -1552,14 +1573,15 @@ export function ArcadeSoccerGame() {
             </div>
           </div>
         </div>
-        {matchState === "playing" && (
-          <div className="mx-auto mb-4 rounded-md border border-white/10 bg-black/45 px-4 py-2 text-center text-xs text-emerald-50/80 shadow-2xl backdrop-blur">
-            <span className="font-bold text-white">{eventText}</span>
-            <span className="mx-2 text-white/35">·</span>
-            P1 arrows move · S/A/W pass · D shoot · Z/Q/C modifiers · F tackle · Local P2 IJKL
-          </div>
-        )}
+        <div />
       </section>
+      {matchState === "playing" && shotChargeUi > 0 && (
+        <div className="pointer-events-none absolute bottom-24 left-1/2 z-20 w-48 -translate-x-1/2 rounded-full border border-white/25 bg-black/55 p-1 shadow-2xl backdrop-blur">
+          <div className="h-3 rounded-full bg-white/12">
+            <div className="h-full rounded-full bg-lime-300 transition-[width]" style={{ width: `${Math.round(clamp(shotChargeUi, 0, 1) * 100)}%` }} />
+          </div>
+        </div>
+      )}
       {matchState === "playing" && !showTouchControls && (
         <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-between px-4 sm:px-6">
           <button
@@ -1664,13 +1686,6 @@ export function ArcadeSoccerGame() {
           >
             {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
           </button>
-        </div>
-      )}
-      {matchState === "playing" && eventText !== "PLAY" && (
-        <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
-          <div className="rounded-md border border-white/15 bg-black/55 px-6 py-3 text-2xl font-black tracking-normal text-white shadow-2xl backdrop-blur">
-            {eventText}
-          </div>
         </div>
       )}
       {matchState === "playing" && cardNotice ? (
@@ -1787,6 +1802,16 @@ function updateMatch(
   active.offsideFlagTimer = Math.max(0, active.offsideFlagTimer - dt);
   active.aiChanceCooldown = Math.max(0, active.aiChanceCooldown - dt);
   active.restartProtectionTimer = Math.max(0, active.restartProtectionTimer - dt);
+  if (active.shotChargingPlayerId) {
+    const chargingPlayer = active.players.find((player) => player.id === active.shotChargingPlayerId);
+    if (!chargingPlayer || active.phase !== "open" || active.ballOwnerId !== chargingPlayer.id || !keys.has("KeyD")) {
+      active.shotCharge = 0;
+      active.shotChargingPlayerId = null;
+      active.shotConsumed = false;
+    } else {
+      active.shotCharge = clamp(active.shotCharge + dt * 1.15, 0, 1);
+    }
+  }
   if (active.restartProtectionTimer === 0) active.restartProtectionTeam = null;
   if (active.phase === "open" && active.eventTimer > 0) {
     active.eventTimer = Math.max(0, active.eventTimer - dt);
@@ -1820,7 +1845,7 @@ function updateMatch(
     }
     const input: PlayerInputState = active.phase === "open"
       ? player.controlledBy === "p1"
-        ? playerInput(keys, "p1", firstPersonMode, firstPersonYaw?.current ?? player.heading, virtualControls)
+        ? playerInput(keys, "p1", firstPersonMode, firstPersonYaw?.current ?? player.heading, virtualControls, active.camera)
         : player.controlledBy === "p2"
           ? playerInput(keys, "p2")
           : aiInput(player, active)
@@ -2043,8 +2068,8 @@ function createLateAiChance(active: MatchRuntime) {
   active.lastTouchPlayerId = candidate.id;
   candidate.kickTimer = 0.42;
   candidate.actionCooldown = 0.6;
-  active.eventText = `${candidate.team.toUpperCase()} SHOT`;
-  active.eventTimer = 0.6;
+  active.eventText = "PLAY";
+  active.eventTimer = 0;
   playKickSound(active, 0.76);
   active.aiChanceCooldown = 5.8;
 }
@@ -2477,8 +2502,8 @@ function handleGoalkeeperActions(active: MatchRuntime) {
         active.ballIgnoreTimer = 0.24;
         active.lastTouchTeam = keeper.team;
         active.lastTouchPlayerId = keeper.id;
-        active.eventText = `${keeper.team.toUpperCase()} SAVE`;
-        active.eventTimer = 0.7;
+        active.eventText = "PLAY";
+        active.eventTimer = 0;
         return;
       }
       if (!closeEnough) return;
@@ -2487,8 +2512,8 @@ function handleGoalkeeperActions(active: MatchRuntime) {
       takePossession(keeper, active);
       active.ballPos.copy(keeperHandPoint(keeper));
       active.ballVel.set(0, 0, 0);
-      active.eventText = `${keeper.team.toUpperCase()} KEEPER`;
-      active.eventTimer = 0.8;
+      active.eventText = "PLAY";
+      active.eventTimer = 0;
       active.cooldown = Math.max(active.cooldown, 0.24);
     });
 }
@@ -2755,13 +2780,13 @@ function playKickSound(active: MatchRuntime, volume = 0.35) {
     data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / samples, 2.4);
   }
   filter.type = "bandpass";
-  filter.frequency.setValueAtTime(170 * variation, start);
-  filter.Q.setValueAtTime(1.1, start);
+  filter.frequency.setValueAtTime(210 * variation, start);
+  filter.Q.setValueAtTime(1.35, start);
   thump.type = "triangle";
   thump.frequency.setValueAtTime(86 * variation, start);
   thump.frequency.exponentialRampToValueAtTime(52 * variation, start + 0.075);
   gain.gain.setValueAtTime(0.0001, start);
-  gain.gain.exponentialRampToValueAtTime(clamp(volume, 0.2, 0.8) * 0.18, start + 0.006);
+  gain.gain.exponentialRampToValueAtTime(clamp(volume, 0.24, 0.98) * 0.25, start + 0.006);
   gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.11);
   noise.buffer = buffer;
   noise.connect(filter);
@@ -2782,7 +2807,21 @@ function playGoalSound(active: MatchRuntime) {
   window.setTimeout(() => playTone(active, 523, 0.22, 0.022, "sine"), 90);
 }
 
-function playerInput(keys: Set<string>, player: "p1" | "p2", firstPersonMode = false, firstPersonYaw = 0, virtualControls?: VirtualControls): PlayerInputState {
+function cameraRelativeAxis(camera?: THREE.PerspectiveCamera) {
+  if (!camera) {
+    return {
+      up: new THREE.Vector3(0, 0, -1),
+      right: new THREE.Vector3(1, 0, 0),
+    };
+  }
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).setY(0);
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).setY(0);
+  if (up.lengthSq() < 0.01) up.set(0, 0, -1);
+  if (right.lengthSq() < 0.01) right.set(1, 0, 0);
+  return { up: up.normalize(), right: right.normalize() };
+}
+
+function playerInput(keys: Set<string>, player: "p1" | "p2", firstPersonMode = false, firstPersonYaw = 0, virtualControls?: VirtualControls, camera?: THREE.PerspectiveCamera): PlayerInputState {
   const dir = new THREE.Vector3();
   if (player === "p1") {
     if (virtualControls && virtualControls.strength > 0.04) {
@@ -2804,10 +2843,11 @@ function playerInput(keys: Set<string>, player: "p1" | "p2", firstPersonMode = f
       if (keys.has("ArrowDown")) dir.sub(forward);
       return { dir: dir.lengthSq() > 0 ? dir.normalize() : dir, sprint: keys.has("ShiftLeft"), speedScale: 1 };
     }
-    if (keys.has("ArrowUp")) dir.z -= 1;
-    if (keys.has("ArrowDown")) dir.z += 1;
-    if (keys.has("ArrowLeft")) dir.x -= 1;
-    if (keys.has("ArrowRight")) dir.x += 1;
+    const axis = cameraRelativeAxis(camera);
+    if (keys.has("ArrowUp")) dir.add(axis.up);
+    if (keys.has("ArrowDown")) dir.sub(axis.up);
+    if (keys.has("ArrowLeft")) dir.sub(axis.right);
+    if (keys.has("ArrowRight")) dir.add(axis.right);
     return { dir: dir.lengthSq() > 0 ? dir.normalize() : dir, sprint: keys.has("ShiftLeft"), speedScale: 1 };
   }
   if (keys.has("KeyI")) dir.z += 1;
@@ -2991,8 +3031,6 @@ function beginAiSkillMove(player: PlayerBody, active: MatchRuntime, goalDistance
   player.skillCooldown = 2.1 + (player.number % 4) * 0.35;
   player.decisionCooldown = 0.24;
   if (player.skillMove === "shot-fake" || player.skillMove === "fake-pass") player.kickTimer = Math.max(player.kickTimer, 0.22);
-  active.eventText = player.skillMove === "shot-fake" ? "SHOT FAKE" : player.skillMove === "fake-pass" ? "FAKE PASS" : "SKILL MOVE";
-  active.eventTimer = 0.42;
   return true;
 }
 
@@ -3204,10 +3242,11 @@ function currentAimDirection(player: PlayerBody, active: MatchRuntime, keys?: Se
   }
   const keyboardDir = new THREE.Vector3();
   if (keys) {
-    if (keys.has("ArrowUp")) keyboardDir.z -= 1;
-    if (keys.has("ArrowDown")) keyboardDir.z += 1;
-    if (keys.has("ArrowLeft")) keyboardDir.x -= 1;
-    if (keys.has("ArrowRight")) keyboardDir.x += 1;
+    const axis = cameraRelativeAxis(active.camera);
+    if (keys.has("ArrowUp")) keyboardDir.add(axis.up);
+    if (keys.has("ArrowDown")) keyboardDir.sub(axis.up);
+    if (keys.has("ArrowLeft")) keyboardDir.sub(axis.right);
+    if (keys.has("ArrowRight")) keyboardDir.add(axis.right);
   }
   if (keyboardDir.lengthSq() > 0.02) return keyboardDir.normalize();
   return facingDirection(player);
@@ -3222,8 +3261,49 @@ function updateAimIndicators(active: MatchRuntime, keys: Set<string>) {
     if (!visible) return;
     const aim = currentAimDirection(player, active, keys);
     arrow.rotation.y = headingFromDirection(aim) - player.heading;
-    arrow.position.y = 3.04 + Math.sin(active.gameClock * 0.12) * 0.05;
+    arrow.position.y = 0.13;
   });
+}
+
+function beginShotCharge(player: PlayerBody, active: MatchRuntime, keys: Set<string>) {
+  if (active.phase !== "open") return false;
+  const now = performance.now();
+  const doubleTap = now - active.lastShotTap <= SHOT_DOUBLE_TAP_MS;
+  active.lastShotTap = now;
+  if (doubleTap) {
+    active.shotCharge = 0;
+    active.shotChargingPlayerId = null;
+    active.shotConsumed = true;
+    player.actionCooldown = 0;
+    player.kickTimer = 0;
+    return shoot(player, active, keys.has("KeyZ") ? "finesse" : "driven", 1.04);
+  }
+  if (player.actionCooldown > 0 || player.kickTimer > 0.05) return false;
+  if (active.ballOwnerId !== player.id) return false;
+  active.shotCharge = 0.08;
+  active.shotChargingPlayerId = player.id;
+  active.shotConsumed = false;
+  return true;
+}
+
+function releaseShotCharge(active: MatchRuntime, keys: Set<string>) {
+  const player = active.shotChargingPlayerId
+    ? active.players.find((item) => item.id === active.shotChargingPlayerId)
+    : null;
+  if (!player || active.shotConsumed || active.ballOwnerId !== player.id) {
+    active.shotCharge = 0;
+    active.shotChargingPlayerId = null;
+    active.shotConsumed = false;
+    return false;
+  }
+  const charge = clamp(active.shotCharge, 0.08, 1);
+  const style = keys.has("KeyZ") ? "finesse" : "shot";
+  const powerScale = style === "finesse" ? 0.86 + charge * 0.34 : 0.72 + charge * 0.72;
+  const kicked = shoot(player, active, style, powerScale);
+  active.shotCharge = 0;
+  active.shotChargingPlayerId = null;
+  active.shotConsumed = false;
+  return kicked;
 }
 
 function takePossession(player: PlayerBody, active: MatchRuntime) {
@@ -3256,7 +3336,7 @@ function canControlBall(player: PlayerBody, active: MatchRuntime) {
   return active.ballPos.y <= playableHeight && player.pos.distanceTo(flatBall) <= controlRange && active.ballVel.length() < speedLimit;
 }
 
-function kickTowardPoint(player: PlayerBody, target: THREE.Vector3, active: MatchRuntime, style: KickStyle = "shot", intendedReceiver?: PlayerBody) {
+function kickTowardPoint(player: PlayerBody, target: THREE.Vector3, active: MatchRuntime, style: KickStyle = "shot", intendedReceiver?: PlayerBody, powerScale = 1) {
   if (active.cooldown > 0.05) return false;
   if (player.actionCooldown > 0 || player.kickTimer > 0.05 || player.tackleTimer > 0 || player.recoveryTimer > 0) return false;
   const flatBall = new THREE.Vector3(active.ballPos.x, 0, active.ballPos.z);
@@ -3272,7 +3352,7 @@ function kickTowardPoint(player: PlayerBody, target: THREE.Vector3, active: Matc
   }
   const distance = clamp(direction.length(), 8, 70);
   const basePower = clamp(8.6 + distance * 0.24, 11.2, 24.6);
-  const power = style === "short"
+  let power = style === "short"
     ? clamp(7.1 + distance * 0.15, 8.4, 13.8)
     : style === "low-through"
       ? clamp(8 + distance * 0.17, 9.6, 15.5)
@@ -3285,6 +3365,9 @@ function kickTowardPoint(player: PlayerBody, target: THREE.Vector3, active: Matc
             : style === "finesse"
               ? clamp(basePower * 1.02, 12.4, 22.4)
               : basePower;
+  if (style === "shot" || style === "driven" || style === "finesse" || style === "chip") {
+    power = clamp(power * powerScale, style === "finesse" ? 10.5 : 12.8, style === "driven" ? 30 : 31.5);
+  }
   if (style === "finesse") direction.x += clamp(-player.pos.x * 0.18, -4.8, 4.8);
   releasePossession(active, "kicked");
   active.ballPos.copy(controlledBallPoint(player));
@@ -3299,7 +3382,7 @@ function kickTowardPoint(player: PlayerBody, target: THREE.Vector3, active: Matc
   active.lastTouchPlayerId = player.id;
   player.kickTimer = style === "long" || style === "chip" ? 0.5 : 0.42;
   player.actionCooldown = style === "short" || style === "low-through" ? ACTION_COOLDOWN : 0.34;
-  playKickSound(active, power > 12 ? 0.78 : 0.58);
+  playKickSound(active, power > 12 ? 0.95 : 0.72);
   return true;
 }
 
@@ -3356,14 +3439,6 @@ function quickKickPoint(player: PlayerBody, active: MatchRuntime) {
 }
 
 function handleFifaActionKey(player: PlayerBody, code: string, keys: Set<string>, active: MatchRuntime) {
-  if (code === "KeyZ" && keys.has("KeyD")) {
-    shoot(player, active, "finesse");
-    return;
-  }
-  if (code === "KeyQ" && keys.has("KeyD")) {
-    shoot(player, active, "chip");
-    return;
-  }
   if (code === "KeyC" && keys.has("KeyS")) {
     performPass(player, active, "short", true);
     return;
@@ -3385,16 +3460,6 @@ function handleFifaActionKey(player: PlayerBody, code: string, keys: Set<string>
   if (code === "KeyW") {
     performPass(player, active, "through");
     return;
-  }
-  if (code !== "KeyD") return;
-
-  const now = performance.now();
-  const doubleTap = now - active.lastShotTap <= SHOT_DOUBLE_TAP_MS;
-  active.lastShotTap = now;
-  if (keys.has("KeyZ")) shoot(player, active, "finesse");
-  else if (keys.has("KeyQ")) shoot(player, active, "chip");
-  else {
-    shoot(player, active, doubleTap ? "driven" : "shot");
   }
 }
 
@@ -3485,11 +3550,11 @@ function opponentsBetween(player: PlayerBody, target: THREE.Vector3, players: Pl
   }).length;
 }
 
-function shoot(player: PlayerBody, active: MatchRuntime, style: "shot" | "driven" | "finesse" | "chip") {
+function shoot(player: PlayerBody, active: MatchRuntime, style: "shot" | "driven" | "finesse" | "chip", powerScale = 1) {
   const target = quickKickPoint(player, active);
   if (style === "finesse") target.x = clamp(player.pos.x > 0 ? -GOAL_W / 2 + 2 : GOAL_W / 2 - 2, -GOAL_W / 2 + 1, GOAL_W / 2 - 1);
   if (style === "driven") target.z += Math.sign(target.z) * 1.2;
-  return kickTowardPoint(player, target, active, style);
+  return kickTowardPoint(player, target, active, style, undefined, powerScale);
 }
 
 function attemptTackle(player: PlayerBody, active: MatchRuntime) {
@@ -3615,15 +3680,6 @@ function formatSoccerClock(value: number) {
   const minutes = String(Math.floor(capped / 60)).padStart(2, "0");
   const seconds = String(capped % 60).padStart(2, "0");
   return `${minutes}:${seconds}`;
-}
-
-function Metric({ label, value, color = "text-white" }: { label: string; value: number | string; color?: string }) {
-  return (
-    <div className="min-w-20 rounded-md border border-white/10 bg-black/40 px-3 py-2 text-center shadow-2xl backdrop-blur">
-      <div className="text-[10px] uppercase text-emerald-100/60">{label}</div>
-      <div className={`font-mono text-lg font-black ${color}`}>{value}</div>
-    </div>
-  );
 }
 
 function TouchButton({
