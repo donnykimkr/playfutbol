@@ -2496,12 +2496,13 @@ function aiInput(player: PlayerBody, active: MatchRuntime) {
   const attackingZ = attackingGoalZ(player.team, active.half);
   const ownZ = teamGoalZ(player.team, active.half);
   const target = player.home.clone();
+  const attackSign = Math.sign(attackingZ);
   const owner = ballOwner(active);
   const teamHasBall = owner?.team === player.team;
   const opponentHasBall = owner?.team === opponent(player.team);
   const flatBall = new THREE.Vector3(active.ballPos.x, 0, active.ballPos.z);
   const distanceToBall = flatBall.distanceTo(player.pos);
-  const pressureIds = pressureFieldPlayers(active.players, player.team, active.ballPos, opponentHasBall ? 2 : 1);
+  const pressureIds = pressureFieldPlayers(active.players, player.team, active.ballPos, opponentHasBall ? 2 : active.ballOwnerId ? 1 : 2);
   const isPressing = pressureIds.includes(player.id);
   const closestOpponent = nearestOpponentTo(player, active.players);
 
@@ -2516,37 +2517,50 @@ function aiInput(player: PlayerBody, active: MatchRuntime) {
       target.z = clamp(active.ballPos.z, ownZ - Math.sign(ownZ) * 10, ownZ + Math.sign(ownZ) * (GOAL_DEPTH - 1.5));
     }
   } else if (teamHasBall) {
-    const attackSign = Math.sign(attackingZ);
+    const influence = formationBallInfluence(player, "attack");
     const ballLane = clamp(active.ballPos.x, -FIELD_W / 2 + 6, FIELD_W / 2 - 6);
     const weakSide = Math.sign(player.home.x || (player.number % 2 === 0 ? 1 : -1));
-    target.x = player.home.x * 0.58 + ballLane * (player.line === "forward" ? 0.26 : player.line === "midfielder" ? 0.22 : 0.12);
-    target.z = player.home.z + attackSign * (player.line === "forward" ? 18 : player.line === "midfielder" ? 9 : 3.2);
+    target.lerp(flatBall, influence);
+    target.x += weakSide * (player.line === "forward" ? 5.8 : player.line === "midfielder" ? 3.2 : 1.2);
+    target.z += attackSign * (player.line === "forward" ? 16 : player.line === "midfielder" ? 8 : 2.6);
     if (owner?.id !== player.id) {
-      const laneSeparation = weakSide * (player.line === "forward" ? 7.2 : player.line === "midfielder" ? 4.8 : 2.4);
-      target.x += laneSeparation;
+      const passAngle = player.number % 3 - 1;
+      const supportDistance = player.line === "forward" ? 15 : player.line === "midfielder" ? 11 : 7;
+      target.x = target.x * 0.52 + (ballLane + weakSide * (6.5 + Math.abs(passAngle) * 2.8)) * 0.48;
+      target.z = target.z * 0.46 + (active.ballPos.z + attackSign * supportDistance) * 0.54;
       if (player.line === "forward") {
-        const behindLine = clamp(active.ballPos.z + attackSign * (10 + (player.number % 3) * 3), -FIELD_L / 2 + 8, FIELD_L / 2 - 8);
-        target.z = Math.abs(behindLine - attackingZ) < Math.abs(target.z - attackingZ) ? behindLine : target.z;
+        const runBehind = clamp(active.ballPos.z + attackSign * (17 + (player.number % 3) * 4), -FIELD_L / 2 + 8, FIELD_L / 2 - 8);
+        target.z = Math.abs(runBehind - attackingZ) < Math.abs(target.z - attackingZ) ? runBehind : target.z;
+        target.x += weakSide * 3.4;
       }
-      if (player.line === "midfielder") target.z += attackSign * Math.sin(active.gameClock * 0.08 + player.number) * 3.4;
+      if (player.line === "midfielder") target.z += attackSign * Math.sin(active.gameClock * 0.08 + player.number) * 4.8;
     }
   } else if (isPressing && (opponentHasBall || distanceToBall < 18)) {
     target.copy(active.ballPos);
     target.z -= Math.sign(attackingZ) * 3.4;
     target.x += Math.sign(player.home.x || player.pos.x || 1) * 1.4;
   } else if (player.line === "defender" && opponentHasBall && Math.abs(active.ballPos.z - ownZ) < 34) {
-    target.x = clamp(active.ballPos.x + player.home.x * 0.15, -FIELD_W / 2 + 4, FIELD_W / 2 - 4);
-    target.z = player.home.z;
+    const blockPoint = pointBetweenBallAndGoal(active.ballPos, ownZ, player);
+    target.lerp(blockPoint, formationBallInfluence(player, "defense") + 0.16);
     if (closestOpponent && Math.abs(closestOpponent.pos.z - ownZ) < 38) {
       target.lerp(closestOpponent.pos.clone().add(new THREE.Vector3(Math.sign(player.home.x || 1) * 1.8, 0, -Math.sign(attackingZ) * 1.6)), 0.35);
     }
   } else {
-    target.x += active.ballPos.x * (player.line === "midfielder" ? 0.14 : 0.08);
-    target.z += clamp(active.ballPos.z - player.home.z, -10, 10) * (player.line === "midfielder" ? 0.22 : 0.12);
+    const phase = opponentHasBall ? "defense" : "neutral";
+    const influence = formationBallInfluence(player, phase);
+    const coverTarget = opponentHasBall ? pointBetweenBallAndGoal(active.ballPos, ownZ, player) : flatBall;
+    target.lerp(coverTarget, influence);
+    if (!opponentHasBall && !active.ballOwnerId && distanceToBall < (player.line === "forward" ? 20 : 16)) {
+      target.lerp(flatBall, 0.34);
+    }
     if (opponentHasBall && closestOpponent && player.line !== "forward") {
       target.lerp(closestOpponent.pos.clone().add(new THREE.Vector3(Math.sign(player.home.x || 1) * 2.4, 0, -Math.sign(attackingZ) * 2)), player.line === "midfielder" ? 0.22 : 0.12);
     }
   }
+  if (distanceToBall < 10 && !teamHasBall && !player.controlledBy && player.role !== "keeper") {
+    target.lerp(flatBall, isPressing ? 0.5 : 0.24);
+  }
+  addOrganicVariation(player, target, active);
   addFormationMotion(player, target, active, teamHasBall, opponentHasBall, isPressing);
   if (player.fallbackTimer > 0 && player.role !== "keeper" && owner?.id !== player.id) target.lerp(player.fallbackTarget, 0.82);
   keepFormationRoam(player, target, isPressing);
@@ -2637,6 +2651,31 @@ function clearBall(player: PlayerBody, active: MatchRuntime) {
     : (player.number % 2 === 0 ? 1 : -1) * 12;
   const target = player.pos.clone().add(new THREE.Vector3(lateral, BALL_RADIUS, attackSign * distance));
   return kickTowardPoint(player, target, active, "long");
+}
+
+function formationBallInfluence(player: PlayerBody, phase: "attack" | "defense" | "neutral") {
+  if (player.line === "defender") return phase === "attack" ? 0.16 : phase === "defense" ? 0.32 : 0.18;
+  if (player.line === "midfielder") return phase === "attack" ? 0.36 : phase === "defense" ? 0.46 : 0.3;
+  if (player.line === "forward") return phase === "attack" ? 0.52 : phase === "defense" ? 0.28 : 0.38;
+  return 0.18;
+}
+
+function pointBetweenBallAndGoal(ball: THREE.Vector3, goalZ: number, player: PlayerBody) {
+  const goal = new THREE.Vector3(clamp(ball.x * 0.35, -GOAL_W / 2, GOAL_W / 2), 0, goalZ);
+  const laneSide = Math.sign(player.home.x || (player.number % 2 === 0 ? 1 : -1));
+  return goal.lerp(new THREE.Vector3(ball.x, 0, ball.z), player.line === "defender" ? 0.42 : 0.56)
+    .add(new THREE.Vector3(laneSide * (player.line === "midfielder" ? 3.2 : 1.7), 0, 0));
+}
+
+function addOrganicVariation(player: PlayerBody, target: THREE.Vector3, active: MatchRuntime) {
+  if (player.role === "keeper") return;
+  const seed = player.number * 1.731 + (player.team === "home" ? 0 : 2.4);
+  const slow = active.gameClock * 0.026 + seed;
+  const quick = active.gameClock * 0.071 + seed * 0.7;
+  const width = player.line === "forward" ? 2.8 : player.line === "midfielder" ? 2.2 : 1.25;
+  const depth = player.line === "forward" ? 2.6 : player.line === "midfielder" ? 1.8 : 1.1;
+  target.x += Math.sin(slow) * width + Math.sin(quick) * 0.55;
+  target.z += Math.cos(slow * 0.83) * depth;
 }
 
 function addFormationMotion(player: PlayerBody, target: THREE.Vector3, active: MatchRuntime, teamHasBall: boolean, opponentHasBall: boolean, pressing: boolean) {
