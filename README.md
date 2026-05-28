@@ -1,6 +1,6 @@
 # Fifaonline Arcade Soccer
 
-Fifaonline Arcade Soccer is an ad-free 3D arcade soccer game for the browser. You control one active player while AI teammates and opponents play around you. It supports Player vs AI Team, local 1v1 Team Mode, Google login through Supabase Auth, and an optional online leaderboard.
+Fifaonline Arcade Soccer is an ad-free 3D arcade soccer game for the browser. You control one active player while AI teammates and opponents play around you. It supports Player vs AI Team, an online match-request lobby for signed-in users, Google login through Supabase Auth, and an optional online leaderboard.
 
 Use Brave Browser as the primary browser for testing and playing. Brave is fast, Chromium-based, better for privacy by default, and suitable for modern WebGL game performance.
 
@@ -12,6 +12,7 @@ Use Brave Browser as the primary browser for testing and playing. Brave is fast,
 - Tailwind CSS
 - Three.js
 - Supabase Auth and leaderboard with graceful local fallback
+- Supabase online profiles, match requests, match rooms, and realtime-ready state
 - Vercel deployment-ready
 
 ## Run Locally
@@ -42,12 +43,12 @@ Player 1:
 - `Spacebar` attempts a tackle or press when defending
 - `Left Shift` sprints
 
-Player 2 in Local 1v1 Team Mode:
+Online Multiplayer MVP:
 
-- `IJKL` move the rose player so Player 1 keeps the Arrow Keys
-- `Enter` or `Right Shift` makes a quick pass or shot
-- `.` or `Numpad 0` attempts a tackle
-- `/` or `Right Ctrl` sprints
+- Sign in with Google.
+- Create a username to get a `FO-XXXXXX` game ID.
+- Search a friend's game ID, send a match request, and accept/decline incoming requests.
+- Accepted requests create a Supabase match room and start an online 1v1 session shell. The current MVP syncs lobby/request/room state; deterministic real-time physics input sync is intentionally limited and should be expanded before competitive play.
 
 ## Environment Variables
 
@@ -68,7 +69,7 @@ Only use the Supabase anon key on the client. Do not expose service role keys.
 
 ## Supabase Setup
 
-Create a Supabase project, open the SQL editor, and run the SQL below. The same SQL is saved in `supabase/leaderboard.sql`.
+Create a Supabase project, open the SQL editor, and run the full SQL saved in `supabase/leaderboard.sql`. The excerpt below shows the leaderboard core; the file also includes the exact online multiplayer tables, RLS policies, and realtime publication setup.
 
 ```sql
 create extension if not exists pgcrypto;
@@ -143,6 +144,13 @@ on leaderboard (score desc, created_at asc);
 
 The app validates nicknames as 2-16 characters and only submits positive integer scores. Guests can play, but only authenticated users can upload online scores.
 
+The SQL file also creates:
+
+- `profiles` for usernames and game IDs
+- `match_requests` for friend challenges
+- `matches` for accepted online rooms and realtime-ready JSON match state
+- RLS policies so authenticated users can only create/update their own profile, their own requests, and rooms they participate in
+
 ## Google OAuth Setup
 
 1. In Supabase, go to Authentication -> Providers.
@@ -188,12 +196,14 @@ Use Brave Browser for the primary test pass.
 
 1. Open `http://localhost:3000` in Brave Browser.
 2. Test Player vs AI Team: kickoff, movement, shooting, scoring, kickoff reset, timer, and end screen.
-3. Test Local 1v1 Team Mode: Player 1 and Player 2 movement, action buttons, scoring, and timer.
-4. Confirm Guest mode can play without crashing and cannot upload an online score.
-5. Sign in with Google through Supabase Auth.
-6. Confirm the signed-in display name or email appears.
-7. Save a Player vs AI score and confirm it appears in the leaderboard.
-8. Use the logout button and confirm the UI returns to Guest mode.
+3. Confirm Guest mode can play without crashing and cannot upload an online score.
+4. Sign in with Google through Supabase Auth.
+5. Confirm the signed-in display name or email appears.
+6. Create an online username/game ID.
+7. Send and accept a match request from another signed-in account.
+8. Confirm an online room appears and can start the match shell.
+9. Save a Player vs AI score and confirm it appears in the leaderboard.
+10. Use the logout button and confirm the UI returns to Guest mode.
 
 ## Deploy On Vercel
 
