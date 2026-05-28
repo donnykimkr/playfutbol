@@ -150,6 +150,8 @@ type MatchRuntime = {
   aiChanceCooldown: number;
   restartProtectionTeam: TeamId | null;
   restartProtectionTimer: number;
+  goalKickLockPlayerId: string | null;
+  goalKickLockTimer: number;
 };
 
 type StadiumScoreboard = {
@@ -228,6 +230,15 @@ function attackingGoalZ(team: TeamId, half: 1 | 2) {
 function upfieldKickDirection(team: TeamId, half: 1 | 2) {
   const z = Math.sign(attackingGoalZ(team, half)) || 1;
   return new THREE.Vector3(0, 0, z);
+}
+
+function goalKickKeeperSpot(team: TeamId, half: 1 | 2) {
+  const goalZ = teamGoalZ(team, half);
+  return new THREE.Vector3(0, 0, goalZ - Math.sign(goalZ) * 5.2);
+}
+
+function goalKickBallSpot(keeper: PlayerBody, direction: THREE.Vector3) {
+  return keeper.pos.clone().add(direction.clone().multiplyScalar(4.35)).setY(BALL_RADIUS);
 }
 
 function teamSide(team: TeamId, half: 1 | 2) {
@@ -1197,6 +1208,8 @@ export function ArcadeSoccerGame() {
     active.ballIgnoreTimer = 0;
     active.restartProtectionTeam = null;
     active.restartProtectionTimer = 0;
+    active.goalKickLockPlayerId = null;
+    active.goalKickLockTimer = 0;
     active.pendingKickTarget = null;
     active.lastShotTap = 0;
     active.shotCharge = 0;
@@ -1565,6 +1578,8 @@ export function ArcadeSoccerGame() {
       aiChanceCooldown: 0,
       restartProtectionTeam: null,
       restartProtectionTimer: 0,
+      goalKickLockPlayerId: null,
+      goalKickLockTimer: 0,
     };
 
     const onResize = () => {
@@ -1985,6 +2000,8 @@ function updateMatch(
   active.tackleLockTimer = Math.max(0, active.tackleLockTimer - dt);
   active.aiChanceCooldown = Math.max(0, active.aiChanceCooldown - dt);
   active.restartProtectionTimer = Math.max(0, active.restartProtectionTimer - dt);
+  active.goalKickLockTimer = Math.max(0, active.goalKickLockTimer - dt);
+  if (active.goalKickLockTimer === 0) active.goalKickLockPlayerId = null;
   if (active.shotChargingPlayerId) {
     const chargingPlayer = active.players.find((player) => player.id === active.shotChargingPlayerId);
     if (!chargingPlayer || active.phase !== "open" || active.ballOwnerId !== chargingPlayer.id || !keys.has("KeyD")) {
@@ -2024,6 +2041,28 @@ function updateMatch(
       player.vel.set(0, 0, 0);
       player.pos.set(FIELD_W / 2 + 12, 0, FIELD_L / 2 + 12 + player.number * 0.4);
       player.mesh.position.copy(player.pos);
+      return;
+    }
+    const goalKickLocked = player.id === active.goalKickLockPlayerId || (active.phase === "goal-kick" && player.id === active.restartActorId);
+    if (goalKickLocked) {
+      const fixedDirection = upfieldKickDirection(player.team, active.half);
+      const fixedSpot = goalKickKeeperSpot(player.team, active.half);
+      player.pos.copy(fixedSpot);
+      player.vel.set(0, 0, 0);
+      player.turnRate = 0;
+      player.heading = headingFromDirection(fixedDirection);
+      player.mesh.rotation.y = player.heading;
+      player.mesh.position.copy(player.pos);
+      player.kickTimer = Math.max(0, player.kickTimer - dt);
+      player.actionCooldown = Math.max(0, player.actionCooldown - dt);
+      player.tackleTimer = 0;
+      player.tackleCooldown = Math.max(0, player.tackleCooldown - dt);
+      player.recoveryTimer = 0;
+      player.catchTimer = 0;
+      player.diveTimer = 0;
+      player.diveSide = 0;
+      player.decisionCooldown = Math.max(player.decisionCooldown, 0.3);
+      animatePlayer(player, dt);
       return;
     }
     const input: PlayerInputState = active.phase === "open"
@@ -2084,6 +2123,15 @@ function updateMatch(
       ball.copy(hands);
       setPlayerHeading(actor, Math.atan2(active.restartDirection.x, active.restartDirection.z), dt, 7.5);
       poseThrower(actor, actor.pos.distanceTo(active.restartSpot) < 1.8);
+    } else if (active.phase === "goal-kick" && actor) {
+      const fixedDirection = upfieldKickDirection(active.restartTeam, active.half);
+      actor.pos.copy(goalKickKeeperSpot(active.restartTeam, active.half));
+      actor.vel.set(0, 0, 0);
+      actor.turnRate = 0;
+      actor.heading = headingFromDirection(fixedDirection);
+      actor.mesh.rotation.y = actor.heading;
+      actor.mesh.position.copy(actor.pos);
+      ball.copy(goalKickBallSpot(actor, fixedDirection));
     } else if (active.phase !== "goal") {
       ball.copy(active.restartSpot);
     }
@@ -2335,9 +2383,25 @@ function stopForRestart(active: MatchRuntime, phase: PlayPhase, team: TeamId, sp
       : null;
   }
   arrangeSetPieceShape(active, phase, team, spot);
+  if (phase === "goal-kick") {
+    const actor = active.restartActorId ? active.players.find((player) => player.id === active.restartActorId) : null;
+    const fixedDirection = upfieldKickDirection(team, active.half);
+    active.restartDirection.copy(fixedDirection);
+    active.goalKickLockPlayerId = actor?.id ?? null;
+    active.goalKickLockTimer = 0.95;
+    if (actor) {
+      actor.pos.copy(goalKickKeeperSpot(team, active.half));
+      actor.vel.set(0, 0, 0);
+      actor.turnRate = 0;
+      actor.heading = headingFromDirection(fixedDirection);
+      actor.mesh.rotation.y = actor.heading;
+      actor.mesh.position.copy(actor.pos);
+      active.ballPos.copy(goalKickBallSpot(actor, fixedDirection));
+    }
+  }
   active.eventText = `${label} · WAITING FOR KICK`;
   active.eventTimer = 0;
-  active.ballPos.copy(active.restartSpot);
+  if (phase !== "goal-kick") active.ballPos.copy(active.restartSpot);
   active.ballVel.set(0, 0, 0);
   releasePossession(active, "loose");
   active.cooldown = Math.max(active.cooldown, 0.45);
@@ -2350,10 +2414,11 @@ function arrangeSetPieceShape(active: MatchRuntime, phase: PlayPhase, team: Team
     if (player.sentOff) return;
     if (player.id === active.restartActorId) {
       if (phase === "goal-kick") {
-        const goalZ = teamGoalZ(team, active.half);
-        player.pos.set(0, 0, goalZ - Math.sign(goalZ) * 5.2);
+        player.pos.copy(goalKickKeeperSpot(team, active.half));
         player.heading = headingFromDirection(upfieldKickDirection(team, active.half));
         player.mesh.rotation.y = player.heading;
+        player.turnRate = 0;
+        player.vel.set(0, 0, 0);
         player.diveTimer = 0;
         player.diveSide = 0;
         player.tackleTimer = 0;
@@ -2420,23 +2485,23 @@ function resumeRestart(active: MatchRuntime) {
     const kickDirection = goalKickDirection ?? upfieldKickDirection(active.restartTeam, active.half);
     actor.heading = headingFromDirection(kickDirection);
     actor.mesh.rotation.y = actor.heading;
-    const keeperGoalZ = teamGoalZ(active.restartTeam, active.half);
-    actor.pos.set(0, 0, keeperGoalZ - Math.sign(keeperGoalZ) * 5.2);
+    actor.pos.copy(goalKickKeeperSpot(active.restartTeam, active.half));
     actor.vel.set(0, 0, 0);
+    actor.turnRate = 0;
     actor.diveTimer = 0;
     actor.diveSide = 0;
     actor.tackleTimer = 0;
     actor.catchTimer = 0;
     actor.recoveryTimer = 0;
     actor.mesh.position.copy(actor.pos);
-    active.ballPos.copy(actor.pos).add(kickDirection.clone().multiplyScalar(4.35)).setY(BALL_RADIUS);
+    active.ballPos.copy(goalKickBallSpot(actor, kickDirection));
   }
   const power = restartingPhase === "corner" ? 12 : restartingPhase === "goal-kick" ? 48 : restartingPhase === "throw-in" ? 16.5 : 4.2;
   const releasePoint = active.phase === "throw-in" && actor
     ? throwInHandPoint(actor, active.restartDirection).add(active.restartDirection.clone().multiplyScalar(0.58))
     : restartingPhase === "goal-kick"
       ? (actor
-        ? actor.pos.clone().add((goalKickDirection ?? active.restartDirection).clone().multiplyScalar(4.35)).setY(BALL_RADIUS)
+        ? goalKickBallSpot(actor, goalKickDirection ?? active.restartDirection)
         : active.restartSpot.clone().add((goalKickDirection ?? active.restartDirection).clone().multiplyScalar(4.35)).setY(BALL_RADIUS))
       : active.restartSpot;
   active.ballPos.copy(releasePoint);
@@ -2457,6 +2522,8 @@ function resumeRestart(active: MatchRuntime) {
   if (restartingPhase === "goal-kick") {
     active.restartProtectionTeam = active.restartTeam;
     active.restartProtectionTimer = 3.4;
+    active.goalKickLockPlayerId = actor?.id ?? null;
+    active.goalKickLockTimer = 0.72;
   }
   active.phase = "open";
   active.phaseTimer = 0;
@@ -2614,12 +2681,14 @@ function handleGoalkeeperActions(active: MatchRuntime) {
   active.players
     .filter((player) => player.role === "keeper")
     .forEach((keeper) => {
+      if (keeper.id === active.goalKickLockPlayerId || keeper.id === active.ballIgnorePlayerId) return;
       const ownZ = teamGoalZ(keeper.team, active.half);
       const shotSpeed = active.ballVel.length();
       const inKeeperZone = Math.abs(active.ballPos.z - ownZ) < (shotSpeed > 9.2 ? 34 : 17) && Math.abs(active.ballPos.x) < GOAL_W / 2 + (shotSpeed > 9.2 ? 12 : 6);
       const movingTowardGoal = Math.sign(active.ballVel.z || ownZ - active.ballPos.z) === Math.sign(ownZ - active.ballPos.z);
       const closeEnough = keeper.pos.distanceTo(flatBall) < (movingTowardGoal ? 3.35 : 2.35);
       if (!inKeeperZone) return;
+      if (!movingTowardGoal && !closeEnough) return;
       if (shotSpeed > 9.2) {
         const timeToGoal = Math.abs((ownZ - active.ballPos.z) / (active.ballVel.z || Math.sign(ownZ - active.ballPos.z) * 0.1));
         const predictedX = clamp(active.ballPos.x + active.ballVel.x * clamp(timeToGoal, 0, 0.62), -GOAL_W / 2 + 0.65, GOAL_W / 2 - 0.65);
@@ -3577,6 +3646,7 @@ function takePossession(player: PlayerBody, active: MatchRuntime) {
 
 function canControlBall(player: PlayerBody, active: MatchRuntime) {
   if (active.ballOwnerId || active.phase !== "open") return false;
+  if (player.id === active.goalKickLockPlayerId) return false;
   const flatBall = new THREE.Vector3(active.ballPos.x, 0, active.ballPos.z);
   if (player.id === active.ballIgnorePlayerId) {
     const ignoreDistance = player.pos.distanceTo(flatBall);
