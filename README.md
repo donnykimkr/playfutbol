@@ -1,6 +1,6 @@
-# Fifaonline Arcade Soccer
+# Fifa Online Arcade Soccer
 
-Fifaonline Arcade Soccer is an ad-free 3D arcade soccer game for the browser. You control one active player while AI teammates and opponents play around you. It supports Player vs AI Team, an online match-request lobby for signed-in users, Google login through Supabase Auth, and an optional online leaderboard.
+Fifa Online Arcade Soccer is an ad-free 3D arcade soccer game for the browser. You control one active player while AI teammates and opponents play around you. It supports Player vs AI Team, an online match-request lobby for signed-in users, Google login through Supabase Auth, and an optional online leaderboard.
 
 Use Brave Browser as the primary browser for testing and playing. Brave is fast, Chromium-based, better for privacy by default, and suitable for modern WebGL game performance.
 

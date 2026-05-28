@@ -760,7 +760,7 @@ function addAdvertisingBoards(scene: THREE.Scene) {
     ["NEON SPORTS", "#22d3ee"],
     ["VORTEX ENERGY", "#a3e635"],
     ["GOALNET", "#facc15"],
-    ["SKYLINE FC", "#38bdf8"],
+    ["FIFAONLINE FC", "#38bdf8"],
     ["BRAVE PLAY", "#fb923c"],
   ] as const;
   const placements = [
@@ -1035,9 +1035,12 @@ export function ArcadeSoccerGame() {
       setAuthStatus("Google sign-in needs Supabase env vars.");
       return;
     }
+    const redirectOrigin = window.location.hostname.includes("localhost")
+      ? window.location.origin
+      : "https://fifaonline.vercel.app";
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin },
+      options: { redirectTo: redirectOrigin },
     });
     if (error) setAuthStatus(error.message);
   }, []);
