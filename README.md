@@ -30,7 +30,7 @@ Supabase is optional for local play. If `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBL
 
 Player 1:
 
-- `Arrow Keys` move the cyan player
+- `Arrow Keys` move the controlled home player
 - Click the pitch to aim a pass or shot toward that point
 - `S` makes a short pass
 - `A` makes a long pass or cross
