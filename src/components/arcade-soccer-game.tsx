@@ -186,8 +186,12 @@ const GOAL_SCORE_Z = GOAL_FRONT_Z + BALL_RADIUS * 0.7;
 const GOAL_BACK_Z = GOAL_FRONT_Z + GOAL_DEPTH;
 const GOAL_SIDE_POST_INSET = 0.26;
 
-const HOME_COLOR = "#dc2626";
-const AWAY_COLOR = "#2563eb";
+const HOME_COLOR = "#f8fafc";
+const AWAY_COLOR = "#dc2626";
+const HOME_TRIM = "#2563eb";
+const AWAY_TRIM = "#f8fafc";
+const HOME_SHORTS = "#1d4ed8";
+const AWAY_SHORTS = "#f8fafc";
 const HOME_KEEPER_COLOR = "#facc15";
 const AWAY_KEEPER_COLOR = "#16a34a";
 
@@ -342,7 +346,7 @@ function createGrassTexture(colorA: string, colorB: string) {
   return texture;
 }
 
-function createKitTexture(primary: string, trim: string) {
+function createKitTexture(primary: string, trim: string, accent = trim) {
   const canvas = document.createElement("canvas");
   canvas.width = 96;
   canvas.height = 96;
@@ -350,49 +354,104 @@ function createKitTexture(primary: string, trim: string) {
   if (context) {
     context.fillStyle = primary;
     context.fillRect(0, 0, 96, 96);
-    context.globalAlpha = 0.18;
-    context.fillStyle = "#ffffff";
-    for (let y = 0; y < 96; y += 6) context.fillRect(0, y, 96, 1);
-    context.globalAlpha = 0.22;
+    context.globalAlpha = 0.2;
+    context.fillStyle = primary === "#f8fafc" ? "#dbeafe" : "#ffffff";
+    for (let y = 0; y < 96; y += 7) context.fillRect(0, y, 96, 1);
+    context.globalAlpha = primary === "#f8fafc" ? 0.82 : 0.28;
     context.fillStyle = trim;
-    context.fillRect(0, 0, 12, 96);
-    context.fillRect(84, 0, 12, 96);
-    context.globalAlpha = 0.1;
-    for (let x = 0; x < 96; x += 8) context.fillRect(x, 0, 1, 96);
+    [16, 28, 68, 80].forEach((x) => context.fillRect(x, 0, 2, 96));
+    context.globalAlpha = 0.65;
+    context.fillStyle = accent;
+    context.fillRect(4, 0, 5, 96);
+    context.fillRect(87, 0, 5, 96);
+    context.globalAlpha = 0.22;
+    context.fillStyle = primary === "#f8fafc" ? "#94a3b8" : "#020617";
+    for (let x = 0; x < 96; x += 10) context.fillRect(x, 0, 1, 96);
+    context.globalAlpha = 1;
+    context.fillStyle = trim;
+    context.fillRect(0, 0, 96, 4);
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
 
+function createJerseyFrontPanel(primary: string, trim: string, label: string) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 160;
+  canvas.height = 160;
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.clearRect(0, 0, 160, 160);
+    context.globalAlpha = 0.82;
+    context.strokeStyle = trim;
+    context.lineWidth = 3;
+    [44, 62, 98, 116].forEach((x) => {
+      context.beginPath();
+      context.moveTo(x, 8);
+      context.lineTo(x, 152);
+      context.stroke();
+    });
+    context.globalAlpha = 1;
+    context.fillStyle = trim;
+    context.font = "bold 42px Arial, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(label, 80, 88);
+    context.beginPath();
+    context.arc(40, 46, 16, 0, Math.PI * 2);
+    context.fillStyle = trim;
+    context.fill();
+    context.fillStyle = primary === "#f8fafc" ? "#f8fafc" : "#111827";
+    context.font = "bold 14px Arial, sans-serif";
+    context.fillText("FC", 40, 47);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.64, 0.62),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }),
+  );
+  panel.name = "front-kit-detail";
+  panel.position.set(0, 1.94, 0.286);
+  return panel;
+}
+
 function makeHumanFigure({
   shirt,
   trim,
   shorts,
+  socks = "#f8fafc",
+  boot = "#d1d5db",
   skin = "#e8b88f",
   hair = "#3f2b1d",
   accent,
   numberPanel,
+  sponsor = "FO",
 }: {
   shirt: string;
   trim: string;
   shorts: string;
+  socks?: string;
+  boot?: string;
   skin?: string;
   hair?: string;
   accent?: string;
   numberPanel?: THREE.Object3D;
+  sponsor?: string;
 }) {
   const group = new THREE.Group();
   const bodyRoot = new THREE.Group();
   bodyRoot.name = "body-root";
-  const shirtMaterial = new THREE.MeshStandardMaterial({ color: shirt, map: createKitTexture(shirt, trim), roughness: 0.5, metalness: 0.02 });
+  const shirtMaterial = new THREE.MeshStandardMaterial({ color: shirt, map: createKitTexture(shirt, trim, accent ?? trim), roughness: 0.52, metalness: 0.02 });
   const trimMaterial = new THREE.MeshStandardMaterial({ color: trim, roughness: 0.56 });
   const shortsMaterial = new THREE.MeshStandardMaterial({ color: shorts, roughness: 0.56 });
   const skinMaterial = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.56 });
-  const bootMaterial = new THREE.MeshStandardMaterial({ color: "#07101d", roughness: 0.48 });
+  const bootMaterial = new THREE.MeshStandardMaterial({ color: boot, roughness: 0.48 });
+  const bootSoleMaterial = new THREE.MeshStandardMaterial({ color: "#111827", roughness: 0.5 });
   const bootAccentMaterial = new THREE.MeshStandardMaterial({ color: accent ?? trim, roughness: 0.46 });
-  const clothLightMaterial = new THREE.MeshStandardMaterial({ color: "#f8fafc", roughness: 0.62 });
-  const hip = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.24, 0.42), shortsMaterial);
+  const sockMaterial = new THREE.MeshStandardMaterial({ color: socks, roughness: 0.62 });
+  const hip = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.24, 0.42), shortsMaterial);
   hip.position.y = 1.02;
   hip.castShadow = true;
   const torso = new THREE.Mesh(
@@ -400,16 +459,16 @@ function makeHumanFigure({
     shirtMaterial,
   );
   torso.position.y = 1.63;
-  torso.scale.set(1.14, 1.34, 0.92);
+  torso.scale.set(1.22, 1.4, 0.94);
   torso.castShadow = true;
 
   const shoulderBand = new THREE.Mesh(
-    new THREE.BoxGeometry(1.34, 0.16, 0.48),
+    new THREE.BoxGeometry(1.42, 0.13, 0.48),
     trimMaterial,
   );
   shoulderBand.position.y = 2.2;
   shoulderBand.castShadow = true;
-  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.56, 0.46), shirtMaterial);
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.58, 0.46), shirtMaterial);
   chest.position.y = 1.94;
   chest.castShadow = true;
   const chestPanel = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.5, 0.035), shirtMaterial);
@@ -421,12 +480,22 @@ function makeHumanFigure({
   collar.scale.set(1.15, 0.72, 0.9);
   collar.rotation.x = Math.PI / 2;
 
+  const frontKitDetail = createJerseyFrontPanel(shirt, trim, sponsor);
+
   const shortsMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(0.82, 0.38, 0.42),
+    new THREE.BoxGeometry(0.84, 0.4, 0.42),
     shortsMaterial,
   );
   shortsMesh.position.y = 0.9;
   shortsMesh.castShadow = true;
+  [-1, 1].forEach((side) => {
+    for (let stripe = 0; stripe < 2; stripe += 1) {
+      const shortsStripe = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.36, 0.44), trimMaterial);
+      shortsStripe.position.set(side * (0.34 + stripe * 0.045), 0.9, 0.012);
+      shortsStripe.castShadow = true;
+      bodyRoot.add(shortsStripe);
+    }
+  });
   const jerseyHem = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.07, 0.45), trimMaterial);
   jerseyHem.position.y = 1.18;
   jerseyHem.castShadow = true;
@@ -453,13 +522,29 @@ function makeHumanFigure({
   hairCap.scale.set(0.88, 0.5, 0.94);
   hairCap.position.y = 2.88;
   hairCap.castShadow = true;
+  const backHair = new THREE.Mesh(
+    new THREE.SphereGeometry(0.25, 10, 6),
+    new THREE.MeshStandardMaterial({ color: hair, roughness: 0.72 }),
+  );
+  backHair.scale.set(0.72, 0.64, 0.42);
+  backHair.position.set(0, 2.72, -0.16);
+  backHair.castShadow = true;
+
+  [-1, 1].forEach((side) => {
+    for (let stripe = 0; stripe < 3; stripe += 1) {
+      const shoulderStripe = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.035, 0.54), trimMaterial);
+      shoulderStripe.position.set(side * (0.43 + stripe * 0.055), 2.285, 0.02);
+      shoulderStripe.castShadow = true;
+      bodyRoot.add(shoulderStripe);
+    }
+  });
 
   [-1, 1].forEach((side) => {
     const shoulder = new THREE.Group();
     shoulder.name = side < 0 ? "left-arm" : "right-arm";
     shoulder.position.set(side * 0.69, 2.08, 0.02);
     shoulder.rotation.z = side * 0.16;
-    const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.095, 0.55, 5, 8), shirtMaterial);
+    const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.105, 0.56, 5, 9), shirtMaterial);
     upperArm.position.y = -0.29;
     const sleeve = new THREE.Mesh(new THREE.CapsuleGeometry(0.106, 0.2, 4, 8), trimMaterial);
     sleeve.position.y = -0.1;
@@ -472,6 +557,13 @@ function makeHumanFigure({
     hand.name = side < 0 ? "left-hand" : "right-hand";
     hand.position.y = -0.54;
     hand.scale.set(0.86, 1.08, 0.82);
+    for (let finger = 0; finger < 4; finger += 1) {
+      const digit = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.105, 2, 4), skinMaterial);
+      digit.position.set((finger - 1.5) * 0.035, -0.64, 0.035 + Math.abs(finger - 1.5) * 0.008);
+      digit.rotation.x = 0.14;
+      digit.castShadow = true;
+      elbow.add(digit);
+    }
     upperArm.castShadow = true;
     sleeve.castShadow = true;
     forearm.castShadow = true;
@@ -481,39 +573,42 @@ function makeHumanFigure({
     bodyRoot.add(shoulder);
   });
 
-  const sockMaterial = clothLightMaterial;
   [-1, 1].forEach((side) => {
     const pivot = new THREE.Group();
     pivot.name = side < 0 ? "left-leg" : "right-leg";
     pivot.position.set(side * 0.24, 0.82, 0);
-    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.145, 0.74, 5, 9), skinMaterial);
+    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.155, 0.76, 5, 10), skinMaterial);
     thigh.position.y = -0.39;
     thigh.castShadow = true;
     const knee = new THREE.Group();
     knee.name = side < 0 ? "left-knee" : "right-knee";
     knee.position.y = -0.78;
-    const calf = new THREE.Mesh(new THREE.CapsuleGeometry(0.108, 0.7, 5, 9), sockMaterial);
+    const calf = new THREE.Mesh(new THREE.CapsuleGeometry(0.112, 0.72, 5, 10), sockMaterial);
     calf.position.y = -0.38;
     calf.castShadow = true;
     const sockBand = new THREE.Mesh(new THREE.CapsuleGeometry(0.105, 0.08, 4, 8), trimMaterial);
     sockBand.position.y = -0.08;
     const ankleBand = new THREE.Mesh(new THREE.CapsuleGeometry(0.102, 0.06, 4, 8), trimMaterial);
     ankleBand.position.y = -0.62;
-    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.13, 0.62), bootMaterial);
-    boot.position.set(0, -0.82, 0.22);
-    boot.castShadow = true;
+    const bootMesh = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.14, 0.64), bootMaterial);
+    bootMesh.name = side < 0 ? "left-boot" : "right-boot";
+    bootMesh.position.set(0, -0.82, 0.23);
+    bootMesh.castShadow = true;
     const bootToe = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.06, 0.26), bootAccentMaterial);
     bootToe.position.set(0, -0.75, 0.52);
     bootToe.castShadow = true;
-    const studs = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.035, 0.38), bootAccentMaterial);
+    const bootHeel = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.08, 0.16), bootSoleMaterial);
+    bootHeel.position.set(0, -0.78, -0.08);
+    bootHeel.castShadow = true;
+    const studs = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.4), bootSoleMaterial);
     studs.position.set(0, -0.9, 0.18);
     studs.castShadow = true;
-    knee.add(calf, sockBand, ankleBand, boot, bootToe, studs);
+    knee.add(calf, sockBand, ankleBand, bootMesh, bootToe, bootHeel, studs);
     pivot.add(thigh, knee);
     bodyRoot.add(pivot);
   });
 
-  bodyRoot.add(hip, torso, chest, chestPanel, frontTrim, collar, shoulderBand, jerseyHem, shortsMesh, neck, head, hairCap);
+  bodyRoot.add(hip, torso, chest, chestPanel, frontTrim, frontKitDetail, collar, shoulderBand, jerseyHem, shortsMesh, neck, head, hairCap, backHair);
   const face = new THREE.Mesh(
     new THREE.SphereGeometry(0.24, 10, 8),
     skinMaterial,
@@ -552,7 +647,7 @@ function makeHumanFigure({
   bodyRoot.add(face, jaw, hairSide, nose, mouth);
   if (numberPanel) bodyRoot.add(numberPanel);
   group.add(bodyRoot);
-  group.scale.set(0.96, 1.08, 0.96);
+  group.scale.set(0.9, 1.13, 0.9);
   if (accent) {
     const marker = new THREE.Mesh(
       new THREE.TorusGeometry(1.08, 0.05, 8, 32),
@@ -580,16 +675,22 @@ function makeHumanFigure({
 }
 
 function makeKit(team: TeamId, role: PlayerRole, accent: string, number: number) {
-  const shirt = role === "keeper" ? (team === "home" ? HOME_KEEPER_COLOR : AWAY_KEEPER_COLOR) : (team === "home" ? HOME_COLOR : AWAY_COLOR);
-  const trim = role === "keeper" ? "#111827" : "#f8fafc";
-  const shorts = role === "keeper" ? "#111827" : team === "home" ? "#f8fafc" : "#172554";
+  const isKeeper = role === "keeper";
+  const shirt = isKeeper ? (team === "home" ? HOME_KEEPER_COLOR : AWAY_KEEPER_COLOR) : (team === "home" ? HOME_COLOR : AWAY_COLOR);
+  const trim = isKeeper ? "#111827" : team === "home" ? HOME_TRIM : AWAY_TRIM;
+  const shorts = isKeeper ? "#111827" : team === "home" ? HOME_SHORTS : AWAY_SHORTS;
+  const socks = isKeeper ? "#111827" : "#f8fafc";
+  const boot = team === "home" ? "#d1d5db" : "#111827";
   return makeHumanFigure({
     shirt,
     trim,
     shorts,
+    socks,
+    boot,
     hair: number % 3 === 0 ? "#111827" : number % 2 === 0 ? "#6b3f1f" : "#24160f",
-    accent,
+    accent: isKeeper ? "#f8fafc" : team === "home" ? HOME_TRIM : accent,
     numberPanel: createNumberPanel(number, team),
+    sponsor: team === "home" ? "FO" : "AW",
   });
 }
 
@@ -754,8 +855,115 @@ function makeCrowdFan(color: string, skin = "#d8a174") {
   return fan;
 }
 
+function addReferenceSeatBanks(scene: THREE.Scene) {
+  const seatGeometry = new THREE.BoxGeometry(0.36, 0.16, 0.34);
+  const turquoiseSeats = new THREE.InstancedMesh(
+    seatGeometry,
+    new THREE.MeshStandardMaterial({ color: "#20c4dc", roughness: 0.64 }),
+    1700,
+  );
+  const whiteSeats = new THREE.InstancedMesh(
+    seatGeometry,
+    new THREE.MeshStandardMaterial({ color: "#e5edf3", roughness: 0.62 }),
+    260,
+  );
+  const matrix = new THREE.Matrix4();
+  let seatIndex = 0;
+  let whiteIndex = 0;
+  const setSeat = (mesh: THREE.InstancedMesh, index: number, x: number, y: number, z: number, rotationY = 0) => {
+    matrix.compose(
+      new THREE.Vector3(x, y, z),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.08, rotationY, 0)),
+      new THREE.Vector3(1, 1, 1),
+    );
+    mesh.setMatrixAt(index, matrix);
+  };
+
+  [-1, 1].forEach((side) => {
+    for (let row = 0; row < 9; row += 1) {
+      for (let col = 0; col < 58; col += 1) {
+        const x = -FIELD_W / 2 - 6 + col * ((FIELD_W + 12) / 57);
+        const y = 3.05 + row * 0.33;
+        const z = side * (FIELD_L / 2 + 7.1 + row * 0.78);
+        const useWhiteBlock = side > 0 && row >= 2 && row <= 5 && col >= 40 && col <= 51;
+        if (useWhiteBlock && whiteIndex < whiteSeats.count) {
+          setSeat(whiteSeats, whiteIndex, x, y, z, side > 0 ? Math.PI : 0);
+          whiteIndex += 1;
+        } else {
+          setSeat(turquoiseSeats, seatIndex, x, y, z, side > 0 ? Math.PI : 0);
+          seatIndex += 1;
+        }
+      }
+    }
+  });
+
+  [-1, 1].forEach((side) => {
+    for (let row = 0; row < 7; row += 1) {
+      for (let col = 0; col < 42; col += 1) {
+        const x = side * (FIELD_W / 2 + 7.1 + row * 0.78);
+        const y = 3.0 + row * 0.34;
+        const z = -FIELD_L / 2 - 5.5 + col * ((FIELD_L + 11) / 41);
+        setSeat(turquoiseSeats, seatIndex, x, y, z, side > 0 ? -Math.PI / 2 : Math.PI / 2);
+        seatIndex += 1;
+      }
+    }
+  });
+
+  turquoiseSeats.count = seatIndex;
+  whiteSeats.count = whiteIndex;
+  turquoiseSeats.instanceMatrix.needsUpdate = true;
+  whiteSeats.instanceMatrix.needsUpdate = true;
+  turquoiseSeats.castShadow = true;
+  whiteSeats.castShadow = true;
+  scene.add(turquoiseSeats, whiteSeats);
+}
+
+function addRoofAndFloodlights(scene: THREE.Scene) {
+  const roofMaterial = new THREE.MeshStandardMaterial({ color: "#334155", roughness: 0.58, metalness: 0.22 });
+  const beamMaterial = new THREE.MeshStandardMaterial({ color: "#0f2a44", roughness: 0.5, metalness: 0.35 });
+  const lightMaterial = new THREE.MeshBasicMaterial({ color: "#f8fafc" });
+  [
+    { geometry: new THREE.BoxGeometry(FIELD_W + 30, 0.22, 5.2), position: new THREE.Vector3(0, 8.5, FIELD_L / 2 + 15.2), rotation: 0 },
+    { geometry: new THREE.BoxGeometry(FIELD_W + 30, 0.22, 5.2), position: new THREE.Vector3(0, 8.5, -FIELD_L / 2 - 15.2), rotation: 0 },
+    { geometry: new THREE.BoxGeometry(5.2, 0.22, FIELD_L + 30), position: new THREE.Vector3(FIELD_W / 2 + 15.2, 8.5, 0), rotation: 0 },
+    { geometry: new THREE.BoxGeometry(5.2, 0.22, FIELD_L + 30), position: new THREE.Vector3(-FIELD_W / 2 - 15.2, 8.5, 0), rotation: 0 },
+  ].forEach((roof) => {
+    const mesh = new THREE.Mesh(roof.geometry, roofMaterial);
+    mesh.position.copy(roof.position);
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+  });
+
+  for (let i = 0; i < 8; i += 1) {
+    const x = -FIELD_W / 2 - 10 + i * ((FIELD_W + 20) / 7);
+    [-1, 1].forEach((side) => {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 5.6, 0.22), beamMaterial);
+      post.position.set(x, 6.1, side * (FIELD_L / 2 + 13.2));
+      const brace = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 7.2), beamMaterial);
+      brace.position.set(x, 8.65, side * (FIELD_L / 2 + 13.2));
+      brace.rotation.x = side * 0.36;
+      scene.add(post, brace);
+      for (let row = 0; row < 3; row += 1) {
+        for (let col = 0; col < 4; col += 1) {
+          const light = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.2, 0.08), lightMaterial);
+          light.position.set(x + (col - 1.5) * 0.36, 9.15 + row * 0.28, side * (FIELD_L / 2 + 10.6));
+          light.rotation.x = side > 0 ? -0.22 : 0.22;
+          scene.add(light);
+        }
+      }
+    });
+  }
+
+  const trussGeometry = new THREE.BoxGeometry(0.12, 0.12, FIELD_L + 30);
+  [-1, 1].forEach((side) => {
+    const truss = new THREE.Mesh(trussGeometry, beamMaterial);
+    truss.position.set(side * (FIELD_W / 2 + 13.1), 9.05, 0);
+    scene.add(truss);
+  });
+}
+
 function addStadium(scene: THREE.Scene) {
-  const standMaterial = new THREE.MeshStandardMaterial({ color: "#10251a", roughness: 0.78 });
+  const standMaterial = new THREE.MeshStandardMaterial({ color: "#64748b", roughness: 0.82 });
   const railMaterial = new THREE.MeshStandardMaterial({ color: "#d1fae5", roughness: 0.38, metalness: 0.2 });
   [
     { x: 0, z: FIELD_L / 2 + 12, w: FIELD_W + 18, d: 10 },
@@ -771,9 +979,11 @@ function addStadium(scene: THREE.Scene) {
       scene.add(tier);
     }
   });
+  addReferenceSeatBanks(scene);
+  addRoofAndFloodlights(scene);
 
   const animatedFans: THREE.Group[] = [];
-  const fanColors = [HOME_COLOR, AWAY_COLOR, "#f8fafc", "#22c55e", "#facc15"];
+  const fanColors = [HOME_TRIM, AWAY_COLOR, "#f8fafc", "#22c55e", "#facc15"];
   for (let i = 0; i < 72; i += 1) {
     const fan = makeCrowdFan(fanColors[i % fanColors.length], i % 4 === 0 ? "#8d5524" : i % 3 === 0 ? "#f1c27d" : "#d8a174");
     const longSide = i % 2 === 0;
