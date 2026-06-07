@@ -1881,7 +1881,7 @@ export function ArcadeSoccerGame() {
       beginWalkout(active);
     } else {
       finishWalkoutToKickoff(active);
-      active.phaseTimer = 0.45;
+      resumeRestart(active);
       setPhaseUi(active.phase);
     }
     setMatchState("playing");
