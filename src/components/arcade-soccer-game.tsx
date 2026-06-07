@@ -1418,6 +1418,7 @@ export function ArcadeSoccerGame() {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const keysRef = useRef(new Set<string>());
   const sceneRef = useRef<MatchRuntime | null>(null);
+  const frameErrorRef = useRef("");
   const virtualControlsRef = useRef<VirtualControls>({ dir: new THREE.Vector3(), strength: 0, sprint: false });
   const joystickPointerRef = useRef<number | null>(null);
   const setupDirtyRef = useRef(false);
@@ -1880,8 +1881,7 @@ export function ArcadeSoccerGame() {
       setPhaseUi("walkout");
       beginWalkout(active);
     } else {
-      finishWalkoutToKickoff(active);
-      resumeRestart(active);
+      startDirectKickoff(active, "home");
       setPhaseUi(active.phase);
     }
     setMatchState("playing");
@@ -1922,13 +1922,13 @@ export function ArcadeSoccerGame() {
         return;
       }
       setOnlineMatch(match as OnlineMatchRow);
-      setOnlineStatus("Online room created. Realtime MVP is ready for lobby/input sync.");
-      startMatch("online");
+      setOnlineStatus("Online room created. Choose Online mode and press Kick off when both players are ready.");
+      setMode("online");
     } else {
       setOnlineStatus("Request declined.");
     }
     await fetchOnlineRequests();
-  }, [fetchOnlineRequests, startMatch, user]);
+  }, [fetchOnlineRequests, user]);
 
   const saveScore = useCallback(async () => {
     if (mode !== "ai") {
@@ -2235,86 +2235,74 @@ export function ArcadeSoccerGame() {
       active.lastTime = time;
 
       try {
-      if (active.state === "playing") {
-        active.cooldown = Math.max(0, active.cooldown - dt);
-        updateMatch(active, keysRef.current, dt, virtualControlsRef.current);
-        animateCrowd(active, dt);
-        setScore({ ...active.score });
-        setGameClock(active.gameClock);
-        setPhaseUi(active.phase);
-        const chargingPlayer = active.shotChargingPlayerId
-          ? active.players.find((player) => player.id === active.shotChargingPlayerId)
-          : null;
-        setShotChargeUi(chargingPlayer ? active.shotCharge : 0);
-        if (chargingPlayer) setShotChargePosition(playerScreenGaugePosition(active, chargingPlayer));
-        if (active.frame % 8 === 0) {
-          active.stadiumBoards.forEach((board) => drawStadiumScoreboard(board, active.score, active.gameClock, active.eventText));
-        }
-        if (active.gameClock >= FULL_TIME_SECONDS) {
-          active.state = "ended";
-          setMatchState("ended");
-        }
-      } else {
-        active.ball.rotation.y += dt * 0.35;
-      }
-
-      const controlledFocus = active.players.find((player) => player.controlledBy === "p1");
-      const playerFocus = controlledFocus?.pos ?? active.ballPos;
-      const blendedFocus = active.ballPos.clone().lerp(playerFocus, 0.22);
-      const focusZ = clamp(blendedFocus.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
-      const shouldFollowPlay = active.state === "playing" && active.phase !== "walkout" && active.phase !== "halftime";
-      const desired = active.phase === "walkout"
-        ? new THREE.Vector3(BROADCAST_CAMERA_X + 5, 11.2, -8)
-        : shouldFollowPlay
-          ? new THREE.Vector3(BROADCAST_CAMERA_X, BROADCAST_CAMERA_Y, focusZ + BROADCAST_CAMERA_Z_OFFSET)
-          : new THREE.Vector3(
-          BROADCAST_CAMERA_X,
-          BROADCAST_CAMERA_Y,
-          BROADCAST_CAMERA_Z,
-        );
-      desired.z = clamp(desired.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
-      active.camera.position.lerp(desired, shouldFollowPlay || active.phase === "walkout" ? 1 - Math.pow(0.0008, dt) : 1);
-      const desiredLookAt = active.phase === "walkout"
-        ? new THREE.Vector3(-4, 1.45, 0)
-        : shouldFollowPlay
-          ? new THREE.Vector3(BROADCAST_LOOK_AT_X, BROADCAST_LOOK_AT_Y, focusZ)
-          : new THREE.Vector3(
-          BROADCAST_LOOK_AT_X,
-          BROADCAST_LOOK_AT_Y,
-          BROADCAST_LOOK_AT_Z,
-        );
-      active.cameraLookAt.lerp(desiredLookAt, shouldFollowPlay || active.phase === "walkout" ? 1 - Math.pow(0.0016, dt) : 1);
-      active.camera.up.set(0, 1, 0);
-      active.camera.lookAt(active.cameraLookAt);
-      active.renderer.render(active.scene, active.camera);
-      } catch (error) {
-        console.error("Fifa Online frame recovered", error);
         if (active.state === "playing") {
-          active.phase = "open";
-          active.phaseTimer = 0;
-          active.eventText = "PLAY";
-          active.eventTimer = 0;
-          active.gameClock = Math.min(FULL_TIME_SECONDS, active.gameClock + CLOCK_SPEED / 30);
+          active.cooldown = Math.max(0, active.cooldown - dt);
+          updateMatch(active, keysRef.current, dt, virtualControlsRef.current);
+          animateCrowd(active, dt);
+          setScore({ ...active.score });
           setGameClock(active.gameClock);
           setPhaseUi(active.phase);
+          if (frameErrorRef.current) frameErrorRef.current = "";
+          const chargingPlayer = active.shotChargingPlayerId
+            ? active.players.find((player) => player.id === active.shotChargingPlayerId)
+            : null;
+          setShotChargeUi(chargingPlayer ? active.shotCharge : 0);
+          if (chargingPlayer) setShotChargePosition(playerScreenGaugePosition(active, chargingPlayer));
+          if (active.frame % 8 === 0) {
+            active.stadiumBoards.forEach((board) => drawStadiumScoreboard(board, active.score, active.gameClock, active.eventText));
+          }
+          if (active.gameClock >= FULL_TIME_SECONDS) {
+            active.state = "ended";
+            setMatchState("ended");
+          }
+        } else {
+          active.ball.rotation.y += dt * 0.35;
         }
-        try {
-          active.renderer.render(active.scene, active.camera);
-        } catch (renderError) {
-          console.error("Fifa Online render recovery failed", renderError);
+        const controlledFocus = active.players.find((player) => player.controlledBy === "p1");
+        const playerFocus = controlledFocus?.pos ?? active.ballPos;
+        const blendedFocus = active.ballPos.clone().lerp(playerFocus, 0.22);
+        const focusZ = clamp(blendedFocus.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
+        const shouldFollowPlay = active.state === "playing" && active.phase !== "walkout" && active.phase !== "halftime";
+        const desired = active.phase === "walkout"
+          ? new THREE.Vector3(BROADCAST_CAMERA_X + 5, 11.2, -8)
+          : shouldFollowPlay
+            ? new THREE.Vector3(BROADCAST_CAMERA_X, BROADCAST_CAMERA_Y, focusZ + BROADCAST_CAMERA_Z_OFFSET)
+            : new THREE.Vector3(
+              BROADCAST_CAMERA_X,
+              BROADCAST_CAMERA_Y,
+              BROADCAST_CAMERA_Z,
+            );
+        desired.z = clamp(desired.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
+        active.camera.position.lerp(desired, shouldFollowPlay || active.phase === "walkout" ? 1 - Math.pow(0.0008, dt) : 1);
+        const desiredLookAt = active.phase === "walkout"
+          ? new THREE.Vector3(-4, 1.45, 0)
+          : shouldFollowPlay
+            ? new THREE.Vector3(BROADCAST_LOOK_AT_X, BROADCAST_LOOK_AT_Y, focusZ)
+            : new THREE.Vector3(
+              BROADCAST_LOOK_AT_X,
+              BROADCAST_LOOK_AT_Y,
+              BROADCAST_LOOK_AT_Z,
+            );
+        active.cameraLookAt.lerp(desiredLookAt, shouldFollowPlay || active.phase === "walkout" ? 1 - Math.pow(0.0016, dt) : 1);
+        active.camera.up.set(0, 1, 0);
+        active.camera.lookAt(active.cameraLookAt);
+        active.renderer.render(active.scene, active.camera);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (frameErrorRef.current !== message) {
+          frameErrorRef.current = message;
+          console.error("Fifa Online frame error", error);
         }
-      } finally {
-        active.frame = window.setTimeout(() => frame(performance.now()), 16);
       }
+      active.frame = requestAnimationFrame(frame);
     };
-    sceneRef.current.frame = window.setTimeout(() => frame(performance.now()), 16);
+    sceneRef.current.frame = requestAnimationFrame(frame);
 
     return () => {
       window.removeEventListener("resize", onResize);
       const active = sceneRef.current;
       if (!active) return;
       cancelAnimationFrame(active.frame);
-      window.clearTimeout(active.frame);
       active.scene.traverse((object) => {
         if (!(object instanceof THREE.Mesh)) return;
         object.geometry.dispose();
@@ -3544,6 +3532,39 @@ function finishWalkoutToKickoff(active: MatchRuntime) {
   stageKickoffShape(active);
   active.ballPos.copy(active.restartSpot);
   active.ballVel.set(0, 0, 0);
+}
+
+function startDirectKickoff(active: MatchRuntime, team: TeamId) {
+  resetKickoffShape(active);
+  active.phase = "open";
+  active.phaseTimer = 0;
+  active.restartTeam = team;
+  active.restartSpot.set(0, BALL_RADIUS, 0);
+  active.restartDirection.copy(upfieldKickDirection(team, active.half));
+  active.restartActorId = kickoffTaker(active.players, team, active.restartSpot)?.id ?? null;
+  active.eventText = "PLAY";
+  active.eventTimer = 0;
+  active.cooldown = 0.18;
+  active.ballPos.copy(active.restartSpot);
+  active.ballVel.set(0, 0, 0);
+  active.ballState = "loose";
+  active.ballOwnerId = null;
+  active.possession = null;
+  active.intendedReceiverId = null;
+  active.ballIgnorePlayerId = null;
+  active.ballIgnoreTimer = 0;
+  active.restartProtectionTeam = null;
+  active.restartProtectionTimer = 0;
+  active.restartBoundaryGuardTimer = 0;
+  stageKickoffShape(active);
+  const actor = active.restartActorId ? active.players.find((player) => player.id === active.restartActorId) : null;
+  if (actor) {
+    takePossession(actor, active);
+    actor.heading = headingFromDirection(active.restartDirection);
+    actor.mesh.rotation.y = actor.heading;
+    active.ballPos.copy(controlledBallPoint(actor));
+  }
+  active.restartActorId = null;
 }
 
 function walkoutInput(player: PlayerBody): PlayerInputState {
