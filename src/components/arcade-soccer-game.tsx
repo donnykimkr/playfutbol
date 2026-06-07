@@ -2234,6 +2234,7 @@ export function ArcadeSoccerGame() {
       const dt = Math.min((time - active.lastTime) / 1000, 0.033);
       active.lastTime = time;
 
+      try {
       if (active.state === "playing") {
         active.cooldown = Math.max(0, active.cooldown - dt);
         updateMatch(active, keysRef.current, dt, virtualControlsRef.current);
@@ -2286,6 +2287,19 @@ export function ArcadeSoccerGame() {
       active.camera.up.set(0, 1, 0);
       active.camera.lookAt(active.cameraLookAt);
       active.renderer.render(active.scene, active.camera);
+      } catch (error) {
+        console.error("Fifa Online frame recovered", error);
+        if (active.state === "playing") {
+          active.phase = "open";
+          active.phaseTimer = 0;
+          active.eventText = "PLAY";
+          active.eventTimer = 0;
+          active.gameClock = Math.min(FULL_TIME_SECONDS, active.gameClock + CLOCK_SPEED / 30);
+          setGameClock(active.gameClock);
+          setPhaseUi(active.phase);
+        }
+        active.renderer.render(active.scene, active.camera);
+      }
       active.frame = requestAnimationFrame(frame);
     };
     sceneRef.current.frame = requestAnimationFrame(frame);
