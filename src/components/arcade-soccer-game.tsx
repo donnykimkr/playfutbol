@@ -2298,9 +2298,14 @@ export function ArcadeSoccerGame() {
           setGameClock(active.gameClock);
           setPhaseUi(active.phase);
         }
-        active.renderer.render(active.scene, active.camera);
+        try {
+          active.renderer.render(active.scene, active.camera);
+        } catch (renderError) {
+          console.error("Fifa Online render recovery failed", renderError);
+        }
+      } finally {
+        active.frame = requestAnimationFrame(frame);
       }
-      active.frame = requestAnimationFrame(frame);
     };
     sceneRef.current.frame = requestAnimationFrame(frame);
 
