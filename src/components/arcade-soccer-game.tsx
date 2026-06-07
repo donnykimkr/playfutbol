@@ -69,17 +69,6 @@ type VirtualControls = {
   sprint: boolean;
 };
 
-type ScoreRow = {
-  id: string;
-  nickname: string;
-  score: number;
-  goals_scored?: number;
-  result?: string;
-  gems?: number;
-  level?: number;
-  created_at: string;
-};
-
 type OnlineProfile = {
   id: string;
   username: string;
@@ -144,6 +133,8 @@ type MatchRuntime = {
   ball: THREE.Group;
   players: PlayerBody[];
   frame: number;
+  matchTick: number | null;
+  frameCount: number;
   lastTime: number;
   mode: GameMode;
   state: MatchState;
@@ -1427,9 +1418,6 @@ export function ArcadeSoccerGame() {
   const [matchState, setMatchState] = useState<MatchState>("menu");
   const [score, setScore] = useState({ home: 0, away: 0 });
   const [gameClock, setGameClock] = useState(0);
-  const [leaderboard, setLeaderboard] = useState<ScoreRow[]>([]);
-  const [nickname, setNickname] = useState("");
-  const [saveStatus, setSaveStatus] = useState("");
   const [user, setUser] = useState<User | null>(null);
   const [authStatus, setAuthStatus] = useState("");
   const [showTouchControls, setShowTouchControls] = useState(false);
@@ -1457,17 +1445,7 @@ export function ArcadeSoccerGame() {
   const matchScore = useMemo(() => scoreMatch(score.home, score.away), [score]);
   const resultText = score.home > score.away ? "Win" : score.home < score.away ? "Lose" : "Draw";
   const chosenTeam = selectedTeamOption(selectedTeamKey);
-
-  const fetchLeaderboard = useCallback(async () => {
-    const supabase = getSupabaseClient();
-    if (!supabase) return;
-    const { data } = await supabase
-      .from("leaderboard")
-      .select("*")
-      .order("score", { ascending: false })
-      .limit(10);
-    setLeaderboard((data ?? []) as ScoreRow[]);
-  }, []);
+  const isSignedIn = Boolean(user);
 
   useEffect(() => {
     applyActiveHomeSetup(selectedTeamKey, formationName, squadPlayers, formationAssignments);
@@ -1842,7 +1820,6 @@ export function ArcadeSoccerGame() {
     setMatchState("menu");
     setPhaseUi("kickoff");
     setShotChargeUi(0);
-    setSaveStatus("");
   }, [resetPositions]);
 
   const startMatch = useCallback((nextMode = mode) => {
@@ -1865,6 +1842,7 @@ export function ArcadeSoccerGame() {
     active.restartActorId = null;
     active.half = 1;
     active.gameClock = 0;
+    active.frameCount = 0;
     active.halftimeDone = false;
     active.eventText = "KICKOFF";
     active.eventTimer = 0;
@@ -1875,7 +1853,6 @@ export function ArcadeSoccerGame() {
     setMode(nextMode);
     setScore({ home: 0, away: 0 });
     setGameClock(0);
-    setSaveStatus("");
     resetPositions("home");
     if (ENABLE_BLOCKING_WALKOUT) {
       setPhaseUi("walkout");
@@ -1930,60 +1907,6 @@ export function ArcadeSoccerGame() {
     await fetchOnlineRequests();
   }, [fetchOnlineRequests, user]);
 
-  const saveScore = useCallback(async () => {
-    if (mode !== "ai") {
-      setSaveStatus("Online scores are only for Player vs AI mode.");
-      return;
-    }
-    if (!user) {
-      setSaveStatus("Sign in with Google before playing or saving scores.");
-      return;
-    }
-    const cleanName = nickname.trim();
-    if (!nicknameIsValid(cleanName)) {
-      setSaveStatus("Nickname must be 2-16 letters, numbers, spaces, _ or -.");
-      return;
-    }
-    const supabase = getSupabaseClient();
-    if (!supabase) {
-      setSaveStatus("Leaderboard is disabled until Supabase env vars are added.");
-      return;
-    }
-    setSaveStatus("Saving...");
-    const soccerPayload = {
-      user_id: user.id,
-      nickname: cleanName,
-      score: matchScore,
-      goals_scored: score.home,
-      result: resultText.toLowerCase(),
-      gems: score.home,
-      level: resultText === "Win" ? 3 : resultText === "Draw" ? 2 : 1,
-    };
-    let { error } = await supabase.from("leaderboard").insert(soccerPayload);
-    if (error && /goals_scored|result/i.test(error.message)) {
-      const legacyPayload = {
-        user_id: user.id,
-        nickname: cleanName,
-        score: matchScore,
-        gems: score.home,
-        level: resultText === "Win" ? 3 : resultText === "Draw" ? 2 : 1,
-      };
-      const fallback = await supabase.from("leaderboard").insert(legacyPayload);
-      error = fallback.error;
-    }
-    if (error) {
-      setSaveStatus(error.message);
-      return;
-    }
-    setSaveStatus("Saved to leaderboard.");
-    await fetchLeaderboard();
-  }, [fetchLeaderboard, matchScore, mode, nickname, resultText, score.home, user]);
-
-  useEffect(() => {
-    const id = window.setTimeout(() => void fetchLeaderboard(), 0);
-    return () => window.clearTimeout(id);
-  }, [fetchLeaderboard]);
-
   useEffect(() => {
     const coarse = window.matchMedia("(pointer: coarse)");
     const compact = window.matchMedia("(max-width: 1180px)");
@@ -2009,7 +1932,6 @@ export function ArcadeSoccerGame() {
       setUser(sessionUser);
       if (sessionUser) {
         const fallbackName = sessionUser.user_metadata?.full_name || sessionUser.email || "Player";
-        setNickname((current) => current || String(fallbackName).slice(0, 16));
         setOnlineUsername((current) => current || String(fallbackName).slice(0, 16));
         void loadOnlineProfile(sessionUser);
         void loadTeamSetup(sessionUser);
@@ -2022,7 +1944,6 @@ export function ArcadeSoccerGame() {
       setUser(sessionUser);
       if (sessionUser) {
         const fallbackName = sessionUser.user_metadata?.full_name || sessionUser.email || "Player";
-        setNickname((current) => current || String(fallbackName).slice(0, 16));
         setOnlineUsername((current) => current || String(fallbackName).slice(0, 16));
         void loadOnlineProfile(sessionUser);
         void loadTeamSetup(sessionUser);
@@ -2090,7 +2011,7 @@ export function ArcadeSoccerGame() {
   }, [matchState, mode, onlineMatch, user]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!isSignedIn) return;
     const mount = mountRef.current;
     if (!mount) return;
 
@@ -2172,6 +2093,8 @@ export function ArcadeSoccerGame() {
       ball,
       players,
       frame: 0,
+      matchTick: null,
+      frameCount: 0,
       lastTime: performance.now(),
       mode: "ai",
       state: "menu",
@@ -2228,36 +2151,56 @@ export function ArcadeSoccerGame() {
     };
     window.addEventListener("resize", onResize);
 
+    const runMatchTick = () => {
+      const active = sceneRef.current;
+      if (!active) return;
+      if (active.state !== "playing") return;
+      const dt = 1 / 30;
+      const clockBeforeUpdate = active.gameClock;
+      try {
+        active.cooldown = Math.max(0, active.cooldown - dt);
+        updateMatch(active, keysRef.current, dt, virtualControlsRef.current);
+        animateCrowd(active, dt);
+        active.frameCount += 1;
+        if (frameErrorRef.current) frameErrorRef.current = "";
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (active.phase === "open" && active.gameClock === clockBeforeUpdate) {
+          active.gameClock = Math.min(FULL_TIME_SECONDS, active.gameClock + dt * CLOCK_SPEED);
+        }
+        if (frameErrorRef.current !== message) {
+          frameErrorRef.current = message;
+          console.error("Fifa Online match update error", error);
+        }
+      }
+
+      setScore({ ...active.score });
+      setGameClock(active.gameClock);
+      setPhaseUi(active.phase);
+      const chargingPlayer = active.shotChargingPlayerId
+        ? active.players.find((player) => player.id === active.shotChargingPlayerId)
+        : null;
+      setShotChargeUi(chargingPlayer ? active.shotCharge : 0);
+      if (chargingPlayer) setShotChargePosition(playerScreenGaugePosition(active, chargingPlayer));
+      if (active.frameCount % 8 === 0) {
+        active.stadiumBoards.forEach((board) => drawStadiumScoreboard(board, active.score, active.gameClock, active.eventText));
+      }
+      if (active.gameClock >= FULL_TIME_SECONDS) {
+        active.state = "ended";
+        setMatchState("ended");
+      }
+    };
+
+    sceneRef.current.matchTick = window.setInterval(runMatchTick, 1000 / 30);
+
     const frame = (time: number) => {
       const active = sceneRef.current;
       if (!active) return;
       const dt = Math.min((time - active.lastTime) / 1000, 0.033);
       active.lastTime = time;
+      if (active.state !== "playing") active.ball.rotation.y += dt * 0.35;
 
       try {
-        if (active.state === "playing") {
-          active.cooldown = Math.max(0, active.cooldown - dt);
-          updateMatch(active, keysRef.current, dt, virtualControlsRef.current);
-          animateCrowd(active, dt);
-          setScore({ ...active.score });
-          setGameClock(active.gameClock);
-          setPhaseUi(active.phase);
-          if (frameErrorRef.current) frameErrorRef.current = "";
-          const chargingPlayer = active.shotChargingPlayerId
-            ? active.players.find((player) => player.id === active.shotChargingPlayerId)
-            : null;
-          setShotChargeUi(chargingPlayer ? active.shotCharge : 0);
-          if (chargingPlayer) setShotChargePosition(playerScreenGaugePosition(active, chargingPlayer));
-          if (active.frame % 8 === 0) {
-            active.stadiumBoards.forEach((board) => drawStadiumScoreboard(board, active.score, active.gameClock, active.eventText));
-          }
-          if (active.gameClock >= FULL_TIME_SECONDS) {
-            active.state = "ended";
-            setMatchState("ended");
-          }
-        } else {
-          active.ball.rotation.y += dt * 0.35;
-        }
         const controlledFocus = active.players.find((player) => player.controlledBy === "p1");
         const playerFocus = controlledFocus?.pos ?? active.ballPos;
         const blendedFocus = active.ballPos.clone().lerp(playerFocus, 0.22);
@@ -2291,7 +2234,7 @@ export function ArcadeSoccerGame() {
         const message = error instanceof Error ? error.message : String(error);
         if (frameErrorRef.current !== message) {
           frameErrorRef.current = message;
-          console.error("Fifa Online frame error", error);
+          console.error("Fifa Online render error", error);
         }
       }
       active.frame = requestAnimationFrame(frame);
@@ -2303,6 +2246,7 @@ export function ArcadeSoccerGame() {
       const active = sceneRef.current;
       if (!active) return;
       cancelAnimationFrame(active.frame);
+      if (active.matchTick !== null) window.clearInterval(active.matchTick);
       active.scene.traverse((object) => {
         if (!(object instanceof THREE.Mesh)) return;
         object.geometry.dispose();
@@ -2315,7 +2259,7 @@ export function ArcadeSoccerGame() {
       mount.removeChild(active.renderer.domElement);
       sceneRef.current = null;
     };
-  }, [user]);
+  }, [isSignedIn]);
 
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
@@ -2797,42 +2741,12 @@ export function ArcadeSoccerGame() {
               </button>
             </div>}
 
-            <div className="mt-5 border-t border-white/10 pt-4">
-              <div className="mb-2 text-sm font-bold">Leaderboard</div>
-              {!hasSupabaseConfig && <p className="mb-3 text-sm text-amber-200/85">Leaderboard is offline until Supabase env vars are added.</p>}
-              {authStatus && <p className="mb-3 text-sm text-cyan-100/75">{authStatus}</p>}
-              <div className="space-y-2">
-                {leaderboard.length === 0 ? (
-                  <p className="text-sm text-white/55">No saved scores yet.</p>
-                ) : (
-                  leaderboard.map((entry, index) => (
-                    <div key={entry.id} className="flex items-center justify-between rounded-md bg-white/6 px-3 py-2 text-sm">
-                      <span className="truncate">{index + 1}. {entry.nickname}</span>
-                      <span className="font-mono text-cyan-100">{entry.score}</span>
-                    </div>
-                  ))
-                )}
+            {(authStatus || setupStatus) && (
+              <div className="mt-5 border-t border-white/10 pt-4">
+                {authStatus && <p className="text-sm text-cyan-100/75">{authStatus}</p>}
+                {setupStatus && <p className="mt-2 text-sm text-cyan-100/75">{setupStatus}</p>}
               </div>
-              {matchState === "ended" && (
-                <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                  <input
-                    className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/35 px-3 py-2 text-sm text-white outline-none focus:border-emerald-300"
-                    maxLength={16}
-                    placeholder="Nickname"
-                    value={nickname}
-                    onChange={(event) => setNickname(event.target.value)}
-                  />
-                  <button
-                    className="rounded-md bg-lime-300 px-4 py-2 text-sm font-bold text-slate-950 transition hover:bg-lime-200 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!hasSupabaseConfig || !user || mode !== "ai"}
-                    onClick={saveScore}
-                  >
-                    Save score
-                  </button>
-                </div>
-              )}
-              {saveStatus && <p className="mt-2 text-xs text-cyan-100/75">{saveStatus}</p>}
-            </div>
+            )}
           </div>
         </div>
       )}
@@ -2974,7 +2888,7 @@ function updateMatch(
     animatePlayer(player, dt);
     updateStuckState(player, input.dir, active, dt);
   });
-  if (active.frame % 2 === 0) separatePlayers(active.players);
+  if (active.frameCount % 2 === 0) separatePlayers(active.players);
   handleGoalkeeperActions(active);
   updateAimIndicators(active, keys);
 

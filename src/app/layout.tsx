@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Fifa Online",
-  description: "A 3D arcade soccer browser game with AI teammates, online match requests, Google login, and an optional Supabase leaderboard.",
+  description: "A 3D arcade soccer browser game with AI teammates, online match requests, Google login, and team setup.",
   icons: {
     icon: "/favicon.svg",
   },
