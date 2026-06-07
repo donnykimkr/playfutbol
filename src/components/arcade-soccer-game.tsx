@@ -228,6 +228,7 @@ const BROADCAST_CAMERA_Z_OFFSET = 7.5;
 const BROADCAST_LOOK_AT_X = 0;
 const BROADCAST_LOOK_AT_Y = 1.05;
 const BROADCAST_LOOK_AT_Z = 0;
+const ENABLE_BLOCKING_WALKOUT = false;
 
 const AWAY_COLOR = "#dc2626";
 const HOME_TRIM = "#2563eb";
@@ -1873,10 +1874,16 @@ export function ArcadeSoccerGame() {
     setMode(nextMode);
     setScore({ home: 0, away: 0 });
     setGameClock(0);
-    setPhaseUi("walkout");
     setSaveStatus("");
     resetPositions("home");
-    beginWalkout(active);
+    if (ENABLE_BLOCKING_WALKOUT) {
+      setPhaseUi("walkout");
+      beginWalkout(active);
+    } else {
+      finishWalkoutToKickoff(active);
+      active.phaseTimer = 0.45;
+      setPhaseUi(active.phase);
+    }
     setMatchState("playing");
   }, [formationAssignments, formationName, mode, requestGameFullscreen, resetPositions, selectedTeamKey, showTouchControls, squadPlayers, user]);
 
@@ -2462,7 +2469,7 @@ export function ArcadeSoccerGame() {
           </div>
         </div>
       )}
-      {matchState === "playing" && phaseUi === "walkout" && (
+      {ENABLE_BLOCKING_WALKOUT && matchState === "playing" && phaseUi === "walkout" && (
         <button
           type="button"
           className="pointer-events-auto fixed left-1/2 top-24 z-[70] -translate-x-1/2 rounded-full border border-white/20 bg-black/70 px-5 py-2 text-xs font-black uppercase tracking-wide text-white shadow-2xl backdrop-blur-md active:bg-white/15"
@@ -2588,12 +2595,19 @@ export function ArcadeSoccerGame() {
 
             {setupTab === "team" && (
               <div className="mb-4 rounded-md border border-white/10 bg-white/5 p-3">
-                <div className="mb-3 text-sm font-black text-cyan-100">Team selection</div>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-black text-cyan-100">Team selection</div>
+                  <div className="rounded-full border border-lime-200/25 bg-lime-300/15 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-lime-100">
+                    Selected: {chosenTeam.name}
+                  </div>
+                </div>
                 <div className="grid gap-2 sm:grid-cols-3">
                   {TEAM_OPTIONS.map((team) => (
                     <button
                       key={team.key}
-                      className={`rounded-md border p-3 text-left transition ${selectedTeamKey === team.key ? "border-lime-200 bg-lime-300/15" : "border-white/10 bg-black/25 hover:bg-white/10"}`}
+                      type="button"
+                      aria-pressed={selectedTeamKey === team.key}
+                      className={`rounded-md border p-3 text-left transition ${selectedTeamKey === team.key ? "border-lime-200 bg-lime-300/15 ring-2 ring-lime-200/45" : "border-white/10 bg-black/25 hover:bg-white/10"}`}
                       onClick={() => selectTeam(team.key)}
                     >
                       <div className="mb-2 flex gap-1">
@@ -2606,8 +2620,8 @@ export function ArcadeSoccerGame() {
                     </button>
                   ))}
                 </div>
-                <button className="mt-3 rounded-md bg-lime-300 px-4 py-2 text-sm font-black text-slate-950" onClick={saveTeamSetup}>
-                  Save club setup
+                <button type="button" className="mt-3 rounded-md bg-lime-300 px-4 py-2 text-sm font-black text-slate-950" onClick={saveTeamSetup}>
+                  Save {chosenTeam.name} setup
                 </button>
                 {setupStatus && <p className="mt-2 text-xs text-cyan-100/75">{setupStatus}</p>}
               </div>
