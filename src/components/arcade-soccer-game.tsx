@@ -221,6 +221,11 @@ const GOAL_FRONT_Z = FIELD_L / 2 + 1.2;
 const GOAL_SCORE_Z = GOAL_FRONT_Z + BALL_RADIUS * 0.7;
 const GOAL_BACK_Z = GOAL_FRONT_Z + GOAL_DEPTH;
 const GOAL_SIDE_POST_INSET = 0.26;
+const BROADCAST_CAMERA_X = -FIELD_W / 2 - 28;
+const BROADCAST_CAMERA_Y = 38;
+const BROADCAST_CAMERA_Z_OFFSET = 7.5;
+const BROADCAST_LOOK_AT_X = 0;
+const BROADCAST_LOOK_AT_Y = 1.05;
 
 const AWAY_COLOR = "#dc2626";
 const HOME_TRIM = "#2563eb";
@@ -2051,7 +2056,8 @@ export function ArcadeSoccerGame() {
     scene.fog = new THREE.Fog("#8fd3ff", 95, 210);
 
     const camera = new THREE.PerspectiveCamera(48, mount.clientWidth / mount.clientHeight, 0.1, 260);
-    camera.position.set(0, 49, 46);
+    camera.position.set(BROADCAST_CAMERA_X, BROADCAST_CAMERA_Y, BROADCAST_CAMERA_Z_OFFSET);
+    camera.up.set(0, 1, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
@@ -2211,36 +2217,30 @@ export function ArcadeSoccerGame() {
       const controlledFocus = active.players.find((player) => player.controlledBy === "p1");
       const playerFocus = controlledFocus?.pos ?? active.ballPos;
       const blendedFocus = active.ballPos.clone().lerp(playerFocus, 0.22);
-      const goalCameraSide = Math.sign(active.ballPos.z || 1);
+      const focusZ = clamp(blendedFocus.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
+      const ballFocusZ = clamp(active.ballPos.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
       const desired = active.phase === "walkout"
-        ? new THREE.Vector3(-FIELD_W / 2 - 20, 10.6, -8)
+        ? new THREE.Vector3(BROADCAST_CAMERA_X + 5, 11.2, -8)
         : active.phase === "goal"
-          ? new THREE.Vector3(
-            clamp(active.ballPos.x + 16 * Math.sign(active.ballPos.x || 1), -FIELD_W / 2 - 4, FIELD_W / 2 + 4),
-            9.2,
-            clamp(active.ballPos.z - goalCameraSide * 18, -FIELD_L / 2 - 4, FIELD_L / 2 + 4),
-          )
+          ? new THREE.Vector3(BROADCAST_CAMERA_X + 6, 16, ballFocusZ + BROADCAST_CAMERA_Z_OFFSET)
           : new THREE.Vector3(
-          -FIELD_W / 2 - 28,
-          40,
-          blendedFocus.z + 5,
+          BROADCAST_CAMERA_X,
+          BROADCAST_CAMERA_Y,
+          focusZ + BROADCAST_CAMERA_Z_OFFSET,
         );
       desired.z = clamp(desired.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
       active.camera.position.lerp(desired, 1 - Math.pow(0.0008, dt));
       const desiredLookAt = active.phase === "walkout"
-        ? new THREE.Vector3(-5, 1.45, 0)
+        ? new THREE.Vector3(-4, 1.45, 0)
         : active.phase === "goal"
-          ? new THREE.Vector3(
-            clamp(active.ballPos.x * 0.35, -7, 7),
-            1.35,
-            active.ballPos.z,
-          )
+          ? new THREE.Vector3(BROADCAST_LOOK_AT_X, 1.35, ballFocusZ)
           : new THREE.Vector3(
-          clamp(blendedFocus.x * 0.2, -9, 9),
-          0.9,
-          blendedFocus.z,
+          BROADCAST_LOOK_AT_X,
+          BROADCAST_LOOK_AT_Y,
+          focusZ,
         );
       active.cameraLookAt.lerp(desiredLookAt, 1 - Math.pow(0.0016, dt));
+      active.camera.up.set(0, 1, 0);
       active.camera.lookAt(active.cameraLookAt);
       active.renderer.render(active.scene, active.camera);
       active.frame = requestAnimationFrame(frame);
