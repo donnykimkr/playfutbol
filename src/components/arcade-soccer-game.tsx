@@ -2304,16 +2304,17 @@ export function ArcadeSoccerGame() {
           console.error("Fifa Online render recovery failed", renderError);
         }
       } finally {
-        active.frame = requestAnimationFrame(frame);
+        active.frame = window.setTimeout(() => frame(performance.now()), 16);
       }
     };
-    sceneRef.current.frame = requestAnimationFrame(frame);
+    sceneRef.current.frame = window.setTimeout(() => frame(performance.now()), 16);
 
     return () => {
       window.removeEventListener("resize", onResize);
       const active = sceneRef.current;
       if (!active) return;
       cancelAnimationFrame(active.frame);
+      window.clearTimeout(active.frame);
       active.scene.traverse((object) => {
         if (!(object instanceof THREE.Mesh)) return;
         object.geometry.dispose();
