@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import * as THREE from "three";
-import type { User } from "@supabase/supabase-js";
-import { LogOut, Play, RotateCcw, Trophy, UserCircle, Users } from "lucide-react";
+import { Play, RotateCcw } from "lucide-react";
 import { getSupabaseClient, hasSupabaseConfig } from "@/lib/supabase";
 
 type GameMode = "ai" | "online";
@@ -11,7 +10,7 @@ type MatchState = "menu" | "playing" | "ended";
 type TeamId = "home" | "away";
 type PlayerRole = "field" | "keeper";
 type PlayerLine = "keeper" | "defender" | "midfielder" | "forward";
-type PlayPhase = "walkout" | "open" | "goal" | "halftime" | "kickoff" | "throw-in" | "goal-kick" | "corner";
+type PlayPhase = "open" | "goal" | "halftime" | "kickoff" | "throw-in" | "goal-kick" | "corner";
 type AiSkillMove = "shot-fake" | "body-feint" | "quick-turn" | "dribble-burst" | "fake-pass" | null;
 
 type PlayerBody = {
@@ -86,32 +85,24 @@ type VirtualControls = {
   sprint: boolean;
 };
 
-type OnlineProfile = {
+type RoomRecord = {
   id: string;
-  username: string;
-  game_id: string;
-};
-
-type MatchRequestRow = {
-  id: string;
-  from_user: string;
-  to_user: string;
-  status: "pending" | "accepted" | "declined";
-  created_at: string;
-  profiles?: { username: string; game_id: string } | null;
-};
-
-type OnlineMatchRow = {
-  id: string;
-  home_user: string;
-  away_user: string;
-  status: string;
+  room_code: string;
+  host_visitor_id: string;
+  guest_visitor_id: string | null;
+  status: "waiting" | "ready" | "active" | "ended";
   state?: Record<string, unknown> | null;
   created_at: string;
+  updated_at?: string;
+};
+
+type GameSessionAnalytics = {
+  id: string | null;
+  startedAt: number;
+  startedScore: { home: number; away: number };
 };
 
 type FictionalTeamKey = "city" | "united" | "humble" | "blue" | "spurs" | "scouse";
-type SetupTab = "team" | "squad" | "formation" | "match" | "online";
 
 type TeamOption = {
   key: FictionalTeamKey;
@@ -235,7 +226,7 @@ const BROADCAST_CAMERA_Z_OFFSET = 7.5;
 const BROADCAST_LOOK_AT_X = 0;
 const BROADCAST_LOOK_AT_Y = 1.05;
 const BROADCAST_LOOK_AT_Z = 0;
-const ENABLE_BLOCKING_WALKOUT = false;
+const VISITOR_STORAGE_KEY = "fifaonline_visitor_id";
 
 const AWAY_COLOR = "#dc2626";
 const AWAY_TRIM = "#f8fafc";
@@ -373,12 +364,61 @@ function headingFromDirection(direction: THREE.Vector3) {
   return Math.atan2(direction.x, direction.z);
 }
 
-function nicknameIsValid(value: string) {
-  return /^[a-zA-Z0-9 _-]{2,16}$/.test(value.trim());
-}
-
 function scoreMatch(goalsFor: number, goalsAgainst: number) {
   return Math.max(1, goalsFor * 1000 + Math.max(0, goalsFor - goalsAgainst) * 500 + (goalsFor > goalsAgainst ? 2000 : goalsFor === goalsAgainst ? 750 : 100));
+}
+
+function getAnonymousVisitorId() {
+  if (typeof window === "undefined") return null;
+  const existing = window.localStorage.getItem(VISITOR_STORAGE_KEY);
+  if (existing) return existing;
+  const fallback = `visitor-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const visitorId = globalThis.crypto?.randomUUID?.() ?? fallback;
+  window.localStorage.setItem(VISITOR_STORAGE_KEY, visitorId);
+  return visitorId;
+}
+
+async function trackVisitorPageView(visitorId: string, path: string) {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  const now = new Date().toISOString();
+  await supabase
+    .from("visitors")
+    .upsert({ visitor_id: visitorId, last_seen: now }, { onConflict: "visitor_id" });
+  await supabase.from("page_views").insert({ visitor_id: visitorId, path });
+}
+
+async function startAnalyticsSession(visitorId: string) {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from("game_sessions")
+    .insert({ visitor_id: visitorId, started_at: new Date().toISOString(), goals_scored: 0, goals_conceded: 0, duration_seconds: 0 })
+    .select("id")
+    .single();
+  if (error) return null;
+  return (data as { id: string }).id;
+}
+
+async function finishAnalyticsSession(session: GameSessionAnalytics | null, visitorId: string | null, score: { home: number; away: number }) {
+  if (!session?.id || !visitorId) return;
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  const durationSeconds = Math.max(1, Math.round((performance.now() - session.startedAt) / 1000));
+  await supabase
+    .from("game_sessions")
+    .update({
+      ended_at: new Date().toISOString(),
+      goals_scored: Math.max(0, score.home - session.startedScore.home),
+      goals_conceded: Math.max(0, score.away - session.startedScore.away),
+      duration_seconds: durationSeconds,
+    })
+    .eq("id", session.id)
+    .eq("visitor_id", visitorId);
+}
+
+function createRoomCode() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
 function teamGoalZ(team: TeamId, half: 1 | 2) {
@@ -898,48 +938,33 @@ export function ArcadeSoccerGame() {
   const frameErrorRef = useRef("");
   const virtualControlsRef = useRef<VirtualControls>({ dir: new THREE.Vector3(), strength: 0, sprint: false });
   const joystickPointerRef = useRef<number | null>(null);
-  const setupDirtyRef = useRef(false);
   const runtimeVersionRef = useRef(0);
+  const visitorIdRef = useRef<string | null>(null);
+  const gameSessionRef = useRef<GameSessionAnalytics | null>(null);
 
   const [mode, setMode] = useState<GameMode>("ai");
   const [matchState, setMatchState] = useState<MatchState>("menu");
   const [score, setScore] = useState({ home: 0, away: 0 });
   const [gameClock, setGameClock] = useState(0);
-  const [user, setUser] = useState<User | null>(null);
-  const [authStatus, setAuthStatus] = useState("");
   const [showTouchControls, setShowTouchControls] = useState(false);
   const [shotChargeUi, setShotChargeUi] = useState(0);
   const [shotChargePosition, setShotChargePosition] = useState({ x: 0, y: 0 });
-  const [phaseUi, setPhaseUi] = useState<PlayPhase>("kickoff");
+  const [, setPhaseUi] = useState<PlayPhase>("kickoff");
   const [p1AiUi, setP1AiUi] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [joystickKnob, setJoystickKnob] = useState({ x: 0, y: 0 });
-  const [onlineProfile, setOnlineProfile] = useState<OnlineProfile | null>(null);
-  const [onlineUsername, setOnlineUsername] = useState("");
-  const [onlineSearchId, setOnlineSearchId] = useState("");
-  const [onlineStatus, setOnlineStatus] = useState("");
-  const [incomingRequests, setIncomingRequests] = useState<MatchRequestRow[]>([]);
-  const [outgoingRequests, setOutgoingRequests] = useState<MatchRequestRow[]>([]);
-  const [onlineMatch, setOnlineMatch] = useState<OnlineMatchRow | null>(null);
-  const [authChecked, setAuthChecked] = useState(!hasSupabaseConfig);
-  const [perfDebugBypass, setPerfDebugBypass] = useState(false);
-  const [setupTab, setSetupTab] = useState<SetupTab>("team");
-  const [selectedTeamKey, setSelectedTeamKey] = useState<FictionalTeamKey>(DEFAULT_TEAM_KEY);
-  const [squadPlayers, setSquadPlayers] = useState<SquadPlayer[]>(() => defaultSquadPlayers());
-  const [formationName, setFormationName] = useState<FormationKey>("4-3-3");
-  const [formationAssignments, setFormationAssignments] = useState<Record<string, string>>(() => defaultFormationAssignments("4-3-3"));
-  const [setupStatus, setSetupStatus] = useState("");
+  const [roomCode, setRoomCode] = useState("");
+  const [joinRoomCode, setJoinRoomCode] = useState("");
+  const [roomStatus, setRoomStatus] = useState("");
+  const [activeRoom, setActiveRoom] = useState<RoomRecord | null>(null);
   const scoreUiRef = useRef({ home: 0, away: 0 });
   const gameClockUiRef = useRef(0);
   const phaseUiRef = useRef<PlayPhase>("kickoff");
   const shotChargeUiRef = useRef(0);
   const p1AiUiRef = useRef(false);
 
-  const playerLabel = user?.user_metadata?.full_name || user?.email || (perfDebugBypass ? "Perf Test" : "Player");
   const matchScore = useMemo(() => scoreMatch(score.home, score.away), [score]);
   const resultText = score.home > score.away ? "Win" : score.home < score.away ? "Lose" : "Draw";
-  const chosenTeam = selectedTeamOption(selectedTeamKey);
-  const isSignedIn = Boolean(user) || perfDebugBypass;
 
   const syncP1AiUi = useCallback((enabled: boolean) => {
     if (p1AiUiRef.current === enabled) return;
@@ -948,229 +973,77 @@ export function ArcadeSoccerGame() {
   }, []);
 
   useEffect(() => {
-    applyActiveHomeSetup(selectedTeamKey, formationName, squadPlayers, formationAssignments);
-  }, [formationAssignments, formationName, selectedTeamKey, squadPlayers]);
-
-  const updateSquadPlayer = useCallback((playerKey: string, patch: Partial<SquadPlayer>) => {
-    setupDirtyRef.current = true;
-    setSquadPlayers((players) => players.map((player) => (
-      player.player_key === playerKey ? { ...player, ...patch } : player
-    )));
+    applyActiveHomeSetup(DEFAULT_TEAM_KEY, "4-3-3", defaultSquadPlayers(), defaultFormationAssignments("4-3-3"));
+    const visitorId = getAnonymousVisitorId();
+    visitorIdRef.current = visitorId;
+    if (visitorId && typeof window !== "undefined") {
+      void trackVisitorPageView(visitorId, window.location.pathname);
+    }
   }, []);
 
-  const changeFormation = useCallback((nextFormation: FormationKey) => {
-    setupDirtyRef.current = true;
-    setFormationName(nextFormation);
-    setFormationAssignments((current) => {
-      const next = defaultFormationAssignments(nextFormation, squadPlayers);
-      FORMATION_OPTIONS[nextFormation].forEach((slot) => {
-        if (current[slot.slot]) next[slot.slot] = current[slot.slot];
-      });
-      return next;
-    });
-  }, [squadPlayers]);
-
-  const selectTeam = useCallback((teamKey: FictionalTeamKey) => {
-    setupDirtyRef.current = true;
-    setSelectedTeamKey(teamKey);
-    applyActiveHomeSetup(teamKey, formationName, squadPlayers, formationAssignments);
-    setSetupStatus(`${selectedTeamOption(teamKey).name} selected. Save club setup to keep it online.`);
-  }, [formationAssignments, formationName, squadPlayers]);
-
-  const loadTeamSetup = useCallback(async (sessionUser = user) => {
+  const createOnlineRoom = useCallback(async () => {
     const supabase = getSupabaseClient();
-    if (!supabase || !sessionUser) return;
-    const [teamResult, squadResult, formationResult] = await Promise.all([
-      supabase.from("teams").select("*").eq("user_id", sessionUser.id).maybeSingle(),
-      supabase.from("squads").select("player_key,name,jersey_number,position").eq("user_id", sessionUser.id).order("jersey_number", { ascending: true }),
-      supabase.from("formations").select("name,slot_assignments").eq("user_id", sessionUser.id).eq("is_active", true).maybeSingle(),
-    ]);
-    if (teamResult.error || squadResult.error || formationResult.error) {
-      setSetupStatus("Team database is not ready yet. Applying the Supabase SQL will enable saving.");
+    const visitorId = visitorIdRef.current ?? getAnonymousVisitorId();
+    visitorIdRef.current = visitorId;
+    if (!supabase || !visitorId) {
+      setRoomStatus("Supabase is not connected. Single-player still works.");
       return;
     }
-    if (setupDirtyRef.current) return;
-    const teamKey = teamResult.data?.team_key as FictionalTeamKey | undefined;
-    if (teamKey && TEAM_OPTIONS.some((team) => team.key === teamKey)) setSelectedTeamKey(teamKey);
-    const loadedSquad = (squadResult.data ?? []) as SquadPlayer[];
-    if (loadedSquad.length > 0) setSquadPlayers(loadedSquad);
-    const loadedFormation = formationResult.data?.name as FormationKey | undefined;
-    if (loadedFormation && FORMATION_OPTIONS[loadedFormation]) {
-      setFormationName(loadedFormation);
-      setFormationAssignments((formationResult.data?.slot_assignments as Record<string, string> | null) ?? defaultFormationAssignments(loadedFormation, loadedSquad.length ? loadedSquad : defaultSquadPlayers()));
-    }
-  }, [user]);
-
-  const saveTeamSetup = useCallback(async () => {
-    const supabase = getSupabaseClient();
-    if (!supabase || !user) {
-      setSetupStatus("Sign in with Google before saving team setup.");
-      return;
-    }
-    const team = selectedTeamOption(selectedTeamKey);
-    setSetupStatus("Saving team setup...");
-    const teamPayload = {
-      user_id: user.id,
-      team_key: team.key,
-      team_name: team.name,
-      primary_color: team.primary,
-      secondary_color: team.secondary,
-      accent_color: team.accent,
-    };
-    const teamSave = await supabase.from("teams").upsert(teamPayload, { onConflict: "user_id" });
-    if (teamSave.error) {
-      setSetupStatus(teamSave.error.message);
-      return;
-    }
-    const squadPayload = squadPlayers.map((player) => ({
-      user_id: user.id,
-      player_key: player.player_key,
-      name: player.name.trim() || "Player",
-      jersey_number: clamp(Math.floor(Number(player.jersey_number) || 1), 1, 99),
-      position: player.position.trim().toUpperCase() || "CM",
-    }));
-    const squadSave = await supabase.from("squads").upsert(squadPayload, { onConflict: "user_id,player_key" });
-    if (squadSave.error) {
-      setSetupStatus(squadSave.error.message);
-      return;
-    }
-    await supabase.from("formations").update({ is_active: false }).eq("user_id", user.id);
-    const formationSave = await supabase.from("formations").upsert({
-      user_id: user.id,
-      name: formationName,
-      slot_assignments: formationAssignments,
-      is_active: true,
-    }, { onConflict: "user_id,name" });
-    if (formationSave.error) {
-      setSetupStatus(formationSave.error.message);
-      return;
-    }
-    setupDirtyRef.current = false;
-    setSetupStatus("Saved team, squad, and formation.");
-  }, [formationAssignments, formationName, selectedTeamKey, squadPlayers, user]);
-
-  const signInWithGoogle = useCallback(async () => {
-    const supabase = getSupabaseClient();
-    if (!supabase || typeof window === "undefined") {
-      setAuthStatus("Google sign-in needs Supabase env vars.");
-      return;
-    }
-    const redirectOrigin = window.location.hostname.includes("localhost")
-      ? window.location.origin
-      : "https://fifaonline.vercel.app";
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: redirectOrigin },
-    });
-    if (error) setAuthStatus(error.message);
-  }, []);
-
-  const signOut = useCallback(async () => {
-    const supabase = getSupabaseClient();
-    if (!supabase) return;
-    await supabase.auth.signOut();
-    setUser(null);
-    setOnlineProfile(null);
-    setIncomingRequests([]);
-    setOutgoingRequests([]);
-    setOnlineMatch(null);
-    setMatchState("menu");
-    setAuthStatus("Signed out. Please sign in to play.");
-  }, []);
-
-  const loadOnlineProfile = useCallback(async (sessionUser = user) => {
-    const supabase = getSupabaseClient();
-    if (!supabase || !sessionUser) return;
+    const nextCode = createRoomCode();
     const { data, error } = await supabase
-      .from("profiles")
-      .select("id, username, game_id")
-      .eq("id", sessionUser.id)
-      .maybeSingle();
-    if (error) {
-      setOnlineStatus("Online multiplayer tables are not ready yet.");
-      return;
-    }
-    if (data) {
-      setOnlineProfile(data as OnlineProfile);
-      setOnlineUsername((data as OnlineProfile).username);
-    }
-  }, [user]);
-
-  const fetchOnlineRequests = useCallback(async (sessionUser = user) => {
-    const supabase = getSupabaseClient();
-    if (!supabase || !sessionUser) return;
-    const [incoming, outgoing, activeMatch] = await Promise.all([
-      supabase.from("match_requests").select("*").eq("to_user", sessionUser.id).eq("status", "pending").order("created_at", { ascending: false }).limit(8),
-      supabase.from("match_requests").select("*").eq("from_user", sessionUser.id).eq("status", "pending").order("created_at", { ascending: false }).limit(8),
-      supabase.from("online_matches").select("*").or(`home_user.eq.${sessionUser.id},away_user.eq.${sessionUser.id}`).eq("status", "active").order("created_at", { ascending: false }).limit(1).maybeSingle(),
-    ]);
-    if (incoming.error || outgoing.error) {
-      setOnlineStatus("Online multiplayer tables are not ready yet.");
-      return;
-    }
-    setIncomingRequests((incoming.data ?? []) as MatchRequestRow[]);
-    setOutgoingRequests((outgoing.data ?? []) as MatchRequestRow[]);
-    setOnlineMatch((activeMatch.data ?? null) as OnlineMatchRow | null);
-  }, [user]);
-
-  const saveOnlineProfile = useCallback(async () => {
-    const supabase = getSupabaseClient();
-    if (!supabase || !user) {
-      setOnlineStatus("Sign in with Google to create an online ID.");
-      return;
-    }
-    const username = onlineUsername.trim();
-    if (!nicknameIsValid(username)) {
-      setOnlineStatus("Username must be 2-16 letters, numbers, spaces, _ or -.");
-      return;
-    }
-    const gameId = onlineProfile?.game_id ?? `FO-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-    const { data, error } = await supabase
-      .from("profiles")
-      .upsert({ id: user.id, username, game_id: gameId }, { onConflict: "id" })
-      .select("id, username, game_id")
+      .from("rooms")
+      .insert({ room_code: nextCode, host_visitor_id: visitorId, status: "waiting", state: { createdBy: "host" } })
+      .select("*")
       .single();
     if (error) {
-      setOnlineStatus(error.message);
+      setRoomStatus(`Room setup unavailable: ${error.message}`);
       return;
     }
-    setOnlineProfile(data as OnlineProfile);
-    setOnlineStatus(`Online ID ready: ${(data as OnlineProfile).game_id}`);
-  }, [onlineProfile?.game_id, onlineUsername, user]);
+    setRoomCode(nextCode);
+    setActiveRoom(data as RoomRecord);
+    setMode("online");
+    setRoomStatus("Room created. Share the code with another player.");
+  }, []);
 
-  const sendMatchRequest = useCallback(async () => {
+  const joinOnlineRoom = useCallback(async () => {
     const supabase = getSupabaseClient();
-    if (!supabase || !user || !onlineProfile) {
-      setOnlineStatus("Create an online ID before sending match requests.");
+    const visitorId = visitorIdRef.current ?? getAnonymousVisitorId();
+    visitorIdRef.current = visitorId;
+    const code = joinRoomCode.trim().toUpperCase();
+    if (!supabase || !visitorId) {
+      setRoomStatus("Supabase is not connected. Room-code multiplayer is disabled.");
       return;
     }
-    const gameId = onlineSearchId.trim().toUpperCase();
-    if (!gameId) return;
-    const { data: target, error: targetError } = await supabase
-      .from("profiles")
-      .select("id, username, game_id")
-      .eq("game_id", gameId)
+    if (code.length < 4) {
+      setRoomStatus("Enter a room code first.");
+      return;
+    }
+    const { data: room, error: findError } = await supabase
+      .from("rooms")
+      .select("*")
+      .eq("room_code", code)
       .maybeSingle();
-    if (targetError || !target) {
-      setOnlineStatus("No user found with that ID.");
+    if (findError || !room) {
+      setRoomStatus("Room not found.");
       return;
     }
-    if ((target as OnlineProfile).id === user.id) {
-      setOnlineStatus("You cannot challenge yourself.");
-      return;
-    }
-    const { error } = await supabase.from("match_requests").insert({
-      from_user: user.id,
-      to_user: (target as OnlineProfile).id,
-      status: "pending",
-    });
+    const existing = room as RoomRecord;
+    const { data, error } = await supabase
+      .from("rooms")
+      .update({ guest_visitor_id: visitorId, status: "ready", updated_at: new Date().toISOString() })
+      .eq("id", existing.id)
+      .in("status", ["waiting", "ready"])
+      .select("*")
+      .single();
     if (error) {
-      setOnlineStatus(error.message);
+      setRoomStatus(`Could not join room: ${error.message}`);
       return;
     }
-    setOnlineStatus(`Request sent to ${(target as OnlineProfile).username}.`);
-    await fetchOnlineRequests();
-  }, [fetchOnlineRequests, onlineProfile, onlineSearchId, user]);
+    setRoomCode(code);
+    setActiveRoom(data as RoomRecord);
+    setMode("online");
+    setRoomStatus("Joined room. Current MVP syncs room presence; gameplay remains local until full deterministic sync is added.");
+  }, [joinRoomCode]);
 
 
   const requestTackle = useCallback((controller: "p1" | "p2") => {
@@ -1313,6 +1186,10 @@ export function ArcadeSoccerGame() {
   const endMatch = useCallback(() => {
     const active = sceneRef.current;
     if (active) {
+      void finishAnalyticsSession(gameSessionRef.current, visitorIdRef.current, active.score);
+      gameSessionRef.current = null;
+    }
+    if (active) {
       active.state = "menu";
       active.phase = "kickoff";
       active.phaseTimer = 0;
@@ -1340,11 +1217,14 @@ export function ArcadeSoccerGame() {
     if (!active) return;
     if (showTouchControls) void requestGameFullscreen();
     ensureAudio(active);
-    if (!isSignedIn) {
-      setAuthStatus("Sign in with Google before playing.");
-      return;
+    const visitorId = visitorIdRef.current ?? getAnonymousVisitorId();
+    visitorIdRef.current = visitorId;
+    if (visitorId) {
+      gameSessionRef.current = { id: null, startedAt: performance.now(), startedScore: { home: 0, away: 0 } };
+      void startAnalyticsSession(visitorId).then((id) => {
+        if (gameSessionRef.current) gameSessionRef.current.id = id;
+      });
     }
-    applyActiveHomeSetup(selectedTeamKey, formationName, squadPlayers, formationAssignments);
     active.mode = nextMode;
     active.state = "playing";
     active.phase = "kickoff";
@@ -1372,58 +1252,10 @@ export function ArcadeSoccerGame() {
     setScore({ home: 0, away: 0 });
     setGameClock(0);
     resetPositions("home");
-    if (ENABLE_BLOCKING_WALKOUT) {
-      setPhaseUi("walkout");
-      beginWalkout(active);
-    } else {
-      startDirectKickoff(active, "home");
-      setPhaseUi(active.phase);
-    }
-    setMatchState("playing");
-  }, [formationAssignments, formationName, isSignedIn, mode, requestGameFullscreen, resetPositions, selectedTeamKey, showTouchControls, squadPlayers]);
-
-  const skipWalkout = useCallback(() => {
-    const active = sceneRef.current;
-    if (!active || active.state !== "playing") return;
-    if (active.phase !== "walkout" && phaseUi !== "walkout") return;
-    finishWalkoutToKickoff(active);
+    startDirectKickoff(active, "home");
     setPhaseUi(active.phase);
-  }, [phaseUi]);
-
-  const respondToMatchRequest = useCallback(async (request: MatchRequestRow, status: "accepted" | "declined") => {
-    const supabase = getSupabaseClient();
-    if (!supabase || !user) return;
-    const { error } = await supabase.from("match_requests").update({ status, responded_at: new Date().toISOString() }).eq("id", request.id).eq("to_user", user.id);
-    if (error) {
-      setOnlineStatus(error.message);
-      return;
-    }
-    if (status === "accepted") {
-      const { data: match, error: matchError } = await supabase
-        .from("online_matches")
-        .insert({ home_user: request.from_user, away_user: user.id, status: "active", state: { kickoff: Date.now() } })
-        .select("*")
-        .single();
-      if (matchError) {
-        setOnlineStatus(matchError.message);
-        return;
-      }
-      const playersSave = await supabase.from("match_players").insert([
-        { match_id: (match as OnlineMatchRow).id, user_id: request.from_user, team_side: "home", ready: true },
-        { match_id: (match as OnlineMatchRow).id, user_id: user.id, team_side: "away", ready: true },
-      ]);
-      if (playersSave.error) {
-        setOnlineStatus(playersSave.error.message);
-        return;
-      }
-      setOnlineMatch(match as OnlineMatchRow);
-      setOnlineStatus("Online room created. Choose Online mode and press Kick off when both players are ready.");
-      setMode("online");
-    } else {
-      setOnlineStatus("Request declined.");
-    }
-    await fetchOnlineRequests();
-  }, [fetchOnlineRequests, user]);
+    setMatchState("playing");
+  }, [mode, requestGameFullscreen, resetPositions, showTouchControls]);
 
   useEffect(() => {
     const coarse = window.matchMedia("(pointer: coarse)");
@@ -1443,104 +1275,23 @@ export function ArcadeSoccerGame() {
   }, []);
 
   useEffect(() => {
-    if (process.env.NODE_ENV === "production") return;
-    const enabled = new URLSearchParams(window.location.search).has("perf");
-    if (!enabled) return;
-    const timer = window.setTimeout(() => {
-      setPerfDebugBypass(true);
-      setAuthChecked(true);
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
+    if (!activeRoom || !hasSupabaseConfig) return undefined;
     const supabase = getSupabaseClient();
     if (!supabase) return undefined;
-    void supabase.auth.getSession().then(({ data }) => {
-      const sessionUser = data.session?.user ?? null;
-      setUser(sessionUser);
-      if (sessionUser) {
-        const fallbackName = sessionUser.user_metadata?.full_name || sessionUser.email || "Player";
-        setOnlineUsername((current) => current || String(fallbackName).slice(0, 16));
-        void loadOnlineProfile(sessionUser);
-        void loadTeamSetup(sessionUser);
-        void fetchOnlineRequests(sessionUser);
-      }
-      setAuthChecked(true);
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      const sessionUser = session?.user ?? null;
-      setUser(sessionUser);
-      if (sessionUser) {
-        const fallbackName = sessionUser.user_metadata?.full_name || sessionUser.email || "Player";
-        setOnlineUsername((current) => current || String(fallbackName).slice(0, 16));
-        void loadOnlineProfile(sessionUser);
-        void loadTeamSetup(sessionUser);
-        void fetchOnlineRequests(sessionUser);
-        setAuthStatus("");
-      } else {
-        setMatchState("menu");
-      }
-      setAuthChecked(true);
-    });
-    return () => data.subscription.unsubscribe();
-  }, [fetchOnlineRequests, loadOnlineProfile, loadTeamSetup]);
-
-  useEffect(() => {
-    if (!user || !hasSupabaseConfig || matchState === "playing") return undefined;
-    const supabase = getSupabaseClient();
-    if (!supabase) return undefined;
-    const timer = window.setInterval(() => {
-      void fetchOnlineRequests(user);
-    }, 4500);
     const channel = supabase
-      .channel(`online-lobby-${user.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "match_requests", filter: `to_user=eq.${user.id}` }, () => void fetchOnlineRequests(user))
-      .on("postgres_changes", { event: "*", schema: "public", table: "match_requests", filter: `from_user=eq.${user.id}` }, () => void fetchOnlineRequests(user))
-      .on("postgres_changes", { event: "*", schema: "public", table: "online_matches" }, () => void fetchOnlineRequests(user))
-      .subscribe();
-    return () => {
-      window.clearInterval(timer);
-      void supabase.removeChannel(channel);
-    };
-  }, [fetchOnlineRequests, matchState, user]);
-
-  useEffect(() => {
-    if (!user || !onlineMatch || matchState !== "playing" || mode !== "online") return undefined;
-    const supabase = getSupabaseClient();
-    if (!supabase) return undefined;
-    const sync = window.setInterval(() => {
-      const active = sceneRef.current;
-      if (!active) return;
-      const controlled = active.players.find((player) => player.controlledBy === "p1");
-      void supabase
-        .from("online_matches")
-        .update({
-          state: {
-            clock: active.gameClock,
-            score: active.score,
-            ball: { x: active.ballPos.x, y: active.ballPos.y, z: active.ballPos.z },
-            player: controlled ? { x: controlled.pos.x, z: controlled.pos.z } : null,
-            updatedBy: user.id,
-          },
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", onlineMatch.id);
-    }, 700);
-    const channel = supabase
-      .channel(`online-match-${onlineMatch.id}`)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "online_matches", filter: `id=eq.${onlineMatch.id}` }, () => {
-        setOnlineStatus("Online match state synced.");
+      .channel(`room-code-${activeRoom.id}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rooms", filter: `id=eq.${activeRoom.id}` }, (payload) => {
+        const nextRoom = payload.new as RoomRecord;
+        setActiveRoom(nextRoom);
+        setRoomStatus(nextRoom.status === "ready" ? "Second player joined. You can start the match." : `Room status: ${nextRoom.status}`);
       })
       .subscribe();
     return () => {
-      window.clearInterval(sync);
       void supabase.removeChannel(channel);
     };
-  }, [matchState, mode, onlineMatch, user]);
+  }, [activeRoom]);
 
   useEffect(() => {
-    if (!isSignedIn) return;
     const mount = mountRef.current;
     if (!mount) return;
 
@@ -1573,8 +1324,8 @@ export function ArcadeSoccerGame() {
       mount.appendChild(perfElement);
     }
 
-    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
-    renderer.setPixelRatio(1);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.shadowMap.enabled = false;
     mount.appendChild(renderer.domElement);
@@ -1755,6 +1506,8 @@ export function ArcadeSoccerGame() {
       }
       if (active.gameClock >= FULL_TIME_SECONDS) {
         active.state = "ended";
+        void finishAnalyticsSession(gameSessionRef.current, visitorIdRef.current, active.score);
+        gameSessionRef.current = null;
         setMatchState("ended");
       }
     };
@@ -1792,28 +1545,24 @@ export function ArcadeSoccerGame() {
         const playerFocus = controlledFocus?.pos ?? active.ballPos;
         const blendedFocus = active.ballPos.clone().lerp(playerFocus, 0.22);
         const focusZ = clamp(blendedFocus.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
-        const shouldFollowPlay = active.state === "playing" && active.phase !== "walkout" && active.phase !== "halftime";
-        const desired = active.phase === "walkout"
-          ? new THREE.Vector3(BROADCAST_CAMERA_X + 5, 11.2, -8)
-          : shouldFollowPlay
-            ? new THREE.Vector3(BROADCAST_CAMERA_X, BROADCAST_CAMERA_Y, focusZ + BROADCAST_CAMERA_Z_OFFSET)
-            : new THREE.Vector3(
-              BROADCAST_CAMERA_X,
-              BROADCAST_CAMERA_Y,
-              BROADCAST_CAMERA_Z,
-            );
+        const shouldFollowPlay = active.state === "playing" && active.phase !== "halftime";
+        const desired = shouldFollowPlay
+          ? new THREE.Vector3(BROADCAST_CAMERA_X, BROADCAST_CAMERA_Y, focusZ + BROADCAST_CAMERA_Z_OFFSET)
+          : new THREE.Vector3(
+            BROADCAST_CAMERA_X,
+            BROADCAST_CAMERA_Y,
+            BROADCAST_CAMERA_Z,
+          );
         desired.z = clamp(desired.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
-        active.camera.position.lerp(desired, shouldFollowPlay || active.phase === "walkout" ? 1 - Math.pow(0.0008, dt) : 1);
-        const desiredLookAt = active.phase === "walkout"
-          ? new THREE.Vector3(-4, 1.45, 0)
-          : shouldFollowPlay
-            ? new THREE.Vector3(BROADCAST_LOOK_AT_X, BROADCAST_LOOK_AT_Y, focusZ)
-            : new THREE.Vector3(
-              BROADCAST_LOOK_AT_X,
-              BROADCAST_LOOK_AT_Y,
-              BROADCAST_LOOK_AT_Z,
-            );
-        active.cameraLookAt.lerp(desiredLookAt, shouldFollowPlay || active.phase === "walkout" ? 1 - Math.pow(0.0016, dt) : 1);
+        active.camera.position.lerp(desired, shouldFollowPlay ? 1 - Math.pow(0.0008, dt) : 1);
+        const desiredLookAt = shouldFollowPlay
+          ? new THREE.Vector3(BROADCAST_LOOK_AT_X, BROADCAST_LOOK_AT_Y, focusZ)
+          : new THREE.Vector3(
+            BROADCAST_LOOK_AT_X,
+            BROADCAST_LOOK_AT_Y,
+            BROADCAST_LOOK_AT_Z,
+          );
+        active.cameraLookAt.lerp(desiredLookAt, shouldFollowPlay ? 1 - Math.pow(0.0016, dt) : 1);
         active.camera.up.set(0, 1, 0);
         active.camera.lookAt(active.cameraLookAt);
         active.renderer.render(active.scene, active.camera);
@@ -1848,7 +1597,7 @@ export function ArcadeSoccerGame() {
       }
       if (sceneRef.current === runtime) sceneRef.current = null;
     };
-  }, [isSignedIn, syncP1AiUi]);
+  }, [syncP1AiUi]);
 
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
@@ -1902,71 +1651,6 @@ export function ArcadeSoccerGame() {
     };
   }, [syncP1AiUi]);
 
-  if (!isSignedIn) {
-    return (
-      <main className="relative min-h-screen overflow-hidden bg-[#7dd3fc] text-white">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.75),transparent_24%),radial-gradient(circle_at_80%_12%,rgba(253,224,71,0.7),transparent_20%),linear-gradient(135deg,#7dd3fc_0%,#a78bfa_48%,#fb7185_100%)]" />
-        <div className="absolute -left-16 top-16 h-48 w-48 rounded-full bg-lime-300/45" />
-        <div className="absolute -right-20 bottom-20 h-56 w-56 rounded-full bg-yellow-300/45" />
-        <div className="absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-emerald-500 via-emerald-400 to-transparent" />
-        <div className="absolute bottom-16 left-1/2 h-24 w-[120vw] -translate-x-1/2 rounded-[50%] border-t-[12px] border-white/70" />
-        <div className="absolute left-[13%] top-[24%] h-24 w-20 rotate-[-8deg] rounded-[2rem] bg-cyan-400">
-          <div className="absolute -top-9 left-5 h-12 w-12 rounded-full bg-amber-200" />
-          <div className="absolute -top-12 left-6 h-6 w-10 rounded-full bg-slate-800" />
-          <div className="absolute left-3 top-6 h-5 w-14 rounded-full bg-white/80" />
-          <div className="absolute -bottom-9 left-2 h-12 w-5 rounded-full bg-blue-900" />
-          <div className="absolute -bottom-9 right-2 h-12 w-5 rounded-full bg-blue-900" />
-        </div>
-        <div className="absolute right-[15%] top-[30%] h-24 w-20 rotate-[9deg] rounded-[2rem] bg-rose-500">
-          <div className="absolute -top-9 left-5 h-12 w-12 rounded-full bg-orange-200" />
-          <div className="absolute -top-12 left-4 h-7 w-12 rounded-full bg-yellow-900" />
-          <div className="absolute left-3 top-6 h-5 w-14 rounded-full bg-white/85" />
-          <div className="absolute -bottom-9 left-2 h-12 w-5 rounded-full bg-white" />
-          <div className="absolute -bottom-9 right-2 h-12 w-5 rounded-full bg-white" />
-        </div>
-        <div className="absolute left-[42%] top-[26%] h-16 w-16 rounded-full border-[8px] border-slate-900 bg-white">
-          <div className="absolute left-5 top-2 h-5 w-5 rounded-sm bg-slate-900" />
-          <div className="absolute bottom-2 right-3 h-4 w-4 rounded-sm bg-slate-900" />
-        </div>
-        {Array.from({ length: 24 }).map((_, index) => (
-          <span
-            key={index}
-            className="absolute h-3 w-2 rounded-full bg-white/80"
-            style={{
-              left: `${6 + (index * 37) % 88}%`,
-              top: `${8 + (index * 19) % 52}%`,
-              transform: `rotate(${index * 31}deg)`,
-              backgroundColor: ["#fef08a", "#67e8f9", "#fda4af", "#bbf7d0"][index % 4],
-            }}
-          />
-        ))}
-        <section className="relative z-10 grid min-h-screen place-items-center px-5 py-10 text-center">
-          <div className="w-full max-w-xl rounded-[2rem] border-4 border-white/70 bg-slate-950/70 p-6 sm:p-8">
-            <div className="relative mx-auto mb-4 h-20 w-20 rounded-full border-4 border-white bg-white">
-              <span className="absolute left-7 top-3 h-6 w-6 rounded-md bg-slate-950" />
-              <span className="absolute bottom-4 left-4 h-5 w-5 rounded-md bg-slate-950" />
-              <span className="absolute bottom-4 right-4 h-5 w-5 rounded-md bg-slate-950" />
-            </div>
-            <h1 className="text-5xl font-black tracking-normal text-white drop-shadow sm:text-7xl">Fifa Online</h1>
-            <p className="mx-auto mt-3 max-w-md text-base font-bold text-cyan-50/90 sm:text-lg">
-              Build your club, set your squad, and kick off colorful arcade football.
-            </p>
-            <button
-              className="mt-7 w-full rounded-2xl bg-white px-6 py-4 text-lg font-black text-slate-950 shadow-xl transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-55"
-              disabled={!hasSupabaseConfig || !authChecked}
-              onClick={signInWithGoogle}
-            >
-              Sign in with Google
-            </button>
-            {!hasSupabaseConfig && <p className="mt-3 text-sm font-bold text-yellow-100">Supabase env vars are required before playing.</p>}
-            {!authChecked && hasSupabaseConfig && <p className="mt-3 text-sm font-bold text-cyan-50/80">Checking login...</p>}
-            {authStatus && <p className="mt-3 text-sm font-bold text-yellow-100">{authStatus}</p>}
-          </div>
-        </section>
-      </main>
-    );
-  }
-
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#07110c] text-white">
       <div ref={mountRef} className="absolute inset-0" aria-label="3D arcade soccer match" />
@@ -1985,17 +1669,8 @@ export function ArcadeSoccerGame() {
               </div>
             )}
           </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            <div className="pointer-events-auto flex min-w-48 max-w-full items-center gap-2 rounded-md border border-white/10 bg-black/65 px-3 py-2">
-              <UserCircle size={18} className="shrink-0 text-cyan-200" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-bold text-white">{playerLabel}</div>
-                <div className="text-[10px] uppercase text-emerald-100/55">Signed in</div>
-              </div>
-              <button aria-label="Sign out" className="grid h-8 w-8 place-items-center rounded-md border border-white/10" onClick={signOut}>
-                <LogOut size={15} />
-              </button>
-            </div>
+          <div className="pointer-events-auto rounded-md border border-white/10 bg-black/55 px-3 py-2 text-xs font-bold text-cyan-100/80">
+            Anonymous play · {hasSupabaseConfig ? "analytics on" : "offline mode"}
           </div>
         </div>
         <div />
@@ -2024,21 +1699,6 @@ export function ArcadeSoccerGame() {
             />
           </div>
         </div>
-      )}
-      {ENABLE_BLOCKING_WALKOUT && matchState === "playing" && phaseUi === "walkout" && (
-        <button
-          type="button"
-          className="pointer-events-auto fixed left-1/2 top-24 z-[70] -translate-x-1/2 rounded-full border border-white/20 bg-black/80 px-5 py-2 text-xs font-black uppercase tracking-wide text-white active:bg-white/15"
-          style={{ touchAction: "manipulation" }}
-          onClick={skipWalkout}
-          onPointerDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            skipWalkout();
-          }}
-        >
-          Skip walkout
-        </button>
       )}
       {matchState === "playing" && !showTouchControls && (
         <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-between px-4 sm:px-6">
@@ -2128,210 +1788,47 @@ export function ArcadeSoccerGame() {
         </div>
       )}
       {matchState !== "playing" && (
-        <div className="absolute inset-0 z-20 grid place-items-center bg-black/65 p-4">
-          <div className="w-full max-w-2xl rounded-md border border-emerald-300/25 bg-[#08130d]/96 p-5">
-            <div className="mb-4 flex items-center gap-3">
-              {matchState === "ended" ? <Trophy className="text-lime-300" /> : <Users className="text-cyan-300" />}
-              <div>
-                <h2 className="text-xl font-black">{matchState === "ended" ? `${resultText} ${score.home}-${score.away}` : "Clubhouse"}</h2>
-                <p className="text-sm text-white/65">
-                  {matchState === "ended" ? `Score value ${matchScore}` : "Set your fictional club, squad, formation, and match mode before kickoff."}
-                </p>
-              </div>
+        <div className="absolute inset-0 z-20 grid place-items-center bg-black/55 p-4">
+          <div className="w-full max-w-2xl rounded-md border border-emerald-300/25 bg-[#08130d]/95 p-5 shadow-2xl">
+            <div className="mb-5">
+              <h2 className="text-2xl font-black">{matchState === "ended" ? resultText + " " + score.home + "-" + score.away : "Quick Kickoff"}</h2>
+              <p className="mt-1 text-sm text-white/65">
+                {matchState === "ended" ? "Score value " + matchScore : "No account required. Core match gameplay starts immediately; Supabase analytics and room codes stay anonymous."}
+              </p>
             </div>
 
-            <div className="mb-4 grid grid-cols-5 gap-2 text-xs font-black uppercase">
-              {(["team", "squad", "formation", "match", "online"] as SetupTab[]).map((tab) => (
-                <button
-                  key={tab}
-                  className={`rounded-md border px-2 py-2 ${setupTab === tab ? "border-cyan-200 bg-cyan-300/20 text-cyan-50" : "border-white/10 bg-white/5 text-white/65"}`}
-                  onClick={() => setSetupTab(tab)}
-                >
-                  {tab}
-                </button>
-              ))}
+            <div className="mb-4 grid gap-3 sm:grid-cols-2">
+              <ModeButton active={mode === "ai"} title="Player vs AI" onClick={() => setMode("ai")}>
+                Fast local match with one controlled player and AI teammates.
+              </ModeButton>
+              <ModeButton active={mode === "online"} title="Room Code MVP" onClick={() => setMode("online")}>
+                Create or join an anonymous room. Current MVP syncs room presence; gameplay sync is limited.
+              </ModeButton>
             </div>
 
-            {setupTab === "team" && (
-              <div className="mb-4 rounded-md border border-white/10 bg-white/5 p-3">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-black text-cyan-100">Team selection</div>
-                  <div className="rounded-full border border-lime-200/25 bg-lime-300/15 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-lime-100">
-                    Selected: {chosenTeam.name}
-                  </div>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  {TEAM_OPTIONS.map((team) => (
-                    <button
-                      key={team.key}
-                      type="button"
-                      aria-pressed={selectedTeamKey === team.key}
-                      className={`rounded-md border p-3 text-left transition ${selectedTeamKey === team.key ? "border-lime-200 bg-lime-300/15 ring-2 ring-lime-200/45" : "border-white/10 bg-black/25 hover:bg-white/10"}`}
-                      onClick={() => selectTeam(team.key)}
-                    >
-                      <div className="mb-2 flex gap-1">
-                        <span className="h-5 flex-1 rounded" style={{ backgroundColor: team.primary }} />
-                        <span className="h-5 flex-1 rounded" style={{ backgroundColor: team.secondary }} />
-                        <span className="h-5 flex-1 rounded" style={{ backgroundColor: team.accent }} />
-                      </div>
-                      <div className="font-black">{team.name}</div>
-                      <div className="text-xs text-white/55">Kit preview</div>
-                    </button>
-                  ))}
-                </div>
-                <button type="button" className="mt-3 rounded-md bg-lime-300 px-4 py-2 text-sm font-black text-slate-950" onClick={saveTeamSetup}>
-                  Save {chosenTeam.name} setup
+            <div className="mb-4 rounded-md border border-cyan-200/20 bg-cyan-200/8 p-3">
+              <div className="mb-2 text-sm font-black text-cyan-100">Room-code multiplayer</div>
+              <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto]">
+                <button className="rounded-md bg-cyan-300 px-4 py-2 text-sm font-black text-slate-950 disabled:opacity-50" disabled={!hasSupabaseConfig} onClick={createOnlineRoom}>
+                  Create room
                 </button>
-                {setupStatus && <p className="mt-2 text-xs text-cyan-100/75">{setupStatus}</p>}
-              </div>
-            )}
-
-            {setupTab === "squad" && (
-              <div className="mb-4 max-h-[46vh] overflow-auto rounded-md border border-white/10 bg-white/5 p-3">
-                <div className="mb-3 text-sm font-black text-cyan-100">Squad management</div>
-                <div className="space-y-2">
-                  {squadPlayers.map((player) => (
-                    <div key={player.player_key} className="grid grid-cols-[1fr_64px_84px] gap-2">
-                      <input
-                        className="rounded-md border border-white/10 bg-black/35 px-3 py-2 text-sm outline-none focus:border-cyan-300"
-                        value={player.name}
-                        onChange={(event) => updateSquadPlayer(player.player_key, { name: event.target.value })}
-                      />
-                      <input
-                        className="rounded-md border border-white/10 bg-black/35 px-2 py-2 text-sm outline-none focus:border-cyan-300"
-                        type="number"
-                        min={1}
-                        max={99}
-                        value={player.jersey_number}
-                        onChange={(event) => updateSquadPlayer(player.player_key, { jersey_number: clamp(Number(event.target.value), 1, 99) })}
-                      />
-                      <input
-                        className="rounded-md border border-white/10 bg-black/35 px-2 py-2 text-sm uppercase outline-none focus:border-cyan-300"
-                        value={player.position}
-                        onChange={(event) => updateSquadPlayer(player.player_key, { position: event.target.value.toUpperCase().slice(0, 4) })}
-                      />
-                    </div>
-                  ))}
-                </div>
-                <button className="mt-3 rounded-md bg-lime-300 px-4 py-2 text-sm font-black text-slate-950" onClick={saveTeamSetup}>
-                  Save squad
+                <input
+                  className="min-w-0 rounded-md border border-white/15 bg-black/35 px-3 py-2 text-sm uppercase text-white outline-none focus:border-cyan-300"
+                  placeholder="Room code"
+                  value={joinRoomCode}
+                  onChange={(event) => setJoinRoomCode(event.target.value.toUpperCase())}
+                />
+                <button className="rounded-md bg-lime-300 px-4 py-2 text-sm font-black text-slate-950 disabled:opacity-50" disabled={!hasSupabaseConfig} onClick={joinOnlineRoom}>
+                  Join
                 </button>
-                {setupStatus && <p className="mt-2 text-xs text-cyan-100/75">{setupStatus}</p>}
               </div>
-            )}
+              {roomCode && <p className="mt-2 text-sm font-black text-lime-100">Room code: <span className="font-mono">{roomCode}</span></p>}
+              {activeRoom && <p className="mt-1 text-xs text-cyan-100/75">Room status: {activeRoom.status}</p>}
+              {roomStatus && <p className="mt-2 text-xs text-cyan-100/75">{roomStatus}</p>}
+              {!hasSupabaseConfig && <p className="mt-2 text-xs text-yellow-100/80">Supabase env vars are missing, so anonymous analytics and rooms are disabled locally. Single-player still works.</p>}
+            </div>
 
-            {setupTab === "formation" && (
-              <div className="mb-4 rounded-md border border-white/10 bg-white/5 p-3">
-                <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <div className="text-sm font-black text-cyan-100">Formation setup</div>
-                    <div className="text-xs text-white/55">Assign your squad to each slot.</div>
-                  </div>
-                  <select
-                    className="rounded-md border border-white/10 bg-black/45 px-3 py-2 text-sm font-bold outline-none"
-                    value={formationName}
-                    onChange={(event) => changeFormation(event.target.value as FormationKey)}
-                  >
-                    {(Object.keys(FORMATION_OPTIONS) as FormationKey[]).map((formation) => (
-                      <option key={formation} value={formation}>{formation}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {FORMATION_OPTIONS[formationName].map((slot) => (
-                    <label key={slot.slot} className="grid grid-cols-[64px_1fr] items-center gap-2 rounded-md bg-black/25 px-3 py-2 text-sm">
-                      <span className="font-black text-lime-100">{slot.label}</span>
-                      <select
-                        className="min-w-0 rounded-md border border-white/10 bg-black/45 px-2 py-2 text-sm outline-none"
-                        value={formationAssignments[slot.slot] ?? ""}
-                        onChange={(event) => {
-                          setupDirtyRef.current = true;
-                          setFormationAssignments((current) => ({ ...current, [slot.slot]: event.target.value }));
-                        }}
-                      >
-                        {squadPlayers.map((player) => (
-                          <option key={player.player_key} value={player.player_key}>
-                            {player.jersey_number} · {player.name} · {player.position}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ))}
-                </div>
-                <button className="mt-3 rounded-md bg-lime-300 px-4 py-2 text-sm font-black text-slate-950" onClick={saveTeamSetup}>
-                  Save formation
-                </button>
-                {setupStatus && <p className="mt-2 text-xs text-cyan-100/75">{setupStatus}</p>}
-              </div>
-            )}
-
-            {setupTab === "match" && <div className="mb-4 grid gap-3 sm:grid-cols-2">
-              <ModeButton active={mode === "ai"} title="Player vs AI Team" onClick={() => setMode("ai")}>
-                Control one {chosenTeam.name} player. Teammates and opponents are AI.
-              </ModeButton>
-              <ModeButton active={mode === "online"} title="Online 1v1 Lobby" onClick={() => setMode("online")}>
-                Signed-in users can create an ID, send requests, and start a Supabase room.
-              </ModeButton>
-            </div>}
-
-            {setupTab === "online" && (
-              <div className="mb-4 rounded-md border border-cyan-200/20 bg-cyan-200/8 p-3">
-                <div className="mb-2 text-sm font-black text-cyan-100">Online Multiplayer MVP</div>
-                <div className="space-y-3">
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <input
-                        className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/35 px-3 py-2 text-sm text-white outline-none focus:border-cyan-300"
-                        maxLength={16}
-                        placeholder="Username"
-                        value={onlineUsername}
-                        onChange={(event) => setOnlineUsername(event.target.value)}
-                      />
-                      <button className="rounded-md bg-cyan-300 px-4 py-2 text-sm font-bold text-slate-950" onClick={saveOnlineProfile}>
-                        Save ID
-                      </button>
-                    </div>
-                    {onlineProfile && (
-                      <div className="rounded-md bg-black/30 px-3 py-2 text-sm">
-                        Your ID: <span className="font-mono font-black text-lime-200">{onlineProfile.game_id}</span>
-                      </div>
-                    )}
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <input
-                        className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/35 px-3 py-2 text-sm uppercase text-white outline-none focus:border-cyan-300"
-                        placeholder="Friend ID, e.g. FO-ABC123"
-                        value={onlineSearchId}
-                        onChange={(event) => setOnlineSearchId(event.target.value)}
-                      />
-                      <button className="rounded-md bg-lime-300 px-4 py-2 text-sm font-bold text-slate-950" onClick={sendMatchRequest}>
-                        Send request
-                      </button>
-                    </div>
-                    {incomingRequests.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="text-xs font-bold uppercase text-cyan-100/70">Incoming requests</div>
-                        {incomingRequests.map((request) => (
-                          <div key={request.id} className="flex items-center justify-between gap-2 rounded-md bg-white/7 px-3 py-2 text-sm">
-                            <span className="font-mono">{request.from_user.slice(0, 8)}</span>
-                            <div className="flex gap-2">
-                              <button className="rounded bg-emerald-300 px-2 py-1 text-xs font-black text-slate-950" onClick={() => respondToMatchRequest(request, "accepted")}>Accept</button>
-                              <button className="rounded bg-white/10 px-2 py-1 text-xs font-black text-white" onClick={() => respondToMatchRequest(request, "declined")}>Decline</button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {outgoingRequests.length > 0 && (
-                      <p className="text-xs text-white/60">{outgoingRequests.length} pending outgoing request(s).</p>
-                    )}
-                    {onlineMatch && (
-                      <p className="rounded-md bg-emerald-300/15 px-3 py-2 text-xs text-emerald-100">Active room: {onlineMatch.id.slice(0, 8)}. Current MVP creates the room and lobby sync; full deterministic physics sync is documented as limited.</p>
-                    )}
-                    {onlineStatus && <p className="text-xs text-cyan-100/75">{onlineStatus}</p>}
-                </div>
-              </div>
-            )}
-
-            {setupTab === "match" && <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <button
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-300 px-4 py-3 font-bold text-slate-950 transition hover:bg-emerald-200"
                 onClick={() => startMatch(mode)}
@@ -2346,14 +1843,7 @@ export function ArcadeSoccerGame() {
                 <RotateCcw size={18} />
                 Restart
               </button>
-            </div>}
-
-            {(authStatus || setupStatus) && (
-              <div className="mt-5 border-t border-white/10 pt-4">
-                {authStatus && <p className="text-sm text-cyan-100/75">{authStatus}</p>}
-                {setupStatus && <p className="mt-2 text-sm text-cyan-100/75">{setupStatus}</p>}
-              </div>
-            )}
+            </div>
           </div>
         </div>
       )}
@@ -2403,11 +1893,6 @@ function updateMatch(
       beginHalftime(active);
       return;
     }
-  } else if (active.phase === "walkout") {
-    active.phaseTimer = Math.max(0, active.phaseTimer - dt);
-    const walkoutSettled = active.players.every((player) => player.pos.distanceTo(walkoutTarget(player)) < 0.7);
-    if (walkoutSettled && active.phaseTimer < 5.4) active.phaseTimer = 0;
-    if (active.phaseTimer <= 0) finishWalkoutToKickoff(active);
   } else {
     const actor = active.restartActorId ? active.players.find((player) => player.id === active.restartActorId) : null;
     const actorNeedsSpot = active.phase === "throw-in" || active.phase === "kickoff";
@@ -2454,8 +1939,6 @@ function updateMatch(
         : player.controlledBy === "p2"
           ? playerInput(keys, "p2")
           : cachedAiInput(player, active, dt)
-      : active.phase === "walkout"
-        ? walkoutInput(player)
       : restartShapeInput(player, active);
     if (player.supportRunTimer > 0 && active.ballOwnerId !== player.id) {
       const supportDir = player.supportRunTarget.clone().sub(player.pos);
@@ -2482,7 +1965,7 @@ function updateMatch(
     player.supportRunTimer = Math.max(0, player.supportRunTimer - dt);
     const recoveryScale = player.recoveryTimer > 0 ? 0.48 : 1;
     movePlayer(player, input.dir, maxSpeed * recoveryScale * speedScale, dt, active);
-    if (active.phase !== "walkout") clampPlayer(player);
+    clampPlayer(player);
     player.mesh.position.copy(player.pos);
     animatePlayer(player, dt);
     updateStuckState(player, input.dir, active, dt);
@@ -2860,6 +2343,46 @@ function arrangeSetPieceShape(active: MatchRuntime, phase: PlayPhase, team: Team
   });
 }
 
+function chooseGoalKickPlan(active: MatchRuntime, keeper: PlayerBody | null, direction: THREE.Vector3) {
+  const origin = keeper?.pos ?? active.restartSpot;
+  const opponents = active.players.filter((player) => player.team !== active.restartTeam && !player.sentOff);
+  const pressure = opponents.some((player) => player.pos.distanceTo(origin) < 14);
+  const teammates = active.players
+    .filter((player) => player.team === active.restartTeam && player.role !== "keeper" && !player.sentOff)
+    .map((player) => {
+      const distance = player.pos.distanceTo(origin);
+      const forward = player.pos.clone().sub(origin).dot(direction);
+      const open = nearestOpponentDistance(player, active.players);
+      const laneBlockers = keeper ? opponentsBetween(keeper, player.pos, active.players, player.line === "defender" ? 4.8 : 5.8) : 0;
+      return { player, distance, forward, open, laneBlockers };
+    })
+    .filter(({ forward }) => forward > 7);
+
+  const safeDefender = !pressure
+    ? teammates
+      .filter(({ player, distance, open, laneBlockers }) => player.line === "defender" && distance < 32 && open > 5.6 && laneBlockers < 2)
+      .sort((a, b) => b.open - a.open || a.distance - b.distance)[0]
+    : null;
+  const mediumOption = teammates
+    .filter(({ player, distance, open, laneBlockers }) => player.line !== "forward" && distance < 50 && open > 4.2 && laneBlockers < 3)
+    .sort((a, b) => b.forward + b.open * 1.4 - b.distance * 0.2 - (a.forward + a.open * 1.4 - a.distance * 0.2))[0];
+  const longOption = teammates
+    .filter(({ distance }) => distance < 72)
+    .sort((a, b) => b.forward + b.open - a.forward - a.open)[0];
+  const choice = safeDefender ?? mediumOption ?? longOption;
+  const target = choice?.player.pos.clone()
+    ?? origin.clone().add(direction.clone().multiplyScalar(pressure ? 54 : 38));
+  target.y = BALL_RADIUS;
+  const distance = clamp(target.distanceTo(origin), 12, 70);
+  const longClearance = pressure || !choice || choice.player.line === "forward" || distance > 46;
+  return {
+    target,
+    power: longClearance ? clamp(distance * 0.48 + 8, 24, 39) : clamp(distance * 0.48 + 6, 14, 28),
+    lift: longClearance ? clamp(distance * 0.12, 5.2, 9.2) : distance > 34 ? clamp(distance * 0.08, 2.2, 4.8) : 0.45,
+    receiver: choice?.player ?? null,
+  };
+}
+
 function executeSimpleGoalKick(active: MatchRuntime, actor: PlayerBody | null) {
   const keeper = actor?.role === "keeper"
     ? actor
@@ -2881,6 +2404,7 @@ function executeSimpleGoalKick(active: MatchRuntime, actor: PlayerBody | null) {
   active.restartProtectionTimer = 2.6;
   active.lastTouchTeam = active.restartTeam;
   active.lastTouchPlayerId = keeper?.id ?? null;
+  const plan = chooseGoalKickPlan(active, keeper, direction);
   if (keeper) {
     resetKeeperForSimpleGoalKick(keeper, direction, active.half);
     active.ballPos.copy(goalKickBallSpot(keeper, direction));
@@ -2894,7 +2418,11 @@ function executeSimpleGoalKick(active: MatchRuntime, actor: PlayerBody | null) {
     active.goalKickLockPlayerId = null;
     active.goalKickLockTimer = 0;
   }
-  active.ballVel.set(0, 14.2, direction.z * 72);
+  const kickDirection = plan.target.clone().sub(active.ballPos).setY(0);
+  if (kickDirection.lengthSq() < 0.1) kickDirection.copy(direction);
+  active.ballVel.copy(kickDirection.normalize().multiplyScalar(plan.power));
+  active.ballVel.y = plan.lift;
+  active.intendedReceiverId = plan.receiver?.id ?? null;
   active.ballIgnoreTimer = 1.35;
   playKickSound(active, 1.25);
 }
@@ -2989,64 +2517,6 @@ function restartShapeInput(player: PlayerBody, active: MatchRuntime) {
   return { dir: dir.lengthSq() > 0.5 ? dir.normalize() : dir.set(0, 0, 0), sprint: false };
 }
 
-function walkoutOrder(player: PlayerBody) {
-  if (player.role === "keeper") return 0;
-  const match = player.id.match(/-(\d+)$/);
-  return match ? clamp(Number(match[1]), 1, 10) : clamp(player.number, 1, 10);
-}
-
-function walkoutTarget(player: PlayerBody) {
-  const laneZ = player.team === "home" ? -4.2 : 4.2;
-  const order = walkoutOrder(player);
-  return new THREE.Vector3(-22 + order * 4.4, 0, laneZ);
-}
-
-function walkoutStart(player: PlayerBody) {
-  const target = walkoutTarget(player);
-  const order = walkoutOrder(player);
-  return new THREE.Vector3(-FIELD_W / 2 - 18 - Math.min(order, 5) * 1.8, 0, target.z);
-}
-
-function beginWalkout(active: MatchRuntime) {
-  active.phase = "walkout";
-  active.phaseTimer = 7.2;
-  active.eventText = "PLAYER WALKOUT";
-  active.eventTimer = 0;
-  active.cooldown = 0;
-  active.ballOwnerId = null;
-  active.ballState = "loose";
-  active.possession = null;
-  active.restartActorId = null;
-  active.intendedReceiverId = null;
-  active.ballPos.set(0, BALL_RADIUS, 0);
-  active.ballVel.set(0, 0, 0);
-  active.players.forEach((player) => {
-    const start = walkoutStart(player);
-    player.pos.copy(start);
-    player.vel.set(0, 0, 0);
-    player.turnRate = 0;
-    player.heading = headingFromDirection(new THREE.Vector3(1, 0, 0));
-    player.mesh.rotation.y = player.heading;
-    player.mesh.position.copy(player.pos);
-    player.lastPos.copy(player.pos);
-  });
-}
-
-function finishWalkoutToKickoff(active: MatchRuntime) {
-  resetKickoffShape(active);
-  active.phase = "kickoff";
-  active.phaseTimer = 1.15;
-  active.restartTeam = "home";
-  active.restartSpot.set(0, BALL_RADIUS, 0);
-  active.restartDirection.copy(upfieldKickDirection("home", active.half));
-  active.restartActorId = kickoffTaker(active.players, "home", active.restartSpot)?.id ?? null;
-  active.eventText = "KICKOFF";
-  active.eventTimer = 0;
-  stageKickoffShape(active);
-  active.ballPos.copy(active.restartSpot);
-  active.ballVel.set(0, 0, 0);
-}
-
 function startDirectKickoff(active: MatchRuntime, team: TeamId) {
   resetKickoffShape(active);
   active.phase = "open";
@@ -3078,16 +2548,6 @@ function startDirectKickoff(active: MatchRuntime, team: TeamId) {
     active.ballPos.copy(controlledBallPoint(actor));
   }
   active.restartActorId = null;
-}
-
-function walkoutInput(player: PlayerBody): PlayerInputState {
-  const target = walkoutTarget(player);
-  const dir = target.sub(player.pos);
-  return {
-    dir: dir.lengthSq() > 0.18 ? dir.normalize() : dir.set(0, 0, 0),
-    sprint: false,
-    speedScale: 0.82,
-  };
 }
 
 function resetKickoffShape(active: MatchRuntime) {
@@ -3202,8 +2662,11 @@ function handleGoalkeeperActions(active: MatchRuntime) {
       if (shotSpeed > 9.2) {
         const timeToGoal = Math.abs((ownZ - active.ballPos.z) / (active.ballVel.z || Math.sign(ownZ - active.ballPos.z) * 0.1));
         const predictedX = clamp(active.ballPos.x + active.ballVel.x * clamp(timeToGoal, 0, 0.62), -GOAL_W / 2 + 0.65, GOAL_W / 2 - 0.65);
-        const lateralGap = predictedX - keeper.pos.x;
-        keeper.vel.x += clamp(lateralGap * 0.68, -2.2, 2.2);
+        const sideBall = Math.abs(active.ballPos.x) > GOAL_W / 2 - 1.4 && Math.abs(active.ballPos.z - ownZ) < 26;
+        const nearPostX = clamp(active.ballPos.x, -GOAL_W / 2 + 0.65, GOAL_W / 2 - 0.65);
+        const desiredX = sideBall ? nearPostX * 0.78 + predictedX * 0.22 : predictedX;
+        const lateralGap = desiredX - keeper.pos.x;
+        keeper.vel.x += clamp(lateralGap * (sideBall ? 0.92 : 0.68), -2.8, 2.8);
         const canDive = Math.abs(lateralGap) < 3.35 && Math.abs(active.ballPos.z - ownZ) < 13.8;
         const wellPositioned = Math.abs(lateralGap) < 1.12 && Math.abs(active.ballPos.z - ownZ) < 10.8;
         if (canDive && keeper.diveTimer <= 0.05) {
@@ -3230,6 +2693,18 @@ function handleGoalkeeperActions(active: MatchRuntime) {
         active.lastTouchPlayerId = keeper.id;
         active.eventText = "PLAY";
         active.eventTimer = 0;
+        return;
+      }
+      const sideCatch = Math.abs(active.ballPos.x) > GOAL_W / 2 - 2.2
+        && Math.abs(active.ballPos.z - ownZ) < 18
+        && keeper.pos.distanceTo(flatBall) < 2.85;
+      if (sideCatch) {
+        keeper.pos.x = clamp(active.ballPos.x, -GOAL_W / 2 + 0.8, GOAL_W / 2 - 0.8);
+        keeper.catchTimer = 0.58;
+        keeper.recoveryTimer = Math.max(keeper.recoveryTimer, 0.24);
+        takePossession(keeper, active);
+        active.ballPos.copy(keeperHandPoint(keeper));
+        active.ballVel.set(0, 0, 0);
         return;
       }
       if (!closeEnough) return;
