@@ -995,12 +995,18 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
       const predictedX = timeToGoal > 0
         ? active.ballPos.x + active.ballVel.x * clamp(timeToGoal, 0, 1.18)
         : active.ballPos.x;
+      const trackingShot = active.ballState === "kicked"
+        && active.ballVel.length() > 6.5
+        && timeToGoal > 0
+        && Math.abs(predictedX) < GOAL_W / 2 + 5;
       return {
         id: keeper.id,
         trackingDot: Number(trackingDot.toFixed(3)),
         diveSide: keeper.diveSide,
+        diveTimer: Number(keeper.diveTimer.toFixed(3)),
         expectedSide: Math.sign(predictedX - keeper.pos.x || active.ballVel.x || 0),
         predictedX: Number(predictedX.toFixed(2)),
+        trackingShot,
       };
     }));
 }
@@ -3192,6 +3198,7 @@ function updateMatch(
     player.recoveryTimer = Math.max(0, player.recoveryTimer - dt);
     player.catchTimer = Math.max(0, player.catchTimer - dt);
     player.diveTimer = Math.max(0, player.diveTimer - dt);
+    if (player.diveTimer === 0) player.diveSide = 0;
     player.headerTimer = Math.max(0, player.headerTimer - dt);
     player.blockTimer = Math.max(0, player.blockTimer - dt);
     player.ballContactCooldown = Math.max(0, player.ballContactCooldown - dt);
