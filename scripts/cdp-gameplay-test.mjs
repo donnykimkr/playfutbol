@@ -66,7 +66,9 @@ const diagnostics = await evaluate(`(() => {
     'aerialReceptionTestsRequested','aerialReceptionTestsRemaining','aerialReceptionTestsPassed','aerialReceptionTestsFailed',
     'aerialFirstTouches','lastAerialFirstTouchType','lastAerialFirstTouchDistance','lastFirstTouchProbeType','lastFirstTouchProbeDistance','lastFirstTouchProbeRadius','aerialReceiverId','aerialReceiverX','aerialReceiverZ','aerialArrivalTime','aerialTouchPlan','aerialLandingX','aerialLandingZ',
     'defensiveDangerPhase','defendersInsideTwelve','outfieldInsideTwentyEight','nearCarrierDefenders','closeCarrierDefenders',
-    'primaryPresserId','secondaryCoverId','dangerousUnmarkedCount','duplicateMarkCount','defensiveRoles','manualControlledHasAiRole',
+    'primaryPresserId','secondaryCoverId','deepestThreatId','deepestMarkerId','deepestMarkerDistance','deepestMarkerGoalSide',
+    'dangerousUnmarkedCount','duplicateMarkCount','unassignedDefenderCount','laneBlockerCount','defensiveRoles','manualControlledHasAiRole',
+    'collisionResolutionsThisFrame','maxCollisionCorrection','maxDefenderFrameDisplacement','abnormalMovementClamps','maxDefenderSpeed',
     'tackleTestsRequested','tackleTestsPassed','tackleTestsFailed','possessionClaims','lastReceived'
   ];
   return Object.fromEntries(keys.map((key) => [key, canvas.dataset[key] ?? null]));

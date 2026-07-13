@@ -13,7 +13,14 @@ type PlayPhase = "open" | "goal" | "halftime" | "kickoff" | "throw-in" | "goal-k
 type BoundaryRestartPhase = Extract<PlayPhase, "throw-in" | "goal-kick" | "corner">;
 type AiSkillMove = "shot-fake" | "body-feint" | "quick-turn" | "dribble-burst" | "fake-pass" | null;
 type DefensivePressureRole = "press" | "cover" | "shape";
-type DefensiveTacticalRole = DefensivePressureRole | "mark" | "lane";
+type DefensiveTacticalRole = DefensivePressureRole
+  | "mark-striker"
+  | "mark-runner"
+  | "block-lane"
+  | "midfield-screen"
+  | "wide-cover"
+  | "far-post-cover"
+  | "depth-cover";
 type DefensiveDangerPhase = "NORMAL_BLOCK" | "DEEP_BLOCK" | "EMERGENCY_GOAL_DEFENSE";
 type FirstTouchType = "foot" | "thigh" | "chest";
 
@@ -23,6 +30,8 @@ type DefensiveTeamPlan = {
   dangerPhase: DefensiveDangerPhase;
   primaryPresserId: string | null;
   secondaryCoverId: string | null;
+  deepestThreatId: string | null;
+  deepestMarkerId: string | null;
   roles: Map<string, DefensiveTacticalRole>;
   targets: Map<string, THREE.Vector3>;
   markedOpponentIds: Map<string, string>;
@@ -210,6 +219,10 @@ type MatchRuntime = {
   defensivePlanTimer: number;
   defensivePlanGraceTimer: number;
   antiSwarmCorrections: number;
+  collisionResolutionsThisFrame: number;
+  maxCollisionCorrection: number;
+  maxDefenderFrameDisplacement: number;
+  abnormalMovementClamps: number;
   pendingKickTarget: THREE.Vector3 | null;
   lastShotTap: number;
   shotCharge: number;
@@ -955,11 +968,14 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
     ));
     const aggressiveClosers = defenders.filter((player) => {
       const role = active.defensivePlan?.roles.get(player.id);
-      if (role === "press" || role === "cover") return true;
       const towardCarrier = diagnosticCarrier.pos.clone().sub(player.pos).setY(0);
-      if (towardCarrier.lengthSq() < 0.05 || towardCarrier.length() >= 15.5) return false;
+      const distance = towardCarrier.length();
+      if (role === "press") return true;
+      if (towardCarrier.lengthSq() < 0.05 || distance >= 15.5) return false;
       towardCarrier.normalize();
-      return player.vel.dot(towardCarrier) > 0.18 || player.aiInputCache.dir.dot(towardCarrier) > 0.16;
+      const activelyClosing = player.vel.dot(towardCarrier) > 0.18 || player.aiInputCache.dir.dot(towardCarrier) > 0.16;
+      if (role === "cover") return distance < 10.5 && activelyClosing;
+      return activelyClosing;
     });
     canvas.dataset.nearCarrierDefenders = String(defenders.filter((player) => player.pos.distanceTo(diagnosticCarrier.pos) < 6.5).length);
     canvas.dataset.closeCarrierDefenders = String(defenders.filter((player) => player.pos.distanceTo(diagnosticCarrier.pos) < 10.5).length);
@@ -994,15 +1010,49 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
     const markedTargets = new Set(markingAssignments.map((assignment) => assignment.targetId));
     const dangerousOpponents = active.players.filter((player) => (
       player.team === diagnosticCarrier.team
-      && player.id !== diagnosticCarrier.id
       && player.role !== "keeper"
       && !player.sentOff
       && (player.line === "forward" || player.line === "midfielder")
       && Math.abs(player.pos.z - teamGoalZ(defendingTeam, active.half)) < 74
-    ));
+    )).sort((a, b) => (
+      defensiveThreatScore(b, diagnosticCarrier, active, defendingTeam)
+      - defensiveThreatScore(a, diagnosticCarrier, active, defendingTeam)
+    )).slice(0, 5);
+    const carrierAccountedFor = Boolean(active.defensivePlan?.primaryPresserId);
     canvas.dataset.defensiveMarkAssignments = JSON.stringify(markingAssignments);
-    canvas.dataset.dangerousUnmarkedCount = String(dangerousOpponents.filter((player) => !markedTargets.has(player.id)).length);
+    canvas.dataset.dangerousUnmarkedCount = String(dangerousOpponents.filter((player) => (
+      !markedTargets.has(player.id) && !(player.id === diagnosticCarrier.id && carrierAccountedFor)
+    )).length);
     canvas.dataset.duplicateMarkCount = String(markingAssignments.length - markedTargets.size);
+    canvas.dataset.deepestThreatId = active.defensivePlan?.deepestThreatId ?? "";
+    canvas.dataset.deepestMarkerId = active.defensivePlan?.deepestMarkerId ?? "";
+    const deepestThreat = active.defensivePlan?.deepestThreatId
+      ? active.players.find((player) => player.id === active.defensivePlan?.deepestThreatId) ?? null
+      : null;
+    const deepestMarker = active.defensivePlan?.deepestMarkerId
+      ? active.players.find((player) => player.id === active.defensivePlan?.deepestMarkerId) ?? null
+      : null;
+    if (deepestThreat && deepestMarker) {
+      const markerFromThreat = deepestMarker.pos.clone().sub(deepestThreat.pos).setY(0);
+      const threatToGoal = new THREE.Vector3(0, 0, teamGoalZ(defendingTeam, active.half)).sub(deepestThreat.pos).setY(0);
+      canvas.dataset.deepestMarkerDistance = markerFromThreat.length().toFixed(3);
+      canvas.dataset.deepestMarkerGoalSide = String(
+        markerFromThreat.lengthSq() > 0.05
+        && threatToGoal.lengthSq() > 0.05
+        && markerFromThreat.normalize().dot(threatToGoal.normalize()) > 0.2
+      );
+    } else {
+      canvas.dataset.deepestMarkerDistance = "0";
+      canvas.dataset.deepestMarkerGoalSide = "false";
+    }
+    canvas.dataset.unassignedDefenderCount = String(defenders.filter((player) => (
+      !isManualControlledPlayer(player, active)
+      && (!active.defensivePlan?.roles.has(player.id) || !active.defensivePlan?.targets.has(player.id))
+    )).length);
+    canvas.dataset.laneBlockerCount = String(defenders.filter((player) => {
+      const role = active.defensivePlan?.roles.get(player.id);
+      return role === "block-lane" || role === "midfield-screen";
+    }).length);
     canvas.dataset.forwardPressActive = String(
       defenders.some((player) => player.id === active.defensivePlan?.primaryPresserId && player.line === "forward"),
     );
@@ -1020,6 +1070,7 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
     canvas.dataset.defensiveRoles = JSON.stringify(defenders.map((player) => ({
       id: player.id,
       role: active.defensivePlan?.roles.get(player.id) ?? "shape",
+      markedOpponentId: active.defensivePlan?.markedOpponentIds.get(player.id) ?? null,
       position: { x: Number(player.pos.x.toFixed(1)), z: Number(player.pos.z.toFixed(1)) },
       target: active.defensivePlan?.targets.get(player.id)
         ? {
@@ -1066,6 +1117,12 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
     canvas.dataset.defensiveMarkAssignments = "[]";
     canvas.dataset.dangerousUnmarkedCount = "0";
     canvas.dataset.duplicateMarkCount = "0";
+    canvas.dataset.deepestThreatId = "";
+    canvas.dataset.deepestMarkerId = "";
+    canvas.dataset.deepestMarkerDistance = "0";
+    canvas.dataset.deepestMarkerGoalSide = "false";
+    canvas.dataset.unassignedDefenderCount = "0";
+    canvas.dataset.laneBlockerCount = "0";
     canvas.dataset.forwardPressActive = "false";
     canvas.dataset.defenderFacingDot = "1.000";
     canvas.dataset.defensiveRoles = "[]";
@@ -1078,6 +1135,10 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
     canvas.dataset.outfieldInsideTwentyEight = "0";
     canvas.dataset.manualControlledHasAiRole = "false";
   }
+  canvas.dataset.collisionResolutionsThisFrame = String(active.collisionResolutionsThisFrame);
+  canvas.dataset.maxCollisionCorrection = active.maxCollisionCorrection.toFixed(3);
+  canvas.dataset.maxDefenderFrameDisplacement = active.maxDefenderFrameDisplacement.toFixed(3);
+  canvas.dataset.abnormalMovementClamps = String(active.abnormalMovementClamps);
   if (owner) {
     const supportingMidfielders = active.players.filter((player) => (
       player.team === owner.team
@@ -2434,6 +2495,10 @@ export function ArcadeSoccerGame() {
       defensivePlanTimer: 0,
       defensivePlanGraceTimer: 0,
       antiSwarmCorrections: 0,
+      collisionResolutionsThisFrame: 0,
+      maxCollisionCorrection: 0,
+      maxDefenderFrameDisplacement: 0,
+      abnormalMovementClamps: 0,
       pendingKickTarget: null,
       lastShotTap: 0,
       shotCharge: 0,
@@ -2633,6 +2698,29 @@ export function ArcadeSoccerGame() {
             attacker.heading = headingFromDirection(upfieldKickDirection(scenarioTeam, active.half));
             attacker.mesh.rotation.y = attacker.heading;
             attacker.mesh.position.copy(attacker.pos);
+            if (tacticalTest.includes("multi") && scenarioTeam === "home") {
+              const supportAttackers = active.players.filter((player) => (
+                player.team === scenarioTeam
+                && player.id !== attacker.id
+                && player.role !== "keeper"
+                && !player.sentOff
+              )).sort((a, b) => {
+                const order = (line: PlayerLine) => line === "forward" ? 0 : line === "midfielder" ? 1 : 2;
+                return order(a.line) - order(b.line);
+              });
+              const attackPositions = [
+                new THREE.Vector3(2, 0, -64),
+                new THREE.Vector3(-19, 0, -54),
+                new THREE.Vector3(15, 0, -49),
+                new THREE.Vector3(-8, 0, -44),
+                new THREE.Vector3(24, 0, -38),
+              ];
+              supportAttackers.slice(0, attackPositions.length).forEach((player, index) => {
+                player.pos.copy(attackPositions[index]);
+                player.vel.set(0, 0, 0);
+                player.mesh.position.copy(player.pos);
+              });
+            }
             if (manualDefenseTest) {
               const defender = active.players
                 .filter((player) => player.team === "home" && player.line === "defender" && !player.sentOff)
@@ -3494,6 +3582,12 @@ function updateMatch(
   dt: number,
   virtualControls?: VirtualControls,
 ) {
+  const playerFrameStart = active.phase === "open"
+    ? new Map(active.players.map((player) => [player.id, player.pos.clone()]))
+    : null;
+  active.collisionResolutionsThisFrame = 0;
+  active.maxCollisionCorrection = 0;
+  active.maxDefenderFrameDisplacement = 0;
   const ball = active.ballPos;
   const ballVel = active.ballVel;
   active.ballIgnoreTimer = Math.max(0, active.ballIgnoreTimer - dt);
@@ -3746,7 +3840,7 @@ function updateMatch(
     player.animationSpeed = Math.max(0, player.animationSpeed - dt * 18);
     updateStuckState(player, input.dir, active, dt);
   });
-  if (active.frameCount % 3 === 0) separatePlayers(active.players, dt);
+  if (active.frameCount % 3 === 0) separatePlayers(active, dt);
   if (!outOfPlayPending) {
     handleGoalkeeperActions(active);
     handleFieldShotBlocks(active);
@@ -3761,6 +3855,7 @@ function updateMatch(
     encourageAiFinishing(active);
     handleAutomaticSteals(active);
     enforceDefensiveRuntimeGuard(active, dt);
+    clampAbnormalDefenderDisplacement(active, playerFrameStart, dt);
   }
   if (active.frameCount % 30 === 0) syncRuntimeDiagnostics(active);
 
@@ -5295,7 +5390,36 @@ function tryAerialHeaderDuel(active: MatchRuntime, dt: number) {
   return true;
 }
 
-function separatePlayers(players: PlayerBody[], dt: number) {
+function clampAbnormalDefenderDisplacement(
+  active: MatchRuntime,
+  frameStart: Map<string, THREE.Vector3> | null,
+  dt: number,
+) {
+  if (!frameStart || !active.defensivePlan) return;
+  const maximumFrameDisplacement = Math.max(0.52, 17 * dt + 0.14);
+  active.players.forEach((player) => {
+    if (player.team !== active.defensivePlan?.defendingTeam || player.role === "keeper" || player.sentOff) return;
+    const start = frameStart.get(player.id);
+    if (!start) return;
+    const displacement = player.pos.clone().sub(start).setY(0);
+    const distance = displacement.length();
+    active.maxDefenderFrameDisplacement = Math.max(active.maxDefenderFrameDisplacement, distance);
+    if (!Number.isFinite(distance) || !Number.isFinite(player.vel.x) || !Number.isFinite(player.vel.z)) {
+      player.pos.copy(start);
+      player.vel.set(0, 0, 0);
+      active.abnormalMovementClamps += 1;
+    } else if (distance > maximumFrameDisplacement) {
+      player.pos.copy(start).add(displacement.multiplyScalar(maximumFrameDisplacement / distance));
+      if (player.vel.length() > 14.8) player.vel.setLength(14.8);
+      active.abnormalMovementClamps += 1;
+    }
+    clampPlayer(player);
+    player.mesh.position.copy(player.pos);
+  });
+}
+
+function separatePlayers(active: MatchRuntime, dt: number) {
+  const players = active.players;
   const elapsed = dt * 3;
   for (let i = 0; i < players.length; i += 1) {
     for (let j = i + 1; j < players.length; j += 1) {
@@ -5316,20 +5440,27 @@ function separatePlayers(players: PlayerBody[], dt: number) {
       const relativeVelocity = a.vel.clone().sub(b.vel).setY(0);
       const closingSpeed = relativeVelocity.dot(normal);
       if (closingSpeed < 0) {
-        a.vel.addScaledVector(normal, -closingSpeed * 0.5);
-        b.vel.addScaledVector(normal, closingSpeed * 0.5);
+        const impulse = Math.min(-closingSpeed * 0.5, 2.15);
+        a.vel.addScaledVector(normal, impulse);
+        b.vel.addScaledVector(normal, -impulse);
       }
       const deepOverlap = distance < PERSONAL_SPACE * 0.58;
       const nearLocked = deepOverlap && relativeVelocity.length() < 0.75;
       a.contactLockTimer = nearLocked ? a.contactLockTimer + elapsed : Math.max(0, a.contactLockTimer - elapsed * 1.8);
       b.contactLockTimer = nearLocked ? b.contactLockTimer + elapsed : Math.max(0, b.contactLockTimer - elapsed * 1.8);
       const failsafe = a.contactLockTimer > 0.42 || b.contactLockTimer > 0.42;
-      const correction = Math.min(failsafe ? 0.46 : 0.28, Math.max(0.03, (PERSONAL_SPACE - distance) * 0.5));
-      const tangent = new THREE.Vector3(-normal.z, 0, normal.x).multiplyScalar((a.id < b.id ? 1 : -1) * (failsafe ? 0.16 : 0));
-      const aWeight = a.role === "keeper" ? 0.35 : 1;
-      const bWeight = b.role === "keeper" ? 0.35 : 1;
-      a.pos.addScaledVector(normal, correction * aWeight).addScaledVector(tangent, aWeight);
-      b.pos.addScaledVector(normal, -correction * bWeight).addScaledVector(tangent, -bWeight);
+      const correction = Math.min(failsafe ? 0.24 : 0.16, Math.max(0.025, (PERSONAL_SPACE - distance) * 0.42));
+      const tangentAmount = failsafe ? 0.045 : 0;
+      const tangent = new THREE.Vector3(-normal.z, 0, normal.x).multiplyScalar((a.id < b.id ? 1 : -1) * tangentAmount);
+      const aMobility = a.role === "keeper" ? 0.28 : 1;
+      const bMobility = b.role === "keeper" ? 0.28 : 1;
+      const totalMobility = Math.max(0.01, aMobility + bMobility);
+      const aShare = aMobility / totalMobility;
+      const bShare = bMobility / totalMobility;
+      a.pos.addScaledVector(normal, correction * aShare).addScaledVector(tangent, aShare);
+      b.pos.addScaledVector(normal, -correction * bShare).addScaledVector(tangent, -bShare);
+      active.collisionResolutionsThisFrame += 1;
+      active.maxCollisionCorrection = Math.max(active.maxCollisionCorrection, correction);
       if (failsafe) {
         a.tackleTimer = 0;
         b.tackleTimer = 0;
@@ -7611,13 +7742,83 @@ function clampDefensiveTargetDepth(target: THREE.Vector3, ownZ: number, attackSi
   return target;
 }
 
+function defensiveThreatScore(
+  attacker: PlayerBody,
+  carrier: PlayerBody,
+  active: MatchRuntime,
+  defendingTeam: TeamId,
+) {
+  const ownGoal = new THREE.Vector3(0, 0, teamGoalZ(defendingTeam, active.half));
+  const goalDistance = attacker.pos.distanceTo(ownGoal);
+  const centrality = Math.abs(attacker.pos.x) / Math.max(1, FIELD_W / 2);
+  const defenders = active.players.filter((player) => (
+    player.team === defendingTeam && player.role !== "keeper" && !player.sentOff
+  ));
+  const nearestDefender = Math.min(...defenders.map((player) => player.pos.distanceTo(attacker.pos)), FIELD_L);
+  const runToGoal = attacker.vel.clone().setY(0);
+  const goalDirection = ownGoal.clone().sub(attacker.pos).setY(0);
+  const runDanger = runToGoal.lengthSq() > 0.05 && goalDirection.lengthSq() > 0.05
+    ? Math.max(0, runToGoal.normalize().dot(goalDirection.normalize()))
+    : 0;
+  const laneBlocked = opponentsBetween(carrier, attacker.pos, active.players, 1.9) > 0;
+  const roleThreat = attacker.line === "forward" ? 20 : attacker.line === "midfielder" ? 10 : 2;
+  const behindLine = defenders
+    .filter((player) => player.line === "defender")
+    .filter((player) => player.pos.distanceTo(ownGoal) > goalDistance + 1.5)
+    .length;
+  return 120
+    - goalDistance * 1.42
+    - centrality * 13
+    + roleThreat
+    + runDanger * 13
+    + Math.min(nearestDefender, 16) * 1.25
+    + behindLine * 3.2
+    + (laneBlocked ? 0 : 8);
+}
+
+function goalSideMarkTarget(
+  attacker: PlayerBody,
+  carrier: PlayerBody,
+  ownGoal: THREE.Vector3,
+  phase: DefensiveDangerPhase,
+) {
+  const goalSide = ownGoal.clone().sub(attacker.pos).setY(0);
+  if (goalSide.lengthSq() < 0.05) goalSide.set(0, 0, Math.sign(ownGoal.z || 1));
+  goalSide.normalize();
+  const passLane = attacker.pos.clone().sub(carrier.pos).setY(0);
+  const laneSide = passLane.lengthSq() > 0.05
+    ? new THREE.Vector3(-passLane.z, 0, passLane.x).normalize()
+    : new THREE.Vector3(-goalSide.z, 0, goalSide.x);
+  const markerSide = Math.sign(attacker.pos.x - carrier.pos.x || attacker.pos.x || 1);
+  const cushion = phase === "EMERGENCY_GOAL_DEFENSE" ? 1.75 : phase === "DEEP_BLOCK" ? 2.35 : 3.1;
+  const laneOffset = phase === "EMERGENCY_GOAL_DEFENSE" ? 0.48 : 0.82;
+  return attacker.pos
+    .clone()
+    .add(goalSide.multiplyScalar(cushion))
+    .add(laneSide.multiplyScalar(markerSide * laneOffset))
+    .setY(0);
+}
+
+function markerAssignmentCost(
+  defender: PlayerBody,
+  threat: PlayerBody,
+  target: THREE.Vector3,
+  previousMarkerId: string | null,
+) {
+  const centerBack = defender.formationSlot.includes("CB");
+  const rolePenalty = centerBack ? -10 : defender.line === "defender" ? -3 : defender.line === "midfielder" ? 9 : 22;
+  const continuityBonus = previousMarkerId === defender.id ? -13 : 0;
+  const sidePenalty = Math.abs(defender.home.x - threat.pos.x) * 0.08;
+  return defender.pos.distanceTo(target) + rolePenalty + continuityBonus + sidePenalty;
+}
+
 function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
   active.defensivePlanTimer = Math.max(0, active.defensivePlanTimer - dt);
   active.defensivePlanGraceTimer = Math.max(0, active.defensivePlanGraceTimer - dt);
   const owner = ballOwner(active);
   let carrier = owner;
   if (owner && owner.role !== "keeper") {
-    active.defensivePlanGraceTimer = 0.82;
+    active.defensivePlanGraceTimer = 1.08;
   } else if (active.phase === "open") {
     const intendedReceiver = active.ballState === "kicked" && active.intendedReceiverId
       ? active.players.find((player) => player.id === active.intendedReceiverId && player.role !== "keeper" && !player.sentOff) ?? null
@@ -7627,7 +7828,7 @@ function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
       : null;
     if (intendedReceiver) {
       carrier = intendedReceiver;
-      active.defensivePlanGraceTimer = Math.max(active.defensivePlanGraceTimer, 0.7);
+      active.defensivePlanGraceTimer = Math.max(active.defensivePlanGraceTimer, 0.92);
     } else if (
       active.defensivePlanGraceTimer > 0
       && previousCarrier
@@ -7691,15 +7892,18 @@ function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
     ? active.defensivePlan
     : null;
   const previousPressurePlan = previousPlan?.carrierId === carrier.id ? previousPlan : null;
+  const reservedDeepestMarkerId = previousPlan?.deepestMarkerId ?? null;
+  const availablePressureCandidates = pressureCandidates.filter(({ player }) => player.id !== reservedDeepestMarkerId);
+  const pressurePool = availablePressureCandidates.length > 0 ? availablePressureCandidates : pressureCandidates;
   const previousPrimary = previousPressurePlan?.primaryPresserId
-    ? pressureCandidates.find(({ player }) => player.id === previousPressurePlan.primaryPresserId)
+    ? pressurePool.find(({ player }) => player.id === previousPressurePlan.primaryPresserId)
     : null;
   const forwardPressCandidate = distanceFromOwnGoal > 42
-    ? pressureCandidates
+    ? pressurePool
         .filter(({ player }) => player.line === "forward" && player.pos.distanceTo(carrier.pos) < 48)
         .sort((a, b) => a.player.pos.distanceTo(carrier.pos) - b.player.pos.distanceTo(carrier.pos))[0]
     : null;
-  const bestPrimary = forwardPressCandidate ?? pressureCandidates[0];
+  const bestPrimary = forwardPressCandidate ?? pressurePool[0];
   const keepPreviousPrimary = Boolean(
     previousPrimary
     && active.defensivePlanTimer > 0
@@ -7711,7 +7915,9 @@ function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
   const emergencyCover = distanceFromOwnGoal < 50
     || Boolean(forwardPressCandidate && distanceFromOwnGoal > 42)
     || (carrier.controlledBy === "p1" && carrier.carryTimer > 0.45 && (carrier.vel.length() < 1 || towardGoal));
-  const coverCandidates = pressureCandidates.filter(({ player }) => player.id !== primaryPresserId);
+  const coverCandidates = pressureCandidates.filter(({ player }) => (
+    player.id !== primaryPresserId && player.id !== reservedDeepestMarkerId
+  ));
   const previousCover = previousPressurePlan?.secondaryCoverId
     ? coverCandidates.find(({ player }) => player.id === previousPressurePlan.secondaryCoverId)
     : null;
@@ -7738,9 +7944,15 @@ function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
   const roles = new Map<string, DefensiveTacticalRole>();
   const targets = new Map<string, THREE.Vector3>();
   const markedOpponentIds = new Map<string, string>();
-  defenders.forEach((player) => roles.set(player.id, "shape"));
-  if (primaryPresserId) roles.set(primaryPresserId, "press");
-  if (secondaryCoverId) roles.set(secondaryCoverId, "cover");
+  const assignedDefenderIds = new Set<string>();
+  if (primaryPresserId) {
+    roles.set(primaryPresserId, "press");
+    assignedDefenderIds.add(primaryPresserId);
+  }
+  if (secondaryCoverId) {
+    roles.set(secondaryCoverId, "cover");
+    assignedDefenderIds.add(secondaryCoverId);
+  }
 
   const ownGoal = new THREE.Vector3(0, 0, ownZ);
   const toGoal = ownGoal.clone().sub(carrier.pos).setY(0);
@@ -7756,7 +7968,7 @@ function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
   const cover = defenders.find((player) => player.id === secondaryCoverId);
   if (cover) {
     const side = Math.sign(cover.home.x - carrier.pos.x || cover.home.x || cover.number % 2 === 0 ? 1 : -1);
-    const coverTarget = carrier.pos.clone().add(toGoal.clone().multiplyScalar(6.8)).add(sideAxis.clone().multiplyScalar(side * 5.4)).setY(0);
+    const coverTarget = carrier.pos.clone().add(toGoal.clone().multiplyScalar(8.4)).add(sideAxis.clone().multiplyScalar(side * 5.8)).setY(0);
     const maxDepth = depthCeilingFor(cover);
     targets.set(
       cover.id,
@@ -7764,118 +7976,132 @@ function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
     );
   }
 
-  const possibleReceivers = active.players
-    .filter((player) => player.team === carrier.team && player.id !== carrier.id && player.role !== "keeper" && !player.sentOff);
-  const receiverDanger = (candidate: PlayerBody) => {
-    const goalDistance = Math.abs(candidate.pos.z - ownZ);
-    const centrality = Math.abs(candidate.pos.x) / Math.max(1, FIELD_W / 2);
-    const roleDanger = candidate.line === "forward" ? -26 : candidate.line === "midfielder" ? -13 : 4;
-    const runDanger = candidate.vel.clone().setY(0).dot(new THREE.Vector3(0, 0, ownZ).sub(candidate.pos).setY(0).normalize()) > 0.2 ? -4 : 0;
-    return goalDistance * 0.22 + centrality * 5 + roleDanger + runDanger;
+  const attackers = active.players.filter((player) => (
+    player.team === carrier.team && player.role !== "keeper" && !player.sentOff
+  ));
+  const threats = [...attackers].sort((a, b) => (
+    defensiveThreatScore(b, carrier, active, defendingTeam)
+    - defensiveThreatScore(a, carrier, active, defendingTeam)
+  ));
+  const centralForwards = attackers.filter((player) => (
+    player.line === "forward" && Math.abs(player.pos.x) < GOAL_W * 2.4
+  ));
+  const rawDeepestThreat = [...(centralForwards.length > 0 ? centralForwards : attackers)]
+    .sort((a, b) => (
+      a.pos.distanceTo(ownGoal) + Math.abs(a.pos.x) * 0.16
+      - (b.pos.distanceTo(ownGoal) + Math.abs(b.pos.x) * 0.16)
+    ))[0] ?? carrier;
+  const previousDeepestThreat = previousPlan?.deepestThreatId
+    ? attackers.find((player) => player.id === previousPlan.deepestThreatId) ?? null
+    : null;
+  const retainPreviousDeepest = Boolean(
+    previousDeepestThreat
+    && previousPlan?.deepestMarkerId
+    && previousDeepestThreat.pos.distanceTo(ownGoal) <= rawDeepestThreat.pos.distanceTo(ownGoal) + 4.8
+    && defensiveThreatScore(previousDeepestThreat, carrier, active, defendingTeam)
+      >= defensiveThreatScore(rawDeepestThreat, carrier, active, defendingTeam) - 10,
+  );
+  const deepestThreat = retainPreviousDeepest ? previousDeepestThreat! : rawDeepestThreat;
+
+  const availableMarkers = () => defenders.filter((player) => !assignedDefenderIds.has(player.id));
+  const assignMarker = (threat: PlayerBody, deepest = false) => {
+    const markTarget = goalSideMarkTarget(threat, carrier, ownGoal, dangerPhase);
+    const previousMarkerId = previousPlan?.deepestThreatId === threat.id
+      ? previousPlan.deepestMarkerId
+      : [...(previousPlan?.markedOpponentIds.entries() ?? [])]
+          .find(([, targetId]) => targetId === threat.id)?.[0] ?? null;
+    const candidates = availableMarkers();
+    const marker = candidates
+      .map((player) => ({
+        player,
+        cost: markerAssignmentCost(player, threat, markTarget, previousMarkerId),
+      }))
+      .sort((a, b) => a.cost - b.cost)[0]?.player ?? null;
+    if (!marker) return null;
+    assignedDefenderIds.add(marker.id);
+    markedOpponentIds.set(marker.id, threat.id);
+    roles.set(marker.id, deepest ? "mark-striker" : "mark-runner");
+    const maxDepth = depthCeilingFor(marker);
+    targets.set(marker.id, clampDefensiveTargetDepth(markTarget, ownZ, defendingAttackSign, maxDepth));
+    return marker;
   };
-  const dangerousReceivers = [...possibleReceivers].sort((a, b) => receiverDanger(a) - receiverDanger(b));
-  const unassignedReceivers = new Set(possibleReceivers.map((player) => player.id));
-  if (cover) {
-    const coverReceiver = dangerousReceivers.find((candidate) => unassignedReceivers.has(candidate.id)) ?? null;
-    if (coverReceiver) {
-      markedOpponentIds.set(cover.id, coverReceiver.id);
-      unassignedReceivers.delete(coverReceiver.id);
-    }
-  }
-  const shapePlayers = defenders
-    .filter((player) => player.id !== primaryPresserId && player.id !== secondaryCoverId)
+
+  const deepestMarker = assignMarker(deepestThreat, true);
+  const additionalThreatLimit = dangerPhase === "EMERGENCY_GOAL_DEFENSE" ? 4 : dangerPhase === "DEEP_BLOCK" ? 3 : 2;
+  threats
+    .filter((threat) => threat.id !== deepestThreat.id && threat.id !== carrier.id)
+    .filter((threat) => (
+      threat.line === "forward"
+      || (threat.line === "midfielder" && threat.pos.distanceTo(ownGoal) < (dangerPhase === "NORMAL_BLOCK" ? 66 : 52))
+    ))
+    .slice(0, additionalThreatLimit)
+    .forEach((threat) => assignMarker(threat));
+
+  const laneThreats = threats.filter((threat) => threat.id !== carrier.id);
+  const occupiedTargets = [...targets.values()].map((target) => target.clone());
+  const remainingPlayers = defenders
+    .filter((player) => !assignedDefenderIds.has(player.id))
     .sort((a, b) => {
-      const lineOrder = (line: PlayerLine) => line === "defender" ? 0 : line === "midfielder" ? 1 : 2;
+      const lineOrder = (line: PlayerLine) => line === "midfielder" ? 0 : line === "defender" ? 1 : 2;
       return lineOrder(a.line) - lineOrder(b.line) || Math.abs(a.home.x) - Math.abs(b.home.x);
     });
-  const occupiedTargets: THREE.Vector3[] = [];
-  shapePlayers.forEach((player) => {
-    const base = baseDefensiveShapeTarget(player, active, carrier, dangerPhase);
-    const previousReceiverId = previousPlan?.markedOpponentIds.get(player.id) ?? null;
-    const previousReceiver = previousReceiverId
-      ? dangerousReceivers.find((candidate) => (
-          candidate.id === previousReceiverId
-          && unassignedReceivers.has(candidate.id)
-          && (
-            player.line !== "defender"
-            || candidate.line === "forward"
-            || Math.abs(candidate.pos.z - ownZ) < Math.min(52, dangerDepth + 18)
-          )
-        )) ?? null
-      : null;
-    const receiver = previousReceiver ?? dangerousReceivers
-      .filter((candidate) => unassignedReceivers.has(candidate.id))
-      .map((candidate) => {
-        const rolePenalty = player.line === "defender"
-          ? candidate.line === "forward" ? 0 : candidate.line === "midfielder" ? 7 : 15
-          : player.line === "midfielder"
-            ? candidate.line === "midfielder" ? 0 : candidate.line === "forward" ? 4 : 10
-            : candidate.line === "midfielder" ? 0 : 8;
-        const continuityBonus = previousReceiverId === candidate.id ? -8 : 0;
-        return { candidate, score: base.distanceTo(candidate.pos) + rolePenalty + receiverDanger(candidate) + continuityBonus };
-      })
-      .sort((a, b) => a.score - b.score)[0]?.candidate;
 
-    let tacticalRole: DefensiveTacticalRole = "shape";
-    let tacticalTarget = base;
-    if (receiver) {
-      unassignedReceivers.delete(receiver.id);
-      markedOpponentIds.set(player.id, receiver.id);
-      const goalSide = ownGoal.clone().sub(receiver.pos).setY(0);
-      if (goalSide.lengthSq() < 0.05) goalSide.copy(toGoal);
-      goalSide.normalize();
-      if (player.line === "defender") {
-        tacticalRole = "mark";
-        const markingCushion = dangerPhase === "EMERGENCY_GOAL_DEFENSE" ? 1.45 : dangerPhase === "DEEP_BLOCK" ? 2.35 : 3.4;
-        const anchorBlend = dangerPhase === "EMERGENCY_GOAL_DEFENSE" ? 0.14 : dangerPhase === "DEEP_BLOCK" ? 0.22 : 0.32;
-        tacticalTarget = receiver.pos.clone().add(goalSide.multiplyScalar(markingCushion)).lerp(base, anchorBlend);
+  remainingPlayers.forEach((player, index) => {
+    const base = baseDefensiveShapeTarget(player, active, carrier, dangerPhase);
+    let role: DefensiveTacticalRole;
+    let target = base.clone();
+    if (player.line === "midfielder") {
+      const receiver = laneThreats[index % Math.max(1, laneThreats.length)] ?? deepestThreat;
+      const lanePoint = carrier.pos.clone().lerp(receiver.pos, 0.58).setY(0);
+      const laneGoalSide = ownGoal.clone().sub(receiver.pos).setY(0);
+      if (laneGoalSide.lengthSq() > 0.05) lanePoint.add(laneGoalSide.normalize().multiplyScalar(1.6));
+      target = lanePoint.lerp(base, dangerPhase === "NORMAL_BLOCK" ? 0.28 : 0.16);
+      role = index === 0 ? "midfield-screen" : "block-lane";
+    } else if (player.line === "defender") {
+      const fullback = ["LB", "RB", "LWB", "RWB"].includes(player.formationSlot);
+      const farSide = Math.sign(player.home.x || player.pos.x || 1) !== Math.sign(carrier.pos.x || 1);
+      if (fullback && farSide) {
+        role = "far-post-cover";
+        target.x = clamp(-Math.sign(carrier.pos.x || 1) * GOAL_W * 0.62, -GOAL_W, GOAL_W);
+      } else if (fullback) {
+        role = "wide-cover";
+        target.x = clamp(carrier.pos.x * 0.54 + player.home.x * 0.28, -GOAL_W * 1.5, GOAL_W * 1.5);
       } else {
-        tacticalRole = "lane";
-        const laneMix = player.line === "midfielder" ? 0.62 : 0.48;
-        const goalSideSupport = dangerPhase === "EMERGENCY_GOAL_DEFENSE" ? 0.9 : 1.6;
-        const baseBlend = dangerPhase === "EMERGENCY_GOAL_DEFENSE"
-          ? player.line === "midfielder" ? 0.16 : 0.26
-          : player.line === "midfielder" ? 0.3 : 0.48;
-        tacticalTarget = carrier.pos.clone().lerp(receiver.pos, laneMix).add(goalSide.multiplyScalar(goalSideSupport)).lerp(base, baseBlend);
+        role = "depth-cover";
+        target.x = clamp(player.home.x * 0.42 + carrier.pos.x * 0.14, -GOAL_W * 0.78, GOAL_W * 0.78);
       }
+    } else {
+      role = "block-lane";
+      const receiver = laneThreats[index % Math.max(1, laneThreats.length)] ?? deepestThreat;
+      target = carrier.pos.clone().lerp(receiver.pos, 0.42).lerp(base, 0.34).setY(0);
     }
 
     const minimumCarrierGap = dangerPhase === "EMERGENCY_GOAL_DEFENSE"
-      ? player.line === "defender" ? 5.2 : player.line === "midfielder" ? 7.4 : 10.5
+      ? player.line === "defender" ? 6.2 : player.line === "midfielder" ? 8 : 11
       : dangerPhase === "DEEP_BLOCK"
-        ? player.line === "defender" ? 8.2 : player.line === "midfielder" ? 10.6 : 13.5
-        : player.line === "defender" ? 12.5 : player.line === "midfielder" ? 15.5 : 18.5;
-    if (tacticalTarget.distanceTo(carrier.pos) < minimumCarrierGap) {
-      const laneSide = Math.sign(player.home.x || player.pos.x || player.number % 2 === 0 ? 1 : -1);
-      tacticalTarget = carrier.pos
+        ? player.line === "defender" ? 9 : player.line === "midfielder" ? 11 : 14
+        : player.line === "defender" ? 13 : player.line === "midfielder" ? 15 : 18;
+    if (target.distanceTo(carrier.pos) < minimumCarrierGap) {
+      const laneSide = Math.sign(player.home.x || player.pos.x || (player.number % 2 === 0 ? 1 : -1));
+      target = carrier.pos
         .clone()
         .add(toGoal.clone().multiplyScalar(minimumCarrierGap))
-        .add(sideAxis.clone().multiplyScalar(laneSide * (player.line === "defender" ? 4.6 : 7.2)));
+        .add(sideAxis.clone().multiplyScalar(laneSide * (player.line === "defender" ? 4.8 : 7)));
     }
-    clampDefensiveTargetDepth(tacticalTarget, ownZ, defendingAttackSign, depthCeilingFor(player));
-    if (player.line === "defender" && dangerPhase !== "NORMAL_BLOCK") {
-      const fullback = ["LB", "RB", "LWB", "RWB"].includes(player.formationSlot);
-      const compactX = fullback
-        ? clamp(player.home.x * 0.58 + carrier.pos.x * 0.16, -GOAL_W * 1.45, GOAL_W * 1.45)
-        : clamp(tacticalTarget.x * 0.58 + carrier.pos.x * 0.18, -GOAL_W * 0.82, GOAL_W * 0.82);
-      tacticalTarget.x = THREE.MathUtils.lerp(
-        tacticalTarget.x,
-        compactX,
-        dangerPhase === "EMERGENCY_GOAL_DEFENSE" ? 0.86 : clamp((40 - dangerDepth) / 26, 0.36, 0.72),
-      );
-    }
-    occupiedTargets.forEach((occupied, index) => {
-      const gap = tacticalTarget.distanceTo(occupied);
-      if (gap >= 6.2) return;
-      const direction = Math.sign(player.home.x || player.number % 2 === 0 ? 1 : -1) * (index % 2 === 0 ? 1 : -1);
-      tacticalTarget.add(sideAxis.clone().multiplyScalar(direction * (6.2 - gap + 1.2)));
+    clampDefensiveTargetDepth(target, ownZ, defendingAttackSign, depthCeilingFor(player));
+    occupiedTargets.forEach((occupied, occupiedIndex) => {
+      const gap = target.distanceTo(occupied);
+      if (gap >= 5.8) return;
+      const direction = Math.sign(player.home.x || player.number % 2 === 0 ? 1 : -1) * (occupiedIndex % 2 === 0 ? 1 : -1);
+      target.add(sideAxis.clone().multiplyScalar(direction * Math.min(3.2, 5.8 - gap + 0.7)));
     });
-    tacticalTarget.x = clamp(tacticalTarget.x, -FIELD_W / 2 + 4, FIELD_W / 2 - 4);
-    tacticalTarget.z = clamp(tacticalTarget.z, -FIELD_L / 2 + 5, FIELD_L / 2 - 5);
-    tacticalTarget.y = 0;
-    roles.set(player.id, tacticalRole);
-    targets.set(player.id, tacticalTarget);
-    occupiedTargets.push(tacticalTarget.clone());
+    target.x = clamp(target.x, -FIELD_W / 2 + 4, FIELD_W / 2 - 4);
+    target.z = clamp(target.z, -FIELD_L / 2 + 5, FIELD_L / 2 - 5);
+    target.y = 0;
+    roles.set(player.id, role);
+    targets.set(player.id, target);
+    assignedDefenderIds.add(player.id);
+    occupiedTargets.push(target.clone());
   });
 
   const plan: DefensiveTeamPlan = {
@@ -7884,6 +8110,8 @@ function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
     dangerPhase,
     primaryPresserId,
     secondaryCoverId,
+    deepestThreatId: deepestThreat.id,
+    deepestMarkerId: deepestMarker?.id ?? null,
     roles,
     targets,
     markedOpponentIds,
@@ -7893,7 +8121,10 @@ function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
 }
 
 function enforceAntiSwarmInvariant(active: MatchRuntime, carrier: PlayerBody, plan: DefensiveTeamPlan) {
-  const allowed = new Set([plan.primaryPresserId, plan.secondaryCoverId].filter((id): id is string => Boolean(id)));
+  const allowed = new Set([
+    plan.primaryPresserId,
+    plan.deepestMarkerId ?? plan.secondaryCoverId,
+  ].filter((id): id is string => Boolean(id)));
   const nearby = active.players
     .filter((player) => (
       player.team === plan.defendingTeam
@@ -7924,7 +8155,7 @@ function enforceAntiSwarmInvariant(active: MatchRuntime, carrier: PlayerBody, pl
       .setY(0);
     escape.x = clamp(escape.x, -FIELD_W / 2 + 4, FIELD_W / 2 - 4);
     escape.z = clamp(escape.z, -FIELD_L / 2 + 5, FIELD_L / 2 - 5);
-    plan.roles.set(player.id, player.line === "defender" ? "mark" : "lane");
+    plan.roles.set(player.id, player.line === "defender" ? "depth-cover" : "block-lane");
     plan.targets.set(player.id, escape);
     player.forcedMoveTimer = 0;
     player.forcedMoveSprint = false;
@@ -7956,7 +8187,10 @@ function enforceDefensiveRuntimeGuard(active: MatchRuntime, dt: number) {
       : null;
   if (!carrier) return;
 
-  const allowed = new Set([plan.primaryPresserId, plan.secondaryCoverId].filter((id): id is string => Boolean(id)));
+  const allowed = new Set([
+    plan.primaryPresserId,
+    plan.deepestMarkerId ?? plan.secondaryCoverId,
+  ].filter((id): id is string => Boolean(id)));
   const extras = active.players.filter((player) => {
     if (
       player.team !== plan.defendingTeam
@@ -8028,11 +8262,6 @@ function enforceDefensiveRuntimeGuard(active: MatchRuntime, dt: number) {
       player.aiInputTimer = Math.max(player.aiInputTimer, 0.08);
       const faceCarrier = carrier.pos.clone().sub(player.pos).setY(0);
       if (faceCarrier.lengthSq() > 0.05) setPlayerHeading(player, headingFromDirection(faceCarrier), dt, 13.5);
-      if (distance < 6.5) {
-        player.pos.addScaledVector(escapeDirection, Math.min(0.42, (6.5 - distance) * 0.12));
-        clampPlayer(player);
-        player.mesh.position.copy(player.pos);
-      }
     }
     active.antiSwarmCorrections += 1;
   });
@@ -8054,6 +8283,7 @@ function defensiveTeamInput(player: PlayerBody, active: MatchRuntime, carrier: P
   const plan = active.defensivePlan;
   const role = plan?.roles.get(player.id) ?? "shape";
   const target = plan?.targets.get(player.id)?.clone() ?? baseDefensiveShapeTarget(player, active, carrier, plan?.dangerPhase);
+  const stableMarker = role === "mark-striker" || role === "mark-runner";
   const carrierDistance = player.pos.distanceTo(carrier.pos);
   if (role === "press") {
     const ballPoint = controlledBallPoint(carrier);
@@ -8084,9 +8314,9 @@ function defensiveTeamInput(player: PlayerBody, active: MatchRuntime, carrier: P
     }
   } else {
     player.challengeCommitTimer = 0;
-    addOrganicVariation(player, target, active);
+    if (!stableMarker) addOrganicVariation(player, target, active);
   }
-  if (player.challengeCommitTimer <= 0) steerAroundPlayers(player, active.players, target);
+  if (player.challengeCommitTimer <= 0 && !stableMarker) steerAroundPlayers(player, active.players, target);
   if (role === "press" && player.challengeCommitTimer <= 0) {
     enforcePrimaryGoalSideContainment(target, carrier, teamGoalZ(player.team, active.half));
   }
@@ -9498,10 +9728,12 @@ function attemptTackle(player: PlayerBody, active: MatchRuntime) {
   owner.recoveryTimer = Math.max(owner.recoveryTimer, 0.62);
   const separation = player.pos.clone().sub(owner.pos).setY(0);
   if (separation.lengthSq() > 0.01) {
-    separation.normalize().multiplyScalar(0.55);
+    separation.normalize().multiplyScalar(0.18);
     player.pos.add(separation);
     owner.pos.sub(separation);
   }
+  if (player.vel.length() > 13.5) player.vel.setLength(13.5);
+  if (owner.vel.length() > 13.5) owner.vel.setLength(13.5);
   active.cooldown = Math.max(active.cooldown, 0.24);
   return true;
 }
