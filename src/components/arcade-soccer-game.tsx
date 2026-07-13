@@ -3176,7 +3176,7 @@ export function ArcadeSoccerGame() {
               player.vel.set(0, 0, 0);
               player.mesh.position.copy(player.pos);
             });
-            headerPlayer.pos.set((testIndex % 5 - 2) * 4.2, 0, -48 + (testIndex % 3) * 3.2);
+            headerPlayer.pos.set((testIndex % 5 - 2) * 4.2, 0, -18 + (testIndex % 3) * 3.2);
             headerPlayer.vel.set(testIndex % 2 === 0 ? 1.8 : 0, 0, -2.2);
             headerPlayer.heading = headingFromDirection(new THREE.Vector3(0, 0, -1));
             headerPlayer.mesh.rotation.y = headerPlayer.heading;
