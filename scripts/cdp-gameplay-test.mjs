@@ -31,6 +31,33 @@ const evaluate = async (expression) => {
 };
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const dispatchKey = (type, key, code) => send("Input.dispatchKeyEvent", { type, key, code, windowsVirtualKeyCode: key.startsWith("Arrow") ? { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40 }[key] : key.charCodeAt(0) });
+const readLifecycle = () => evaluate(`(() => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) return { error: 'no canvas' };
+  const d = canvas.dataset;
+  return {
+    engineId: d.engineId,
+    restartCount: d.restartCount,
+    activeEngineCount: d.activeEngineCount,
+    canvasCount: d.canvasCount,
+    rafLoops: d.rafLoops,
+    resizeListenerCount: d.resizeListenerCount,
+    visibilityListenerCount: d.visibilityListenerCount,
+    inputListenerSetCount: d.inputListenerSetCount,
+    sceneNodes: d.sceneNodes,
+    colliderCount: d.colliderCount,
+    timerCount: d.timerCount,
+    audioSourceCount: d.audioSourceCount,
+    rendererGeometries: d.rendererGeometries,
+    rendererTextures: d.rendererTextures,
+    rendererCalls: d.rendererCalls,
+    rendererTriangles: d.rendererTriangles,
+    rendererDpr: d.rendererDpr,
+    rendererPixels: d.rendererPixels,
+    fps: d.fps,
+    averageFrameMs: d.averageFrameMs,
+  };
+})()`);
 
 await send("Runtime.enable");
 await send("Page.enable");
@@ -42,6 +69,77 @@ await evaluate(`(() => {
   return Boolean(kickoff);
 })()`);
 await sleep(1800);
+
+if (mode === "ai-observe") {
+  await evaluate(`(() => {
+    const toggle = [...document.querySelectorAll('button')].find((button) => button.textContent?.replace(/\\s+/g, '') === 'AIOFF');
+    toggle?.click();
+    return Boolean(toggle);
+  })()`);
+  await sleep(500);
+}
+
+const lifecycleSamples = [];
+if (mode === "lifecycle") {
+  lifecycleSamples.push({ iteration: 0, ...(await readLifecycle()) });
+  for (let iteration = 1; iteration <= 10; iteration += 1) {
+    await evaluate(`(() => {
+      const settings = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Settings');
+      settings?.click();
+      return Boolean(settings);
+    })()`);
+    await sleep(120);
+    await evaluate(`(() => {
+      const exit = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Exit Game');
+      exit?.click();
+      return Boolean(exit);
+    })()`);
+    await sleep(180);
+    await evaluate(`(() => {
+      const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().toLowerCase() === 'kickoff');
+      kickoff?.click();
+      return Boolean(kickoff);
+    })()`);
+    await sleep(650);
+    lifecycleSamples.push({ iteration, ...(await readLifecycle()) });
+  }
+}
+if (mode === "lifecycle-events") {
+  lifecycleSamples.push({ event: "initial", ...(await readLifecycle()) });
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: iteration % 2 === 0 ? 1280 : 1440,
+      height: iteration % 2 === 0 ? 760 : 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await sleep(100);
+  }
+  await send("Emulation.clearDeviceMetricsOverride");
+  await sleep(700);
+  lifecycleSamples.push({ event: "after-resize", ...(await readLifecycle()) });
+
+  const backgroundTarget = await send("Target.createTarget", { url: "about:blank", background: false });
+  for (let iteration = 0; iteration < 5; iteration += 1) {
+    await send("Target.activateTarget", { targetId: backgroundTarget.targetId });
+    await sleep(500);
+    await send("Target.activateTarget", { targetId: target.id });
+    await send("Page.bringToFront");
+    await sleep(500);
+  }
+  await send("Target.closeTarget", { targetId: backgroundTarget.targetId });
+  lifecycleSamples.push({ event: "after-tab-switch", ...(await readLifecycle()) });
+
+  await send("Page.reload", { ignoreCache: true });
+  await sleep(1900);
+  await evaluate(`(() => {
+    const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().toLowerCase() === 'kickoff');
+    kickoff?.click();
+    return Boolean(kickoff);
+  })()`);
+  await sleep(1500);
+  lifecycleSamples.push({ event: "after-refresh", ...(await readLifecycle()) });
+}
 
 const manualSamples = [];
 if (mode === "manual") {
@@ -62,18 +160,25 @@ const diagnostics = await evaluate(`(() => {
   const canvas = document.querySelector('canvas');
   if (!canvas) return { error: 'no canvas' };
   const keys = [
-    'phase','ballState','ballOwner','ballX','ballY','ballZ','fps','rafLoops','sceneNodes','playerCount','colliderCount',
+    'phase','ballState','ballOwner','ballX','ballY','ballZ','fps','averageFrameMs','rafLoops','sceneNodes','playerCount','colliderCount',
     'aerialReceptionTestsRequested','aerialReceptionTestsRemaining','aerialReceptionTestsPassed','aerialReceptionTestsFailed',
     'aerialFirstTouches','lastAerialFirstTouchType','lastAerialFirstTouchDistance','lastFirstTouchProbeType','lastFirstTouchProbeDistance','lastFirstTouchProbeRadius','aerialReceiverId','aerialReceiverX','aerialReceiverZ','aerialArrivalTime','aerialTouchPlan','aerialLandingX','aerialLandingZ',
     'defensiveDangerPhase','defendersInsideTwelve','outfieldInsideTwentyEight','nearCarrierDefenders','closeCarrierDefenders',
     'primaryPresserId','secondaryCoverId','deepestThreatId','deepestMarkerId','deepestMarkerDistance','deepestMarkerGoalSide',
     'dangerousUnmarkedCount','duplicateMarkCount','unassignedDefenderCount','laneBlockerCount','defensiveRoles','manualControlledHasAiRole',
     'collisionResolutionsThisFrame','maxCollisionCorrection','maxDefenderFrameDisplacement','abnormalMovementClamps','maxDefenderSpeed',
-    'tackleTestsRequested','tackleTestsPassed','tackleTestsFailed','possessionClaims','lastReceived'
+    'tackleTestsRequested','tackleTestsPassed','tackleTestsFailed','interceptionTestsRequested','interceptionTestsPassed','interceptionTestsFailed',
+    'loftedPassTestsRequested','loftedPassTestsPassed','loftedPassTestsFailed','goalMouthTestsRequested','goalMouthTestsPassed','goalMouthTestsFailed',
+    'goalLineStallCorrections','mechanicsTest','mechanicsTestPassed','mechanicsCurve','mechanicsLift','mechanicsReceiver',
+    'possessionClaims','lastReceived','aiPassesHome','aiPassesAway','aiThroughPassOpportunities','aiThroughPassSafeDecisions',
+    'aiProgressiveThroughPasses','aiCurveOpportunities','aiCurveSelected','aiCurvedPasses','aiCurvedShots','curvedKicks',
+    'activeEngineCount','canvasCount','resizeListenerCount','visibilityListenerCount','inputListenerSetCount','p1Autopilot','physicsStepsPerFrame','timerCount','audioSourceCount',
+    'rendererCalls','rendererTriangles','rendererGeometries','rendererTextures','rendererDpr','rendererPixels','restartCount',
+    'kickChargeSamples','kickFullChargeSeconds','buildupMidfieldOptions','buildupDefenderOptions','aggressiveCloserCount','pressRoleCount','coverRoleCount'
   ];
   return Object.fromEntries(keys.map((key) => [key, canvas.dataset[key] ?? null]));
 })()`);
-console.log(JSON.stringify({ url, mode, manualSamples, diagnostics }, null, 2));
+console.log(JSON.stringify({ url, mode, manualSamples, lifecycleSamples, diagnostics }, null, 2));
 await send("Page.close");
 socket.close();
 process.exit(0);
