@@ -44,6 +44,7 @@ const readLifecycle = () => evaluate(`(() => {
     resizeListenerCount: d.resizeListenerCount,
     visibilityListenerCount: d.visibilityListenerCount,
     inputListenerSetCount: d.inputListenerSetCount,
+    fullscreenListenerCount: d.fullscreenListenerCount,
     sceneNodes: d.sceneNodes,
     colliderCount: d.colliderCount,
     timerCount: d.timerCount,
@@ -56,6 +57,7 @@ const readLifecycle = () => evaluate(`(() => {
     rendererPixels: d.rendererPixels,
     fps: d.fps,
     averageFrameMs: d.averageFrameMs,
+    fullscreenActive: Boolean(document.fullscreenElement),
   };
 })()`);
 
@@ -81,6 +83,9 @@ if (mode === "ai-observe") {
 
 const lifecycleSamples = [];
 if (mode === "lifecycle") {
+  await dispatchKey("keyDown", "f", "KeyF");
+  await dispatchKey("keyUp", "f", "KeyF");
+  await sleep(500);
   lifecycleSamples.push({ iteration: 0, ...(await readLifecycle()) });
   for (let iteration = 1; iteration <= 10; iteration += 1) {
     await evaluate(`(() => {
@@ -168,15 +173,32 @@ const diagnostics = await evaluate(`(() => {
     'dangerousUnmarkedCount','duplicateMarkCount','unassignedDefenderCount','laneBlockerCount','defensiveRoles','manualControlledHasAiRole',
     'collisionResolutionsThisFrame','maxCollisionCorrection','maxDefenderFrameDisplacement','abnormalMovementClamps','maxDefenderSpeed',
     'tackleTestsRequested','tackleTestsPassed','tackleTestsFailed','interceptionTestsRequested','interceptionTestsPassed','interceptionTestsFailed',
+    'keeperHandsTestsRequested','keeperHandsTestsPassed','keeperHandsTestsFailed','keeperBuildupTestsRequested','keeperBuildupTestsPassed','keeperBuildupTestsFailed',
+    'looseBallTestsRequested','looseBallTestsPassed','looseBallTestsFailed','lastLooseBallReactionMs',
     'loftedPassTestsRequested','loftedPassTestsPassed','loftedPassTestsFailed','goalMouthTestsRequested','goalMouthTestsPassed','goalMouthTestsFailed',
     'goalLineStallCorrections','mechanicsTest','mechanicsTestPassed','mechanicsCurve','mechanicsLift','mechanicsReceiver',
     'possessionClaims','lastReceived','aiPassesHome','aiPassesAway','aiThroughPassOpportunities','aiThroughPassSafeDecisions',
     'aiProgressiveThroughPasses','aiCurveOpportunities','aiCurveSelected','aiCurvedPasses','aiCurvedShots','curvedKicks',
-    'activeEngineCount','canvasCount','resizeListenerCount','visibilityListenerCount','inputListenerSetCount','p1Autopilot','physicsStepsPerFrame','timerCount','audioSourceCount',
-    'rendererCalls','rendererTriangles','rendererGeometries','rendererTextures','rendererDpr','rendererPixels','restartCount',
-    'kickChargeSamples','kickFullChargeSeconds','buildupMidfieldOptions','buildupDefenderOptions','aggressiveCloserCount','pressRoleCount','coverRoleCount'
+    'activeEngineCount','canvasCount','resizeListenerCount','visibilityListenerCount','inputListenerSetCount','fullscreenListenerCount','p1Autopilot','physicsStepsPerFrame','timerCount','audioSourceCount',
+    'rendererCalls','rendererTriangles','rendererGeometries','rendererTextures','rendererDpr','rendererPixels','restartCount','restartSeed','keeperTracking',
+    'kickChargeSamples','kickFullChargeSeconds','buildupMidfieldOptions','buildupDefenderOptions','aggressiveCloserCount','pressRoleCount','coverRoleCount',
+    'keeperClaimAttempts','keeperClaims','keeperSmothers','emergencyBlockAttempts','emergencyBlocks','postWinRecoveries','postWinAbandons',
+    'blockedPassCancellations','blockedPassAlternatives','boxFinishingDecisions','contextualSkillAttempts','contextualSkillsTriggered',
+    'emergencyBlockTestsRequested','emergencyBlockTestsPassed','emergencyBlockTestsFailed',
+    'blockedPassTestsRequested','blockedPassTestsPassed','blockedPassTestsFailed',
+    'boxFinishTestsRequested','boxFinishTestsPassed','boxFinishTestsFailed',
+    'skillTestsRequested','skillTestsPassed','skillTestsFailed',
+    'goalKickTestsRequested','goalKickTestsRemaining','goalKickCount','goalKickState','goalKickReceiver','goalKickKeeperTeam','goalKickTargetTeam',
+    'goalKickTargetSlot','goalKickTargetLine','goalKickSafetyScore','goalKickTargetDistance','goalKickLaneBlockers','goalKickReceiverPressure',
+    'goalKickLandingPressure','goalKickShapeOptions','goalKickShapeLeft','goalKickShapeCenter','goalKickShapeRight','goalKickSameTeamTargets',
+    'goalKickTeamMismatches','goalKickEmptyTargets','goalKickReleaseY'
   ];
-  return Object.fromEntries(keys.map((key) => [key, canvas.dataset[key] ?? null]));
+  const result = Object.fromEntries(keys.map((key) => [key, canvas.dataset[key] ?? null]));
+  result.visibleButtons = [...document.querySelectorAll('button')]
+    .filter((button) => button.offsetParent !== null)
+    .map((button) => button.textContent?.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  return result;
 })()`);
 console.log(JSON.stringify({ url, mode, manualSamples, lifecycleSamples, diagnostics }, null, 2));
 await send("Page.close");
