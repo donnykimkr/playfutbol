@@ -81,17 +81,30 @@ const waitForMatchState = async (state, timeoutMs = 12000) => {
   }
   return false;
 };
+const waitForButtonText = async (text, timeoutMs = 12000) => {
+  const normalizedText = text.trim().toLowerCase();
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const found = await evaluate(`(() => [...document.querySelectorAll('button')].some((button) => button.textContent?.trim().toLowerCase() === ${JSON.stringify(normalizedText)}))()`);
+    if (found) return true;
+    await sleep(100);
+  }
+  return false;
+};
 
 await send("Runtime.enable");
 await send("Page.enable");
 await send("Page.bringToFront");
 await sleep(850);
 if (mode !== "start-screen") {
-  await evaluate(`(() => {
-    const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().toLowerCase() === 'kickoff');
-    if (kickoff) kickoff.click();
-    return Boolean(kickoff);
-  })()`);
+  const kickoffReady = await waitForButtonText("kickoff");
+  if (kickoffReady) {
+    await evaluate(`(() => {
+      const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().toLowerCase() === 'kickoff');
+      kickoff?.click();
+      return Boolean(kickoff);
+    })()`);
+  }
 }
 await sleep(1800);
 
