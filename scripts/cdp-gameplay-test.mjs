@@ -99,11 +99,16 @@ await sleep(850);
 if (mode !== "start-screen") {
   const kickoffReady = await waitForButtonText("kickoff");
   if (kickoffReady) {
-    await evaluate(`(() => {
-      const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().toLowerCase() === 'kickoff');
-      kickoff?.click();
-      return Boolean(kickoff);
-    })()`);
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 12000) {
+      const matchState = await evaluate(`(() => {
+        const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().toLowerCase() === 'kickoff');
+        kickoff?.click();
+        return document.querySelector('main')?.dataset.matchState ?? null;
+      })()`);
+      if (matchState && matchState !== "menu") break;
+      await sleep(100);
+    }
   }
 }
 await sleep(1800);

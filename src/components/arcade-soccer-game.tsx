@@ -4026,6 +4026,31 @@ export function ArcadeSoccerGame() {
           nextPassIntentTestAt = now + 50;
         }
         if (
+          requestedPassIntentTests > 0
+          && remainingPassIntentTests > 0
+          && !pendingPassIntentCheck
+          && active.phase !== "open"
+        ) {
+          // Keep the isolated pass-intent matrix moving if a synthetic pass
+          // happens to cross a boundary. This branch is only enabled by the
+          // explicit passIntentTest query used by the production verifier.
+          active.phase = "open";
+          active.phaseTimer = 0;
+          active.eventText = "";
+          active.eventTimer = 0;
+          active.pendingRestartPhase = null;
+          active.pendingRestartTimer = 0;
+          active.pendingRestartLabel = "";
+          active.restartActorId = null;
+          active.restartProtectionTeam = null;
+          active.restartProtectionTimer = 0;
+          active.goalKickLockPlayerId = null;
+          active.goalKickLockTimer = 0;
+          active.goalKickReleaseTimer = 0;
+          active.goalKickPendingReceiverId = null;
+          active.replayTimer = 0;
+        }
+        if (
           remainingPassIntentTests > 0
           && !pendingPassIntentCheck
           && active.phase === "open"
