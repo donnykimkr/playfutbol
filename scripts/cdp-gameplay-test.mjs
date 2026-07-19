@@ -96,7 +96,7 @@ await send("Runtime.enable");
 await send("Page.enable");
 await send("Page.bringToFront");
 await sleep(850);
-if (mode !== "start-screen") {
+if (mode !== "start-screen" && mode !== "tutorial-smoke") {
   const kickoffReady = await waitForButtonText("kickoff");
   if (kickoffReady) {
     const startedAt = Date.now();
@@ -123,6 +123,61 @@ if (mode === "ai-observe") {
 }
 
 const lifecycleSamples = [];
+if (mode === "tutorial-smoke") {
+  const tutorialReady = await waitForButtonText("tutorial");
+  if (tutorialReady) {
+    await evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim().toLowerCase() === 'tutorial');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    await sleep(700);
+    lifecycleSamples.push({ event: "tutorial-start", ...(await readLifecycle()) });
+    await evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Retry'));
+      button?.click();
+      return Boolean(button);
+    })()`);
+    await sleep(350);
+    lifecycleSamples.push({ event: "tutorial-retry", ...(await readLifecycle()) });
+    for (let lesson = 0; lesson < 10; lesson += 1) {
+      const before = await evaluate(`(() => {
+        const canvas = document.querySelector('canvas');
+        return { lesson: canvas?.dataset.tutorialLesson ?? null, status: canvas?.dataset.tutorialStatus ?? null };
+      })()`);
+      await evaluate(`(() => {
+        const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Skip'));
+        button?.click();
+        return Boolean(button);
+      })()`);
+      const transitionStartedAt = Date.now();
+      while (Date.now() - transitionStartedAt < 1800) {
+        const after = await evaluate(`(() => {
+          const canvas = document.querySelector('canvas');
+          return { lesson: canvas?.dataset.tutorialLesson ?? null, status: canvas?.dataset.tutorialStatus ?? null };
+        })()`);
+        if (after.status === 'complete' || after.lesson !== before.lesson) break;
+        await sleep(80);
+      }
+    }
+    await sleep(700);
+    lifecycleSamples.push({ event: "tutorial-complete", ...(await readLifecycle()) });
+    await evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Return to Menu');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    await sleep(350);
+    lifecycleSamples.push({ event: "tutorial-exit", ...(await readLifecycle()) });
+    await evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim().toLowerCase() === 'kickoff');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    await sleep(900);
+    lifecycleSamples.push({ event: "match-after-tutorial", ...(await readLifecycle()) });
+  }
+}
 if (mode === "lifecycle") {
   await dispatchKey("keyDown", "f", "KeyF");
   await dispatchKey("keyUp", "f", "KeyF");
@@ -260,8 +315,9 @@ const diagnostics = await evaluate(`(() => {
     'collisionResolutionsThisFrame','maxCollisionCorrection','maxDefenderFrameDisplacement','abnormalMovementClamps','maxDefenderSpeed',
     'tackleTestsRequested','tackleTestsPassed','tackleTestsFailed','interceptionTestsRequested','interceptionTestsPassed','interceptionTestsFailed',
     'keeperHandsTestsRequested','keeperHandsTestsPassed','keeperHandsTestsFailed','keeperBuildupTestsRequested','keeperBuildupTestsPassed','keeperBuildupTestsFailed',
-    'looseBallTestsRequested','looseBallTestsPassed','looseBallTestsFailed','lastLooseBallReactionMs',
+    'looseBallTestsRequested','looseBallTestsPassed','looseBallTestsFailed','looseBallTestResults','lastLooseBallReactionMs',
     'loftedPassTestsRequested','loftedPassTestsPassed','loftedPassTestsFailed','goalMouthTestsRequested','goalMouthTestsPassed','goalMouthTestsFailed',
+    'boundaryTestsRequested','boundaryTestsPassed','boundaryTestsFailed','boundaryTestResults','boundaryState','touchlineStallTimer','touchlineStallCorrections',
     'goalLineStallCorrections','mechanicsTest','mechanicsTestPassed','mechanicsCurve','mechanicsLift','mechanicsReceiver',
     'possessionClaims','lastReceived','aiPassesHome','aiPassesAway','aiThroughPassOpportunities','aiThroughPassSafeDecisions',
     'aiProgressiveThroughPasses','aiCurveOpportunities','aiCurveSelected','aiCurvedPasses','aiCurvedShots','curvedKicks',
@@ -274,15 +330,16 @@ const diagnostics = await evaluate(`(() => {
     'blockedPassTestsRequested','blockedPassTestsPassed','blockedPassTestsFailed',
     'boxFinishTestsRequested','boxFinishTestsPassed','boxFinishTestsFailed',
     'skillTestsRequested','skillTestsPassed','skillTestsFailed',
-    'passIntentTestsRequested','passIntentTestsRemaining','passIntentTestsPassed','passIntentTestsFailed',
+    'passIntentTestsRequested','passIntentTestsRemaining','passIntentTestsPassed','passIntentTestsFailed','passIntentTestResults',
     'passIntentsCreated','passIntentsResolved','passIntentsAbandoned','passIntentReceiver','passIntentState','receiverMarkerCount',
+    'looseBallCollectorHome','looseBallCollectorAway','looseBallCollectorId','looseBallCollectorAssignments',
     'attackingPossessionTeam','attackingPossessionSeconds','primaryGoalSideProgress','primaryLaneOffset','primaryPositionGoalSideProgress','primaryPositionLaneOffset',
     'centralRouteProtected','attackingMidfieldersFinalThird','attackingFullbacksAdvanced','attackingCenterBackLineProgress',
     'rendererCount','canvasBackingWidth','canvasBackingHeight','effectiveDpr','matchUpdatesThisFrame','matchGeneration','fullTimeHandled','fullTimeTransitions',
     'goalKickTestsRequested','goalKickTestsRemaining','goalKickCount','goalKickState','goalKickReceiver','goalKickKeeperTeam','goalKickTargetTeam',
     'goalKickTargetSlot','goalKickTargetLine','goalKickSafetyScore','goalKickTargetDistance','goalKickLaneBlockers','goalKickReceiverPressure',
     'goalKickLandingPressure','goalKickShapeOptions','goalKickShapeLeft','goalKickShapeCenter','goalKickShapeRight','goalKickSameTeamTargets',
-    'goalKickTeamMismatches','goalKickEmptyTargets','goalKickReleaseY'
+    'goalKickTeamMismatches','goalKickEmptyTargets','goalKickReleaseY','lifecycleEpoch','tutorialActive','tutorialLesson'
   ];
   const result = Object.fromEntries(keys.map((key) => [key, canvas.dataset[key] ?? null]));
   result.visibleButtons = [...document.querySelectorAll('button')]
