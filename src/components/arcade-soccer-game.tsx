@@ -260,8 +260,14 @@ type MatchRuntime = {
   intendedReceiverId: string | null;
   passIntent: PassIntent | null;
   passTargetMarker: THREE.Object3D;
+  kickPreviewGuide: THREE.Line;
   kickPreviewLine: THREE.Mesh;
   kickPreviewEndpoint: THREE.Mesh;
+  kickLandingZone: THREE.Group;
+  adBoardTexture: THREE.CanvasTexture;
+  adBrandIndex: number;
+  adBrandTimer: number;
+  adBoardBounces: number;
   passIntentsCreated: number;
   passIntentsResolved: number;
   passIntentsAbandoned: number;
@@ -430,8 +436,8 @@ const GOAL_FRONT_Z = FIELD_L / 2;
 const GOAL_SCORE_Z = GOAL_FRONT_Z + BALL_RADIUS;
 const GOAL_BACK_Z = GOAL_FRONT_Z + GOAL_DEPTH;
 const GOAL_SIDE_POST_INSET = 0.26;
-const BROADCAST_CAMERA_X = -FIELD_W / 2 - 34;
-const BROADCAST_CAMERA_Y = 52;
+const BROADCAST_CAMERA_X = -FIELD_W / 2 - 40;
+const BROADCAST_CAMERA_Y = 55.5;
 const BROADCAST_CAMERA_Z = 8;
 const BROADCAST_CAMERA_Z_OFFSET = 10;
 const BROADCAST_LOOK_AT_X = 0;
@@ -439,6 +445,16 @@ const BROADCAST_LOOK_AT_Y = 1.05;
 const BROADCAST_LOOK_AT_Z = 0;
 const VISITOR_STORAGE_KEY = "futbol_visitor_id";
 const SETTINGS_STORAGE_KEY = "futbol_offline_settings";
+const AD_BOARD_INNER_X = FIELD_W / 2 + TOUCHLINE_MARGIN;
+const AD_BOARD_INNER_Z = FIELD_L / 2 + TOUCHLINE_MARGIN;
+const ADVERTISING_BRANDS = [
+  { name: "NOVA STRIDE", category: "PERFORMANCE", background: "#0b1833", accent: "#4de8ff" },
+  { name: "PULSE+", category: "ENERGY", background: "#4b1021", accent: "#ffcf4d" },
+  { name: "ORBIT MOBILE", category: "CONNECTED", background: "#102a43", accent: "#7dd3fc" },
+  { name: "CIRRUS PAY", category: "MOVE MONEY", background: "#123528", accent: "#86efac" },
+  { name: "AEROLINE", category: "GO FURTHER", background: "#2b1b52", accent: "#c4b5fd" },
+  { name: "MATCHWAVE", category: "LIVE SPORT", background: "#451a03", accent: "#fdba74" },
+] as const;
 
 const AWAY_COLOR = "#dc2626";
 const AWAY_TRIM = "#f8fafc";
@@ -1772,8 +1788,25 @@ function createPassTargetMarker() {
 }
 
 function createKickTrajectoryPreview() {
-  const geometry = new THREE.BufferGeometry();
   const pointCapacity = 52;
+  const guideGeometry = new THREE.BufferGeometry();
+  guideGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pointCapacity * 3), 3));
+  guideGeometry.setDrawRange(0, 0);
+  const guide = new THREE.Line(
+    guideGeometry,
+    new THREE.LineBasicMaterial({
+      color: "#ffffff",
+      transparent: true,
+      opacity: 0.58,
+      depthTest: false,
+      depthWrite: false,
+    }),
+  );
+  guide.name = "kick-trajectory-full-guide";
+  guide.renderOrder = 23;
+  guide.visible = false;
+
+  const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pointCapacity * 2 * 3), 3));
   const indices: number[] = [];
   for (let index = 0; index < pointCapacity - 1; index += 1) {
@@ -1810,7 +1843,40 @@ function createKickTrajectoryPreview() {
   endpoint.rotation.x = -Math.PI / 2;
   endpoint.renderOrder = 25;
   endpoint.visible = false;
-  return { line, endpoint };
+
+  const landingZone = new THREE.Group();
+  landingZone.name = "loft-landing-zone";
+  const landingFill = new THREE.Mesh(
+    new THREE.CircleGeometry(2.75, 32),
+    new THREE.MeshBasicMaterial({
+      color: "#1597ff",
+      transparent: true,
+      opacity: 0.2,
+      side: THREE.DoubleSide,
+      depthTest: false,
+      depthWrite: false,
+    }),
+  );
+  landingFill.rotation.x = -Math.PI / 2;
+  landingFill.renderOrder = 26;
+  const landingRing = new THREE.Mesh(
+    new THREE.RingGeometry(2.2, 2.75, 32),
+    new THREE.MeshBasicMaterial({
+      color: "#60c7ff",
+      transparent: true,
+      opacity: 0.94,
+      side: THREE.DoubleSide,
+      depthTest: false,
+      depthWrite: false,
+    }),
+  );
+  landingRing.rotation.x = -Math.PI / 2;
+  landingRing.renderOrder = 26;
+  landingZone.add(landingFill, landingRing);
+  landingZone.position.y = 0.18;
+  landingZone.renderOrder = 26;
+  landingZone.visible = false;
+  return { guide, line, endpoint, landingZone };
 }
 
 function addFieldMarking(scene: THREE.Scene, x: number, z: number, w: number, h: number) {
@@ -2022,18 +2088,55 @@ function stadiumRingGeometry(
   return geometry;
 }
 
+function drawAdvertisingBrand(texture: THREE.CanvasTexture, brandIndex: number) {
+  const canvas = texture.image as HTMLCanvasElement;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  const brand = ADVERTISING_BRANDS[brandIndex % ADVERTISING_BRANDS.length];
+  context.fillStyle = brand.background;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = brand.accent;
+  context.fillRect(0, 0, canvas.width, 10);
+  context.fillRect(0, canvas.height - 10, canvas.width, 10);
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.font = "900 66px Arial, sans-serif";
+  context.fillText(brand.name, canvas.width / 2, canvas.height * 0.47);
+  context.font = "700 24px Arial, sans-serif";
+  context.fillText(brand.category, canvas.width / 2, canvas.height * 0.76);
+  texture.needsUpdate = true;
+}
+
+function createAdvertisingBoardTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 192;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.repeat.set(3.4, 1);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  drawAdvertisingBrand(texture, 0);
+  return texture;
+}
+
 function addLightweightStadium(scene: THREE.Scene) {
   const stadium = new THREE.Group();
   stadium.name = "lightweight-stadium";
-  const adMaterial = new THREE.MeshBasicMaterial({ color: "#159487" });
+  const adTexture = createAdvertisingBoardTexture();
+  const adMaterial = new THREE.MeshBasicMaterial({ map: adTexture, color: "#ffffff" });
   const runoffWidth = FIELD_W + TOUCHLINE_MARGIN * 2;
   const runoffLength = FIELD_L + TOUCHLINE_MARGIN * 2;
   [-1, 1].forEach((side) => {
-    const longBoard = new THREE.Mesh(new THREE.BoxGeometry(runoffWidth + 0.4, 1.0, 0.16), adMaterial);
-    longBoard.position.set(0, 0.75, side * (runoffLength / 2 + 0.08));
+    const longBoard = new THREE.Mesh(new THREE.BoxGeometry(runoffWidth + 0.4, 1.45, 0.16), adMaterial);
+    longBoard.position.set(0, 0.92, side * (runoffLength / 2 + 0.08));
+    longBoard.name = `animated-ad-board-goal-${side}`;
     stadium.add(longBoard);
-    const sideBoard = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.0, runoffLength + 0.4), adMaterial);
-    sideBoard.position.set(side * (runoffWidth / 2 + 0.08), 0.75, 0);
+    const sideBoard = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.45, runoffLength + 0.4), adMaterial);
+    sideBoard.position.set(side * (runoffWidth / 2 + 0.08), 0.92, 0);
+    sideBoard.name = `animated-ad-board-side-${side}`;
     stadium.add(sideBoard);
   });
 
@@ -2067,6 +2170,44 @@ function addLightweightStadium(scene: THREE.Scene) {
   });
 
   scene.add(stadium);
+  return adTexture;
+}
+
+function updateAdvertisingBoards(active: MatchRuntime, dt: number) {
+  active.adBrandTimer += dt;
+  active.adBoardTexture.offset.x = (active.adBoardTexture.offset.x - dt * 0.055 + 1) % 1;
+  if (active.adBrandTimer >= 30) {
+    active.adBrandTimer %= 30;
+    active.adBrandIndex = (active.adBrandIndex + 1) % ADVERTISING_BRANDS.length;
+    drawAdvertisingBrand(active.adBoardTexture, active.adBrandIndex);
+  }
+  active.renderer.domElement.dataset.adBrand = ADVERTISING_BRANDS[active.adBrandIndex].name;
+  active.renderer.domElement.dataset.adBrandIndex = String(active.adBrandIndex);
+  active.renderer.domElement.dataset.adBrandSeconds = active.adBrandTimer.toFixed(2);
+}
+
+function resolveAdvertisingBoardCollision(active: MatchRuntime) {
+  if (active.ballOwnerId || active.ballPos.y > 2.15) return;
+  const xLimit = AD_BOARD_INNER_X - BALL_RADIUS;
+  const zLimit = AD_BOARD_INNER_Z - BALL_RADIUS;
+  let hitAxis: "x" | "z" | null = null;
+  if (Math.abs(active.ballPos.x) >= xLimit && active.ballVel.x * active.ballPos.x > 0) {
+    active.ballPos.x = Math.sign(active.ballPos.x || 1) * xLimit;
+    active.ballVel.x *= -0.58;
+    active.ballVel.z *= 0.9;
+    hitAxis = "x";
+  }
+  if (Math.abs(active.ballPos.z) >= zLimit && active.ballVel.z * active.ballPos.z > 0) {
+    active.ballPos.z = Math.sign(active.ballPos.z || 1) * zLimit;
+    active.ballVel.z *= -0.58;
+    active.ballVel.x *= 0.9;
+    hitAxis = "z";
+  }
+  if (!hitAxis) return;
+  active.ballVel.y = Math.max(0.4, Math.abs(active.ballVel.y) * 0.28);
+  active.adBoardBounces += 1;
+  active.renderer.domElement.dataset.lastAdBoardBounce = hitAxis;
+  active.renderer.domElement.dataset.adBoardBounces = String(active.adBoardBounces);
 }
 
 function animationParts(mesh: THREE.Group): PlayerAnimationParts {
@@ -3234,7 +3375,7 @@ export function ArcadeSoccerGame() {
     centerCircle.rotation.x = Math.PI / 2;
     centerCircle.position.y = 0.1;
     scene.add(centerCircle);
-    addLightweightStadium(scene);
+    const adBoardTexture = addLightweightStadium(scene);
 
     addGoal(scene, -1);
     addGoal(scene, 1);
@@ -3246,7 +3387,7 @@ export function ArcadeSoccerGame() {
     const passTargetMarker = createPassTargetMarker();
     scene.add(passTargetMarker);
     const kickPreview = createKickTrajectoryPreview();
-    scene.add(kickPreview.line, kickPreview.endpoint);
+    scene.add(kickPreview.guide, kickPreview.line, kickPreview.endpoint, kickPreview.landingZone);
 
     const players = formationPlayers(1);
     players.forEach((player) => scene.add(player.mesh));
@@ -3260,8 +3401,14 @@ export function ArcadeSoccerGame() {
       ball,
       ballShadow,
       passTargetMarker,
+      kickPreviewGuide: kickPreview.guide,
       kickPreviewLine: kickPreview.line,
       kickPreviewEndpoint: kickPreview.endpoint,
+      kickLandingZone: kickPreview.landingZone,
+      adBoardTexture,
+      adBrandIndex: 0,
+      adBrandTimer: 0,
+      adBoardBounces: 0,
       players,
       frame: 0,
       frameRunning: false,
@@ -3539,6 +3686,12 @@ export function ArcadeSoccerGame() {
     );
     const manualDefenseTest = tacticalTest.includes("manual-defense");
     const aimChargeTest = new URLSearchParams(window.location.search).has("aimChargeTest");
+    const previewTest = new URLSearchParams(window.location.search).get("previewTest") ?? "";
+    const previewTestCharge = clamp(Number(new URLSearchParams(window.location.search).get("previewCharge") ?? "0.45"), 0.08, 1);
+    const keeperFrontClaimTest = new URLSearchParams(window.location.search).has("keeperFrontClaimTest");
+    const adBoardCollisionTest = new URLSearchParams(window.location.search).has("adBoardCollisionTest");
+    let keeperFrontClaimTestApplied = false;
+    let adBoardCollisionTestApplied = false;
     let tacticalTestApplied = false;
     let mechanicsTestApplied = false;
     const mechanicsTestAt = performance.now() + 1200;
@@ -3818,13 +3971,51 @@ export function ArcadeSoccerGame() {
       const clockBeforeUpdate = active.gameClock;
       try {
         active.cooldown = Math.max(0, active.cooldown - dt);
-        if (aimChargeTest && active.phase === "open") {
+        if ((aimChargeTest || previewTest) && active.phase === "open") {
           const controlledOwner = active.players.find((player) => player.controlledBy === "p1" && active.ballOwnerId === player.id) ?? null;
           if (controlledOwner) {
-            keysRef.current.add("KeyS");
-            active.passChargingPlayerId = controlledOwner.id;
-            active.passCharge = 1;
+            keysRef.current.delete("KeyS");
+            keysRef.current.delete("KeyA");
+            keysRef.current.delete("KeyD");
+            if (previewTest === "loft") {
+              keysRef.current.add("KeyA");
+              active.loftChargingPlayerId = controlledOwner.id;
+              active.loftCharge = previewTestCharge;
+            } else if (previewTest === "shot") {
+              keysRef.current.add("KeyD");
+              active.shotChargingPlayerId = controlledOwner.id;
+              active.shotCharge = previewTestCharge;
+            } else {
+              keysRef.current.add("KeyS");
+              active.passChargingPlayerId = controlledOwner.id;
+              active.passCharge = previewTest ? previewTestCharge : 1;
+            }
           }
+        }
+        if (keeperFrontClaimTest && !keeperFrontClaimTestApplied && active.phase === "open") {
+          const keeper = active.players.find((player) => player.team === "home" && player.role === "keeper") ?? null;
+          const attacker = active.players.find((player) => player.team === "away" && player.role !== "keeper" && !player.sentOff) ?? null;
+          if (keeper && attacker) {
+            const intoField = upfieldKickDirection(keeper.team, active.half);
+            keeper.pos.copy(goalKickKeeperSpot(keeper.team, active.half));
+            keeper.vel.set(0, 0, 0);
+            attacker.pos.copy(keeper.pos).addScaledVector(intoField, 2.05);
+            attacker.vel.set(0, 0, 0);
+            releasePossession(active, "loose");
+            active.ballPos.copy(attacker.pos).addScaledVector(intoField, -0.56).setY(BALL_RADIUS);
+            active.ballVel.set(0, 0, 0);
+            takePossession(attacker, active);
+            keeperFrontClaimTestApplied = true;
+            active.renderer.domElement.dataset.keeperFrontClaimTestApplied = "true";
+          }
+        }
+        if (adBoardCollisionTest && !adBoardCollisionTestApplied && active.phase === "open") {
+          releasePossession(active, "loose");
+          active.ballPos.set(AD_BOARD_INNER_X - BALL_RADIUS + 0.03, BALL_RADIUS, 0);
+          active.ballVel.set(16, 0, 2);
+          active.ballCurve.set(0, 0, 0);
+          adBoardCollisionTestApplied = true;
+          active.renderer.domElement.dataset.adBoardCollisionTestApplied = "true";
         }
         active.matchUpdatesThisFrame += 1;
         updateMatch(active, keysRef.current, dt);
@@ -3949,7 +4140,7 @@ export function ArcadeSoccerGame() {
               actor.pos.z = attackingGoalZ(actor.team, active.half) - attackSign * 28;
               actor.mesh.position.copy(actor.pos);
               seedPossession();
-              passed = kickTowardPoint(actor, quickKickPoint(actor, active), active, "finesse", undefined, 0.78)
+              passed = kickTowardPoint(actor, quickKickPoint(actor, active), active, "finesse", undefined, 0.78, true)
                 && active.ballCurve.length() > 3.8;
             } else if (mechanicsTest === "rainbow-valid" || mechanicsTest === "rainbow-invalid") {
               actor.pos.set(0, 0, attackingGoalZ(actor.team, active.half) - attackSign * 31);
@@ -5540,6 +5731,7 @@ export function ArcadeSoccerGame() {
         void runtime.audio.close().catch(() => undefined);
         runtime.audio = null;
       }
+      runtime.adBoardTexture.dispose();
       disposeObjectTree(runtime.scene);
       runtime.scene.clear();
       runtime.renderer.renderLists.dispose();
@@ -5699,20 +5891,38 @@ export function ArcadeSoccerGame() {
       {matchState === "playing" && !tutorialUi.active && (
       <section className="pointer-events-none relative z-10 flex min-h-screen flex-col justify-between p-4 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-black tracking-normal sm:text-4xl">Futbol</h1>
-            <p className="mt-1 text-sm text-emerald-100/70">11v11 arcade soccer · one active player · AI teammates</p>
-            <div className="mt-3 inline-flex items-center rounded-md border border-white/15 bg-black/70 px-3 py-2 text-sm font-black text-white">
-              <span className="text-cyan-100">Home</span>
-              <span className="mx-2 font-mono text-lg">{score.home} - {score.away}</span>
-              <span className="text-rose-100">Away</span>
-              <span className="mx-2 text-white/35">|</span>
-              <span className="font-mono text-emerald-100">{formatSoccerClock(gameClock)}</span>
+          <div className="w-[min(17rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-white/20 bg-[#07110ee8] shadow-2xl backdrop-blur-md lg:w-[22rem]">
+            <div className="flex h-7 items-center justify-between border-b border-white/10 bg-[#15231f] px-3 text-[10px] font-black uppercase text-white/80">
+              <span>Futbol</span>
+              <span className="inline-flex items-center gap-1.5 text-emerald-200">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                Live
+              </span>
             </div>
-            <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-white/10 bg-black/55 px-3 py-1.5 text-xs font-black text-white/85">
-              <span className="text-cyan-100">Home {possessionPercent.home}%</span>
-              <span className="text-white/30">Possession</span>
-              <span className="text-rose-100">Away {possessionPercent.away}%</span>
+            <div className="grid grid-cols-[1fr_auto_1fr] items-stretch">
+              <div className="border-l-4 border-cyan-400 px-3 py-2.5">
+                <div className="text-[10px] font-bold uppercase text-cyan-100/70">Home</div>
+                <div className="text-2xl font-black text-white">{score.home}</div>
+              </div>
+              <div className="flex min-w-24 flex-col items-center justify-center border-x border-white/10 px-3">
+                <span className="font-mono text-base font-black text-emerald-100">{formatSoccerClock(gameClock)}</span>
+                <span className="text-[9px] font-bold uppercase text-white/40">Match time</span>
+              </div>
+              <div className="border-r-4 border-rose-400 px-3 py-2.5 text-right">
+                <div className="text-[10px] font-bold uppercase text-rose-100/70">Away</div>
+                <div className="text-2xl font-black text-white">{score.away}</div>
+              </div>
+            </div>
+            <div className="border-t border-white/10 px-3 py-2">
+              <div className="mb-1 flex items-center justify-between text-[10px] font-bold text-white/70">
+                <span>Home {possessionPercent.home}%</span>
+                <span className="uppercase text-white/35">Possession</span>
+                <span>Away {possessionPercent.away}%</span>
+              </div>
+              <div className="flex h-1.5 overflow-hidden rounded-full bg-white/10">
+                <span className="bg-cyan-400" style={{ width: `${possessionPercent.home}%` }} />
+                <span className="bg-rose-400" style={{ width: `${possessionPercent.away}%` }} />
+              </div>
             </div>
           </div>
         </div>
@@ -6039,6 +6249,7 @@ function updateMatch(
   keys: Set<string>,
   dt: number,
 ) {
+  updateAdvertisingBoards(active, dt);
   const playerFrameStart = active.phase === "open" ? active.frameStartPositions : null;
   if (playerFrameStart) {
     active.players.forEach((player) => {
@@ -6720,6 +6931,7 @@ function updateMatch(
       ballVel.z *= 0.97;
     }
     resolveGoalFrameCollision(ball, ballVel);
+    resolveAdvertisingBoardCollision(active);
     stabilizePartialBoundaryBall(active, dt);
     if (resolveBallBoundary(active)) {
       syncBallVisual(active);
@@ -8894,8 +9106,42 @@ function handleGoalkeeperActions(active: MatchRuntime) {
       const distanceFromGoal = Math.abs(active.ballPos.z - ownZ);
       const keeperToBall = flatBall.clone().sub(keeper.pos);
       const distanceToBall = keeperToBall.length();
+      const mayUseHands = keeperMayUseHands(keeper, active);
       const currentOwner = ballOwner(active);
       if (currentOwner) {
+        const upfield = upfieldKickDirection(keeper.team, active.half);
+        const ballInFront = keeperToBall.dot(upfield) > -0.35;
+        const claimableOpponentBall = currentOwner.team !== keeper.team
+          && mayUseHands
+          && ballInFront
+          && active.ballPos.y < 2.45
+          && distanceToBall < 9.5;
+        if (claimableOpponentBall) {
+          keeper.keeperAction = distanceToBall < 4.2 ? "smother" : "intercept";
+          keeper.keeperActionTimer = 0.46;
+          keeper.keeperClaimPoint.copy(flatBall);
+          const claimDirection = keeperToBall.clone().setY(0);
+          if (claimDirection.lengthSq() > 0.04) {
+            keeper.vel.add(claimDirection.normalize().multiplyScalar(distanceToBall > 4.2 ? 1.15 : 0.84));
+            capKeeperMotion(keeper);
+            setPlayerHeading(keeper, headingFromDirection(claimDirection), 1 / 60, 9.5);
+          }
+          active.keeperClaimAttempts += 1;
+          active.renderer.domElement.dataset.lastKeeperClaimPriority = "opponent-front-ball";
+          active.renderer.domElement.dataset.lastKeeperClaimDistance = distanceToBall.toFixed(3);
+          if (distanceToBall <= 2.22) {
+            if (!takePossession(keeper, active)) return;
+            keeper.catchTimer = 0.72;
+            keeper.diveTimer = Math.max(keeper.diveTimer, distanceToBall > 1.42 ? 0.42 : 0);
+            active.ballVel.set(0, 0, 0);
+            active.ballCurve.set(0, 0, 0);
+            active.cooldown = Math.max(active.cooldown, 0.28);
+            active.keeperClaims += 1;
+            active.keeperSmothers += 1;
+            active.renderer.domElement.dataset.lastKeeperHandClaimLegal = "true";
+          }
+          return;
+        }
         if (currentOwner.team !== keeper.team && currentOwner.pos.distanceTo(new THREE.Vector3(0, 0, ownZ)) < 32) {
           keeper.keeperAction = "intercept";
           keeper.keeperActionTimer = 0.25;
@@ -8904,7 +9150,6 @@ function handleGoalkeeperActions(active: MatchRuntime) {
         }
         return;
       }
-      const mayUseHands = keeperMayUseHands(keeper, active);
       if (!mayUseHands && keeper.catchTimer > 0) keeper.catchTimer = 0;
       if (intendedTeamBackPass) {
         if (distanceToBall < 2.15 && active.ballPos.y < 1.62) {
@@ -12756,72 +13001,144 @@ function updateKickTrajectoryPreview(
   additionalCurve = new THREE.Vector3(),
   curveOverride: THREE.Vector3 | null = null,
 ) {
-  const geometry = active.kickPreviewLine.geometry;
-  const positions = geometry.getAttribute("position") as THREE.BufferAttribute;
+  const ribbonGeometry = active.kickPreviewLine.geometry;
+  const ribbonPositions = ribbonGeometry.getAttribute("position") as THREE.BufferAttribute;
+  const guideGeometry = active.kickPreviewGuide.geometry;
+  const guidePositions = guideGeometry.getAttribute("position") as THREE.BufferAttribute;
   const shotStyle = style === "shot" || style === "driven" || style === "finesse" || style === "chip";
-  const resolvedTarget = shotStyle ? correctedManualShotTarget(player, active, target) : target.clone();
+  const assistedShot = shotStyle ? assistedManualShotPhysics(player, active, target, style, charge) : null;
+  const resolvedTarget = assistedShot?.goalTarget ?? target.clone();
   const direction = resolvedTarget.clone().setY(BALL_RADIUS).sub(active.ballPos).setY(0);
   if (direction.lengthSq() < 0.05) {
+    active.kickPreviewGuide.visible = false;
     active.kickPreviewLine.visible = false;
     active.kickPreviewEndpoint.visible = false;
+    active.kickLandingZone.visible = false;
     return;
   }
   const distance = clamp(direction.length(), 6, 88);
-  const force = sharedKickForce(style, distance, charge, active.ballOwnerId === player.id);
+  const force = assistedShot
+    ? { power: assistedShot.power, lift: assistedShot.lift }
+    : sharedKickForce(style, distance, charge, active.ballOwnerId === player.id);
   const speed = style === "short" ? Math.max(force.power, safeGroundPassSpeed(player, resolvedTarget, active, distance)) : force.power;
-  const velocity = direction.normalize().multiplyScalar(speed)
+  const launchDirection = assistedShot?.launchDirection.clone() ?? direction.clone().normalize();
+  const velocity = launchDirection.multiplyScalar(speed)
     .add(player.vel.clone().multiplyScalar(style === "driven" ? 0.06 : 0.12));
-  velocity.y = style === "short" ? 0 : force.lift;
-  const curve = curveOverride
-    ? curveOverride.clone()
-    : curveForKick(style, player, direction, resolvedTarget, { ...force, power: speed }).add(additionalCurve);
+  velocity.y = style === "short" ? 0 : assistedShot?.lift ?? force.lift;
+  const curve = assistedShot
+    ? assistedShot.curve.clone()
+    : curveOverride
+      ? curveOverride.clone()
+      : curveForKick(style, player, direction, resolvedTarget, { ...force, power: speed }).add(additionalCurve);
   const point = active.ballPos.clone();
   const step = 0.065;
   const points: THREE.Vector3[] = [];
-  const pointCapacity = Math.floor(positions.count / 2);
+  const pointCapacity = guidePositions.count;
+  const start = point.clone();
+  const targetDirection = resolvedTarget.clone().sub(start).setY(0);
+  const targetDistance = targetDirection.length();
+  if (targetDistance > 0.01) targetDirection.normalize();
+  const goalZ = shotStyle ? attackingGoalZ(player.team, active.half) : 0;
+  let landingPoint: THREE.Vector3 | null = null;
+  let wasAirborne = point.y > BALL_RADIUS + 0.08 || velocity.y > 0.1;
   for (let index = 0; index < pointCapacity; index += 1) {
     points.push(point.clone());
     if (index === pointCapacity - 1) break;
+    const previous = point.clone();
     if (point.y > BALL_RADIUS + 0.08 || velocity.y > 0.1) {
+      wasAirborne = true;
       velocity.y -= BALL_GRAVITY * step;
-      velocity.addScaledVector(curve, step * 0.82);
+      velocity.addScaledVector(curve, step);
       curve.multiplyScalar(Math.pow(0.36, step));
       point.addScaledVector(velocity, step);
       if (point.y <= BALL_RADIUS) {
         point.y = BALL_RADIUS;
+        if (wasAirborne && !landingPoint) landingPoint = point.clone();
         velocity.y = Math.abs(velocity.y) > 1.2 ? -velocity.y * BALL_BOUNCE : 0;
       }
     } else {
       point.addScaledVector(velocity, step);
       velocity.multiplyScalar(Math.pow(BALL_ROLLING_FRICTION, step));
     }
+    if (shotStyle && (previous.z - goalZ) * (point.z - goalZ) <= 0 && Math.abs(point.z - previous.z) > 0.001) {
+      const crossing = clamp((goalZ - previous.z) / (point.z - previous.z), 0, 1);
+      point.lerpVectors(previous, point, crossing);
+      points.push(point.clone());
+      break;
+    }
+    if (style === "long" && landingPoint) {
+      points.push(landingPoint.clone());
+      point.copy(landingPoint);
+      break;
+    }
+    if (style === "short" && targetDistance > 0.01) {
+      const travelled = point.clone().sub(start).setY(0).dot(targetDirection);
+      if (travelled >= targetDistance) {
+        points.push(point.clone());
+        break;
+      }
+    }
     if (velocity.length() < BALL_STOP_SPEED || Math.abs(point.x) > FIELD_W / 2 + 2 || Math.abs(point.z) > GOAL_BACK_Z + 2) {
       break;
     }
   }
-  const ribbonWidth = style === "shot" || style === "finesse" ? 0.66 : style === "long" ? 0.58 : 0.5;
-  points.forEach((sample, index) => {
-    const previous = points[Math.max(0, index - 1)];
-    const next = points[Math.min(points.length - 1, index + 1)];
+  const boundedPoints = points.slice(0, pointCapacity);
+  boundedPoints.forEach((sample, index) => {
+    guidePositions.setXYZ(index, sample.x, Math.max(BALL_RADIUS + 0.09, sample.y + 0.04), sample.z);
+  });
+  guideGeometry.setDrawRange(0, boundedPoints.length);
+  guidePositions.needsUpdate = true;
+
+  const chargeProgress = clamp(charge, 0, 1);
+  const thickPointCount = Math.min(
+    boundedPoints.length,
+    Math.max(2, Math.round(2 + Math.max(0, boundedPoints.length - 2) * (0.06 + chargeProgress * 0.94))),
+  );
+  const ribbonWidth = style === "shot" || style === "finesse" ? 0.66 : style === "long" ? 0.54 : 0.5;
+  boundedPoints.slice(0, thickPointCount).forEach((sample, index) => {
+    const previous = boundedPoints[Math.max(0, index - 1)];
+    const next = boundedPoints[Math.min(boundedPoints.length - 1, index + 1)];
     const tangent = next.clone().sub(previous).setY(0);
     if (tangent.lengthSq() < 0.001) tangent.copy(direction);
     tangent.normalize();
     const side = new THREE.Vector3(-tangent.z, 0, tangent.x).multiplyScalar(ribbonWidth * 0.5);
-    const visibleY = Math.max(BALL_RADIUS + 0.12, sample.y + 0.08);
-    positions.setXYZ(index * 2, sample.x + side.x, visibleY, sample.z + side.z);
-    positions.setXYZ(index * 2 + 1, sample.x - side.x, visibleY, sample.z - side.z);
+    const visibleY = Math.max(BALL_RADIUS + 0.14, sample.y + 0.1);
+    ribbonPositions.setXYZ(index * 2, sample.x + side.x, visibleY, sample.z + side.z);
+    ribbonPositions.setXYZ(index * 2 + 1, sample.x - side.x, visibleY, sample.z - side.z);
   });
-  geometry.setDrawRange(0, Math.max(0, points.length - 1) * 6);
-  positions.needsUpdate = true;
+  ribbonGeometry.setDrawRange(0, Math.max(0, thickPointCount - 1) * 6);
+  ribbonPositions.needsUpdate = true;
+  if (active.kickPreviewLine.material instanceof THREE.MeshBasicMaterial) {
+    active.kickPreviewLine.material.opacity = style === "long" ? 0.48 : 0.9;
+  }
+  active.kickPreviewGuide.visible = true;
   active.kickPreviewLine.visible = true;
   active.kickPreviewEndpoint.position.copy(point).setY(Math.max(BALL_RADIUS + 0.07, point.y));
-  active.kickPreviewEndpoint.visible = true;
+  active.kickPreviewEndpoint.visible = style !== "long";
+  active.kickLandingZone.visible = style === "long";
+  if (style === "long") {
+    const landing = landingPoint ?? point;
+    active.kickLandingZone.position.set(landing.x, 0.18, landing.z);
+    active.kickLandingZone.scale.setScalar(0.82 + chargeProgress * 0.24);
+    active.renderer.domElement.dataset.loftLandingX = landing.x.toFixed(3);
+    active.renderer.domElement.dataset.loftLandingZ = landing.z.toFixed(3);
+  }
   active.renderer.domElement.dataset.previewEndpointX = point.x.toFixed(3);
   active.renderer.domElement.dataset.previewEndpointY = point.y.toFixed(3);
   active.renderer.domElement.dataset.previewEndpointZ = point.z.toFixed(3);
   active.renderer.domElement.dataset.previewStyle = style;
-  active.renderer.domElement.dataset.previewPointCount = String(points.length);
+  active.renderer.domElement.dataset.previewPointCount = String(boundedPoints.length);
+  active.renderer.domElement.dataset.previewGuidePoints = String(boundedPoints.length);
+  active.renderer.domElement.dataset.previewThickPoints = String(thickPointCount);
+  active.renderer.domElement.dataset.previewChargeFraction = chargeProgress.toFixed(3);
   active.renderer.domElement.dataset.previewWidth = ribbonWidth.toFixed(2);
+  if (assistedShot) {
+    active.renderer.domElement.dataset.previewGoalX = point.x.toFixed(3);
+    active.renderer.domElement.dataset.previewGoalY = point.y.toFixed(3);
+    active.renderer.domElement.dataset.previewGoalInside = String(
+      Math.abs(point.x) < GOAL_W / 2 - BALL_RADIUS && point.y < 3.2 - BALL_RADIUS,
+    );
+  }
 }
 
 function updateAimIndicators(active: MatchRuntime, keys: Set<string>) {
@@ -12944,8 +13261,10 @@ function updateAimIndicators(active: MatchRuntime, keys: Set<string>) {
     trajectoryVisible = true;
   }
   if (!trajectoryVisible) {
+    active.kickPreviewGuide.visible = false;
     active.kickPreviewLine.visible = false;
     active.kickPreviewEndpoint.visible = false;
+    active.kickLandingZone.visible = false;
   }
   active.players.forEach((player) => {
     if (!player.receiverMarker || active.passIntent) return;
@@ -13539,23 +13858,10 @@ function manualChargedShotPlan(player: PlayerBody, active: MatchRuntime, charge:
   const aim = currentAimDirection(player, active, keys);
   const goalDistance = Math.abs(attackingGoalZ(player.team, active.half) - player.pos.z);
   const goalDir = new THREE.Vector3(0, 0, attackingGoalZ(player.team, active.half)).sub(player.pos).setY(0).normalize();
-  const aimedAtGoal = aim.dot(goalDir) > 0.34;
-  const clearlyAimedAtGoal = aim.dot(goalDir) > 0.62;
-  const finesseRequested = Boolean(keys?.has("KeyZ")) && aim.dot(goalDir) > 0.18;
-  const nearGoalFinish = goalDistance < 24 && aimedAtGoal;
-  const style: KickStyle = finesseRequested
-    ? "finesse"
-    : normalized < 0.5
-      ? nearGoalFinish ? "driven" : "short"
-      : nearGoalFinish && clearlyAimedAtGoal && Math.abs(player.pos.x) > GOAL_W * 0.55 && normalized >= 0.58
-        ? "finesse"
-        : nearGoalFinish && normalized < 0.86
-          ? "driven"
-          : normalized < 0.72
-            ? "long"
-            : normalized > 0.82 && aimedAtGoal && Math.abs(player.pos.x) > GOAL_W * 0.7
-              ? "finesse"
-              : "shot";
+  const aimedAtGoal = aim.dot(goalDir) > 0.08;
+  const finesseRequested = Boolean(keys?.has("KeyZ"));
+  const wideFinish = Math.abs(player.pos.x) > GOAL_W * 0.58;
+  const style: KickStyle = finesseRequested || wideFinish || normalized >= 0.42 ? "finesse" : "shot";
   const targetDistance = clamp(20 + normalized * 68, 24, 88);
   const target = player.pos.clone().add(aim.clone().multiplyScalar(targetDistance)).setY(BALL_RADIUS);
   return { aim, aimedAtGoal, goalDistance, style, target };
@@ -13801,7 +14107,8 @@ function kickTowardPoint(
   if (isPassKickStyle(style) && !intendedReceiver && !manualAim && untargetedKick !== "clearance") {
     return rejectKick("direct-pass-missing-receiver");
   }
-  const resolvedTarget = style === "shot" || style === "driven" || style === "finesse" || style === "chip"
+  const shotStyle = style === "shot" || style === "driven" || style === "finesse" || style === "chip";
+  const resolvedTarget = shotStyle
     ? manualAim
       ? correctedManualShotTarget(player, active, target)
       : correctedShotTarget(player, active, target)
@@ -13809,7 +14116,12 @@ function kickTowardPoint(
   const direction = resolvedTarget.clone().setY(BALL_RADIUS).sub(active.ballPos).setY(0);
   if (direction.lengthSq() < 0.5) return rejectKick("zero-direction");
   const distance = clamp(direction.length(), 6, 88);
-  const force = sharedKickForce(style, distance, kickCharge, ownsBall);
+  const assistedShot = manualAim && shotStyle
+    ? assistedManualShotPhysics(player, active, target, style, kickCharge)
+    : null;
+  const force = assistedShot
+    ? { power: assistedShot.power, lift: assistedShot.lift }
+    : sharedKickForce(style, distance, kickCharge, ownsBall);
   if (isPassKickStyle(style) && intendedReceiver && !manualAim) {
     const laneWidth = style === "short" ? 3.15 : style === "low-through" ? 3.65 : 4.4;
     const blockers = opponentsBetween(player, resolvedTarget, active.players, laneWidth);
@@ -13827,7 +14139,7 @@ function kickTowardPoint(
     ? intendedReceiver.id
     : null;
   active.ballPos.y = Math.max(BALL_RADIUS, active.ballPos.y);
-  const kickDirection = direction.normalize();
+  const kickDirection = assistedShot ? assistedShot.launchDirection.clone() : direction.normalize();
   const minimumGroundPassSpeed = style === "short" || style === "low-through"
     ? safeGroundPassSpeed(player, resolvedTarget, active, distance)
     : 0;
@@ -13843,9 +14155,14 @@ function kickTowardPoint(
   active.renderer.domElement.dataset.lastKickReceiver = intendedReceiver?.id ?? "";
   active.ballVel.copy(kickDirection.multiplyScalar(kickPower)).add(player.vel.clone().multiplyScalar(style === "driven" ? 0.06 : 0.12));
   active.ballVel.y = force.lift;
-  active.ballCurve.copy(curveForKick(style, player, kickDirection, resolvedTarget, { ...force, power: kickPower }));
-  if (manualAim && style === "finesse" && Math.abs(player.pos.x) > GOAL_W * 0.95) {
-    active.ballCurve.multiplyScalar(1.18);
+  active.ballCurve.copy(assistedShot
+    ? assistedShot.curve
+    : curveForKick(style, player, kickDirection, resolvedTarget, { ...force, power: kickPower }));
+  if (assistedShot) {
+    active.renderer.domElement.dataset.shotAssistGoalX = assistedShot.goalTarget.x.toFixed(3);
+    active.renderer.domElement.dataset.shotAssistGoalY = assistedShot.desiredGoalHeight.toFixed(3);
+    active.renderer.domElement.dataset.shotAssistCurve = assistedShot.curve.x.toFixed(3);
+    active.renderer.domElement.dataset.shotAssistTravelTime = assistedShot.travelTime.toFixed(3);
   }
   if (active.ballCurve.lengthSq() > 1) {
     active.renderer.domElement.dataset.curvedKicks = String(
@@ -14583,25 +14900,61 @@ function correctedManualShotTarget(player: PlayerBody, active: MatchRuntime, tar
   const goalZ = attackingGoalZ(player.team, active.half);
   const from = active.ballPos.clone().setY(0);
   const direction = target.clone().setY(0).sub(from);
-  if (Math.abs(direction.z) < 0.01 || direction.z * (goalZ - from.z) <= 0) return target.clone();
-  const goalPlaneT = (goalZ - from.z) / direction.z;
-  if (goalPlaneT <= 0) return target.clone();
-  const xAtGoal = from.x + direction.x * goalPlaneT;
+  const towardGoal = Math.abs(direction.z) > 0.01 && direction.z * (goalZ - from.z) > 0;
+  const goalPlaneT = towardGoal ? (goalZ - from.z) / direction.z : 0;
+  const rawXAtGoal = goalPlaneT > 0 ? from.x + direction.x * goalPlaneT : player.pos.x * 0.12;
+  const safePostX = GOAL_W / 2 - BALL_RADIUS - 0.72;
+  const rawInside = clamp(rawXAtGoal, -safePostX, safePostX);
   const wideAngle = Math.abs(player.pos.x) > GOAL_W * 0.95;
-  const clearlyTowardGoal = Math.abs(xAtGoal) < GOAL_W / 2 + 3.4;
-  if (!wideAngle || !clearlyTowardGoal) return target.clone();
-  const insidePost = clamp(xAtGoal, -GOAL_W / 2 + 0.85, GOAL_W / 2 - 0.85);
-  const farInside = -Math.sign(player.pos.x || 1) * (GOAL_W / 2 - 2.1);
-  const assistedX = THREE.MathUtils.lerp(insidePost, farInside, 0.32);
-  const correction = clamp((assistedX - xAtGoal) * 0.36, -1.8, 1.8);
-  const desiredTarget = new THREE.Vector3(
-    xAtGoal + correction,
-    BALL_RADIUS,
-    goalZ + Math.sign(goalZ) * (GOAL_DEPTH + 1.8),
+  const keeper = active.players.find((candidate) => candidate.team !== player.team && candidate.role === "keeper" && !candidate.sentOff);
+  const farPostX = -Math.sign(player.pos.x || rawInside || 1) * (GOAL_W / 2 - 1.28);
+  const awayFromKeeperX = keeper
+    ? -Math.sign(keeper.pos.x - rawInside || player.pos.x || 1) * (GOAL_W / 2 - 1.38)
+    : farPostX;
+  const preferredX = THREE.MathUtils.lerp(farPostX, awayFromKeeperX, 0.42);
+  const assistedX = clamp(
+    THREE.MathUtils.lerp(rawInside, preferredX, wideAngle ? 0.72 : towardGoal ? 0.46 : 0.62),
+    -safePostX,
+    safePostX,
   );
-  const assistedDirection = rotateDirectionToward(direction, desiredTarget.clone().sub(from), MAX_USER_AIM_ASSIST_RADIANS);
-  const assistedGoalT = Math.abs(assistedDirection.z) > 0.001 ? (goalZ - from.z) / assistedDirection.z : goalPlaneT;
-  return from.add(assistedDirection.multiplyScalar(Math.max(0.1, assistedGoalT))).setY(BALL_RADIUS);
+  return new THREE.Vector3(assistedX, BALL_RADIUS, goalZ + Math.sign(goalZ) * (GOAL_DEPTH + 1.25));
+}
+
+function assistedManualShotPhysics(
+  player: PlayerBody,
+  active: MatchRuntime,
+  rawTarget: THREE.Vector3,
+  style: KickStyle,
+  charge: number,
+) {
+  const normalizedCharge = clamp(charge, 0.08, 1);
+  const goalTarget = correctedManualShotTarget(player, active, rawTarget);
+  const horizontalGoal = goalTarget.clone().sub(active.ballPos).setY(0);
+  const distance = clamp(horizontalGoal.length(), 6, 88);
+  const force = sharedKickForce(style, distance, normalizedCharge, active.ballOwnerId === player.id);
+  const power = clamp(Math.max(force.power, 30 + normalizedCharge * 12), 30, BALL_MAX_SPEED);
+  const travelTime = clamp(distance / power, 0.38, 1.75);
+  const curveDirection = Math.sign(goalTarget.x - player.pos.x || -player.pos.x || 1);
+  const curveStrength = clamp(
+    3.8 + normalizedCharge * 3.1 + Math.abs(player.pos.x) / Math.max(1, FIELD_W / 2) * 2.4,
+    4.1,
+    9.2,
+  );
+  const curve = new THREE.Vector3(curveDirection * curveStrength, 0, 0);
+  const curveDecay = -Math.log(0.36);
+  const curveDisplacementFactor = travelTime / curveDecay
+    - (1 - Math.exp(-curveDecay * travelTime)) / (curveDecay * curveDecay);
+  const launchTarget = goalTarget.clone().addScaledVector(curve, -curveDisplacementFactor);
+  const launchDirection = launchTarget.sub(active.ballPos).setY(0).normalize();
+  const desiredGoalHeight = style === "driven"
+    ? 0.58
+    : clamp(0.72 + normalizedCharge * 1.32, 0.72, 2.18);
+  const lift = clamp(
+    (desiredGoalHeight - active.ballPos.y + 0.5 * BALL_GRAVITY * travelTime * travelTime) / travelTime,
+    style === "driven" ? 0.42 : 2.4,
+    13.6,
+  );
+  return { goalTarget, launchDirection, power, lift, curve, travelTime, desiredGoalHeight };
 }
 
 function createLooseBallContest(player: PlayerBody, owner: PlayerBody, active: MatchRuntime, ballPoint: THREE.Vector3, direction: THREE.Vector3) {
