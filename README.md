@@ -60,8 +60,9 @@ The app generates a `visitor_id` with `crypto.randomUUID()` on first visit and s
 ## Controls
 
 - `Arrow Keys` move the controlled home player
-- Click the pitch to aim a pass or shot toward that point
-- `S` switches controlled player in manual mode
+- `S` hold/release a ground pass in the player's facing direction
+- `A` hold/release a lofted pass or cross
+- `W` switches the controlled player in manual mode
 - `D` hold/release shot
 - Double tap `D` low driven shot
 - `Z + D` finesse shot
