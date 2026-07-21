@@ -451,15 +451,17 @@ const AD_BOARD_HEIGHT = 2.25;
 const AD_BOARD_BASE_Y = 0.12;
 const AD_BOARD_THICKNESS = 0.2;
 const AD_BOARD_FACE_OFFSET = 0.05;
+const AD_BOARD_DISPLAY_HEIGHT = AD_BOARD_HEIGHT;
+const AD_BOARD_DISPLAY_Y = AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2;
 const AD_BOARD_DISPLAY_RENDER_ORDER = 4;
 const AD_BOARD_COLLISION_TOP = AD_BOARD_BASE_Y + AD_BOARD_HEIGHT + BALL_RADIUS;
 const ADVERTISING_BRANDS = [
-  { name: "NOVA STRIDE", category: "PERFORMANCE", background: "#0b1833", accent: "#4de8ff" },
-  { name: "PULSE+", category: "ENERGY", background: "#4b1021", accent: "#ffcf4d" },
-  { name: "ORBIT MOBILE", category: "CONNECTED", background: "#102a43", accent: "#7dd3fc" },
-  { name: "CIRRUS PAY", category: "MOVE MONEY", background: "#123528", accent: "#86efac" },
-  { name: "AEROLINE", category: "GO FURTHER", background: "#2b1b52", accent: "#c4b5fd" },
-  { name: "MATCHWAVE", category: "LIVE SPORT", background: "#451a03", accent: "#fdba74" },
+  { name: "NOVA STRIDE", background: "#0b1833", accent: "#4de8ff" },
+  { name: "PULSE+", background: "#4b1021", accent: "#ffcf4d" },
+  { name: "ORBIT MOBILE", background: "#102a43", accent: "#7dd3fc" },
+  { name: "CIRRUS PAY", background: "#123528", accent: "#86efac" },
+  { name: "AEROLINE", background: "#2b1b52", accent: "#c4b5fd" },
+  { name: "MATCHWAVE", background: "#451a03", accent: "#fdba74" },
 ] as const;
 
 const AWAY_COLOR = "#dc2626";
@@ -2094,20 +2096,30 @@ function stadiumRingGeometry(
   return geometry;
 }
 
+function advertisingBrandFontSize(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement, brandName: string) {
+  const horizontalPadding = canvas.width * 0.04;
+  const maximumTextWidth = canvas.width - horizontalPadding * 2;
+  let fontSize = Math.floor(canvas.height * 0.76);
+  do {
+    context.font = `900 ${fontSize}px Arial, sans-serif`;
+    if (context.measureText(brandName).width <= maximumTextWidth) break;
+    fontSize -= 4;
+  } while (fontSize > 80);
+  return fontSize;
+}
+
 function paintAdvertisingBrand(canvas: HTMLCanvasElement, brandIndex: number) {
   const context = canvas.getContext("2d");
-  if (!context) return false;
+  if (!context) return null;
   const brand = ADVERTISING_BRANDS[brandIndex % ADVERTISING_BRANDS.length];
   context.fillStyle = brand.background;
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = brand.accent;
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.font = "900 126px Arial, sans-serif";
-  context.fillText(brand.name, canvas.width / 2, canvas.height * 0.45);
-  context.font = "700 42px Arial, sans-serif";
-  context.fillText(brand.category, canvas.width / 2, canvas.height * 0.76);
-  return true;
+  const fontSize = advertisingBrandFontSize(context, canvas, brand.name);
+  context.fillText(brand.name, canvas.width / 2, canvas.height / 2);
+  return fontSize;
 }
 
 function drawAdvertisingBrand(texture: THREE.CanvasTexture, brandIndex: number) {
@@ -2119,13 +2131,15 @@ function drawAdvertisingBrand(texture: THREE.CanvasTexture, brandIndex: number) 
     stagingCanvas.height = canvas.height;
     texture.userData.advertisingStagingCanvas = stagingCanvas;
   }
-  if (!paintAdvertisingBrand(stagingCanvas, brandIndex)) return;
+  const fontSize = paintAdvertisingBrand(stagingCanvas, brandIndex);
+  if (fontSize === null) return;
   const context = canvas.getContext("2d");
   if (!context) return;
   context.save();
   context.globalCompositeOperation = "copy";
   context.drawImage(stagingCanvas, 0, 0);
   context.restore();
+  texture.userData.advertisingFontSize = fontSize;
   texture.needsUpdate = true;
 }
 
@@ -2142,6 +2156,10 @@ function createAdvertisingBoardTexture() {
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
   drawAdvertisingBrand(texture, 0);
+  const context = canvas.getContext("2d");
+  texture.userData.advertisingFontSizes = context
+    ? ADVERTISING_BRANDS.map((brand) => advertisingBrandFontSize(context, canvas, brand.name))
+    : [];
   return texture;
 }
 
@@ -2173,12 +2191,12 @@ function addLightweightStadium(scene: THREE.Scene) {
     goalBacking.name = `ad-board-backing-goal-${side}`;
     stadium.add(goalBacking);
     const goalDisplay = new THREE.Mesh(
-      new THREE.PlaneGeometry(runoffWidth, AD_BOARD_HEIGHT - 0.24),
+      new THREE.PlaneGeometry(runoffWidth, AD_BOARD_DISPLAY_HEIGHT),
       adMaterial,
     );
     goalDisplay.position.set(
       0,
-      AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2 - 0.02,
+      AD_BOARD_DISPLAY_Y,
       goalBoardZ - side * (AD_BOARD_THICKNESS / 2 + AD_BOARD_FACE_OFFSET),
     );
     goalDisplay.rotation.y = side > 0 ? Math.PI : 0;
@@ -2186,12 +2204,12 @@ function addLightweightStadium(scene: THREE.Scene) {
     goalDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
     stadium.add(goalDisplay);
     const goalOuterDisplay = new THREE.Mesh(
-      new THREE.PlaneGeometry(runoffWidth, AD_BOARD_HEIGHT - 0.24),
+      new THREE.PlaneGeometry(runoffWidth, AD_BOARD_DISPLAY_HEIGHT),
       adMaterial,
     );
     goalOuterDisplay.position.set(
       0,
-      AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2 - 0.02,
+      AD_BOARD_DISPLAY_Y,
       goalBoardZ + side * (AD_BOARD_THICKNESS / 2 + AD_BOARD_FACE_OFFSET),
     );
     goalOuterDisplay.rotation.y = side > 0 ? 0 : Math.PI;
@@ -2215,12 +2233,12 @@ function addLightweightStadium(scene: THREE.Scene) {
     sideBacking.name = `ad-board-backing-side-${side}`;
     stadium.add(sideBacking);
     const sideDisplay = new THREE.Mesh(
-      new THREE.PlaneGeometry(runoffLength, AD_BOARD_HEIGHT - 0.24),
+      new THREE.PlaneGeometry(runoffLength, AD_BOARD_DISPLAY_HEIGHT),
       adMaterial,
     );
     sideDisplay.position.set(
       sideBoardX - side * (AD_BOARD_THICKNESS / 2 + AD_BOARD_FACE_OFFSET),
-      AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2 - 0.02,
+      AD_BOARD_DISPLAY_Y,
       0,
     );
     sideDisplay.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
@@ -2228,12 +2246,12 @@ function addLightweightStadium(scene: THREE.Scene) {
     sideDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
     stadium.add(sideDisplay);
     const sideOuterDisplay = new THREE.Mesh(
-      new THREE.PlaneGeometry(runoffLength, AD_BOARD_HEIGHT - 0.24),
+      new THREE.PlaneGeometry(runoffLength, AD_BOARD_DISPLAY_HEIGHT),
       adMaterial,
     );
     sideOuterDisplay.position.set(
       sideBoardX + side * (AD_BOARD_THICKNESS / 2 + AD_BOARD_FACE_OFFSET),
-      AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2 - 0.02,
+      AD_BOARD_DISPLAY_Y,
       0,
     );
     sideOuterDisplay.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
@@ -2396,6 +2414,10 @@ function updateAdvertisingBoards(active: MatchRuntime, dt: number) {
   active.renderer.domElement.dataset.adBrandIndex = String(active.adBrandIndex);
   active.renderer.domElement.dataset.adBrandSeconds = active.adBrandTimer.toFixed(2);
   active.renderer.domElement.dataset.adBoardFaceOffset = AD_BOARD_FACE_OFFSET.toFixed(3);
+  active.renderer.domElement.dataset.adBoardDisplayHeight = AD_BOARD_DISPLAY_HEIGHT.toFixed(3);
+  active.renderer.domElement.dataset.adBoardDisplayY = AD_BOARD_DISPLAY_Y.toFixed(3);
+  active.renderer.domElement.dataset.adBrandFontSize = String(active.adBoardTexture.userData.advertisingFontSize ?? "");
+  active.renderer.domElement.dataset.adBrandFontSizes = (active.adBoardTexture.userData.advertisingFontSizes as number[] | undefined)?.join(",") ?? "";
   active.renderer.domElement.dataset.adBoardMipmaps = String(active.adBoardTexture.generateMipmaps);
 }
 
