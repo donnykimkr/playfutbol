@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import * as THREE from "three";
-import { GraduationCap, Play, RotateCcw, Settings, SkipForward, X } from "lucide-react";
+import { GraduationCap, Keyboard, Play, RotateCcw, Settings, SkipForward, X } from "lucide-react";
 import { getSupabaseClient } from "@/lib/supabase";
 
 type MatchState = "menu" | "playing" | "ended";
@@ -129,6 +129,7 @@ type PlayerBody = {
 
 type PlayerAnimationParts = {
   bodyRoot: THREE.Object3D | null;
+  head: THREE.Object3D | null;
   leftLeg: THREE.Object3D | null;
   rightLeg: THREE.Object3D | null;
   leftKnee: THREE.Object3D | null;
@@ -455,6 +456,12 @@ const AD_BOARD_DISPLAY_HEIGHT = AD_BOARD_HEIGHT;
 const AD_BOARD_DISPLAY_Y = AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2;
 const AD_BOARD_DISPLAY_RENDER_ORDER = 4;
 const AD_BOARD_COLLISION_TOP = AD_BOARD_BASE_Y + AD_BOARD_HEIGHT + BALL_RADIUS;
+const AD_BOARD_CORNER_RADIUS = 3.2;
+const AD_BOARD_CORNER_SEGMENTS = 18;
+const AD_BOARD_TEXTURE_REPEATS = 7;
+const AD_BOARD_SCROLL_SPEED = 0.075;
+const LANDING_MARKER_Y = 0.035;
+const HEAD_COLLIDER_RADIUS = 0.3;
 const ADVERTISING_BRANDS = [
   { name: "NOVA STRIDE", background: "#0b1833", accent: "#4de8ff" },
   { name: "PULSE+", background: "#4b1021", accent: "#ffcf4d" },
@@ -1881,7 +1888,7 @@ function createKickTrajectoryPreview() {
   landingRing.rotation.x = -Math.PI / 2;
   landingRing.renderOrder = 26;
   landingZone.add(landingFill, landingRing);
-  landingZone.position.y = 0.18;
+  landingZone.position.y = LANDING_MARKER_Y;
   landingZone.renderOrder = 26;
   landingZone.visible = false;
   return { guide, line, endpoint, landingZone };
@@ -2151,7 +2158,7 @@ function createAdvertisingBoardTexture() {
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
-  texture.repeat.set(7, 1);
+  texture.repeat.set(AD_BOARD_TEXTURE_REPEATS, 1);
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
@@ -2161,6 +2168,77 @@ function createAdvertisingBoardTexture() {
     ? ADVERTISING_BRANDS.map((brand) => advertisingBrandFontSize(context, canvas, brand.name))
     : [];
   return texture;
+}
+
+function createAdvertisingCornerFaceGeometry(
+  radius: number,
+  startAngle: number,
+  inwardFacing: boolean,
+  reverseTexture = false,
+) {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  for (let index = 0; index <= AD_BOARD_CORNER_SEGMENTS; index += 1) {
+    const progress = index / AD_BOARD_CORNER_SEGMENTS;
+    const angle = startAngle + progress * Math.PI / 2;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    positions.push(x, -AD_BOARD_DISPLAY_HEIGHT / 2, z, x, AD_BOARD_DISPLAY_HEIGHT / 2, z);
+    const u = (reverseTexture ? 1 - progress : progress) / AD_BOARD_TEXTURE_REPEATS;
+    uvs.push(u, 0, u, 1);
+  }
+  for (let index = 0; index < AD_BOARD_CORNER_SEGMENTS; index += 1) {
+    const bottom = index * 2;
+    const top = bottom + 1;
+    const nextBottom = bottom + 2;
+    const nextTop = bottom + 3;
+    if (inwardFacing) indices.push(bottom, nextBottom, top, top, nextBottom, nextTop);
+    else indices.push(bottom, top, nextBottom, top, nextTop, nextBottom);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function createAdvertisingCornerSolidGeometry(
+  innerRadius: number,
+  outerRadius: number,
+  height: number,
+  startAngle: number,
+) {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  for (let index = 0; index <= AD_BOARD_CORNER_SEGMENTS; index += 1) {
+    const progress = index / AD_BOARD_CORNER_SEGMENTS;
+    const angle = startAngle + progress * Math.PI / 2;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    positions.push(
+      cos * innerRadius, -height / 2, sin * innerRadius,
+      cos * innerRadius, height / 2, sin * innerRadius,
+      cos * outerRadius, -height / 2, sin * outerRadius,
+      cos * outerRadius, height / 2, sin * outerRadius,
+    );
+  }
+  for (let index = 0; index < AD_BOARD_CORNER_SEGMENTS; index += 1) {
+    const base = index * 4;
+    const next = base + 4;
+    indices.push(
+      base, next, base + 1, base + 1, next, next + 1,
+      base + 2, base + 3, next + 2, base + 3, next + 3, next + 2,
+      base + 1, next + 1, base + 3, base + 3, next + 1, next + 3,
+      base, base + 2, next, base + 2, next + 2, next,
+    );
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function addLightweightStadium(scene: THREE.Scene) {
@@ -2181,17 +2259,23 @@ function addLightweightStadium(scene: THREE.Scene) {
   const adTopMaterial = new THREE.MeshLambertMaterial({ color: "#101923" });
   const runoffWidth = FIELD_W + TOUCHLINE_MARGIN * 2;
   const runoffLength = FIELD_L + TOUCHLINE_MARGIN * 2;
+  const innerFaceX = AD_BOARD_INNER_X - AD_BOARD_FACE_OFFSET;
+  const innerFaceZ = AD_BOARD_INNER_Z - AD_BOARD_FACE_OFFSET;
+  const cornerCenterX = innerFaceX - AD_BOARD_CORNER_RADIUS;
+  const cornerCenterZ = innerFaceZ - AD_BOARD_CORNER_RADIUS;
+  const straightGoalBoardWidth = cornerCenterX * 2;
+  const straightSideBoardLength = cornerCenterZ * 2;
   [-1, 1].forEach((side) => {
     const goalBoardZ = side * (runoffLength / 2 + AD_BOARD_THICKNESS / 2);
     const goalBacking = new THREE.Mesh(
-      new THREE.BoxGeometry(runoffWidth + 0.4, AD_BOARD_HEIGHT, AD_BOARD_THICKNESS),
+      new THREE.BoxGeometry(straightGoalBoardWidth, AD_BOARD_HEIGHT, AD_BOARD_THICKNESS),
       adBackingMaterial,
     );
     goalBacking.position.set(0, AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2, goalBoardZ);
     goalBacking.name = `ad-board-backing-goal-${side}`;
     stadium.add(goalBacking);
     const goalDisplay = new THREE.Mesh(
-      new THREE.PlaneGeometry(runoffWidth, AD_BOARD_DISPLAY_HEIGHT),
+      new THREE.PlaneGeometry(straightGoalBoardWidth, AD_BOARD_DISPLAY_HEIGHT),
       adMaterial,
     );
     goalDisplay.position.set(
@@ -2204,7 +2288,7 @@ function addLightweightStadium(scene: THREE.Scene) {
     goalDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
     stadium.add(goalDisplay);
     const goalOuterDisplay = new THREE.Mesh(
-      new THREE.PlaneGeometry(runoffWidth, AD_BOARD_DISPLAY_HEIGHT),
+      new THREE.PlaneGeometry(straightGoalBoardWidth, AD_BOARD_DISPLAY_HEIGHT),
       adMaterial,
     );
     goalOuterDisplay.position.set(
@@ -2217,7 +2301,7 @@ function addLightweightStadium(scene: THREE.Scene) {
     goalOuterDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
     stadium.add(goalOuterDisplay);
     const goalTop = new THREE.Mesh(
-      new THREE.BoxGeometry(runoffWidth + 0.46, 0.08, AD_BOARD_THICKNESS + 0.08),
+      new THREE.BoxGeometry(straightGoalBoardWidth, 0.08, AD_BOARD_THICKNESS + 0.08),
       adTopMaterial,
     );
     goalTop.position.set(0, AD_BOARD_BASE_Y + AD_BOARD_HEIGHT + 0.04, goalBoardZ);
@@ -2226,14 +2310,14 @@ function addLightweightStadium(scene: THREE.Scene) {
 
     const sideBoardX = side * (runoffWidth / 2 + AD_BOARD_THICKNESS / 2);
     const sideBacking = new THREE.Mesh(
-      new THREE.BoxGeometry(AD_BOARD_THICKNESS, AD_BOARD_HEIGHT, runoffLength + 0.4),
+      new THREE.BoxGeometry(AD_BOARD_THICKNESS, AD_BOARD_HEIGHT, straightSideBoardLength),
       adBackingMaterial,
     );
     sideBacking.position.set(sideBoardX, AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2, 0);
     sideBacking.name = `ad-board-backing-side-${side}`;
     stadium.add(sideBacking);
     const sideDisplay = new THREE.Mesh(
-      new THREE.PlaneGeometry(runoffLength, AD_BOARD_DISPLAY_HEIGHT),
+      new THREE.PlaneGeometry(straightSideBoardLength, AD_BOARD_DISPLAY_HEIGHT),
       adMaterial,
     );
     sideDisplay.position.set(
@@ -2246,7 +2330,7 @@ function addLightweightStadium(scene: THREE.Scene) {
     sideDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
     stadium.add(sideDisplay);
     const sideOuterDisplay = new THREE.Mesh(
-      new THREE.PlaneGeometry(runoffLength, AD_BOARD_DISPLAY_HEIGHT),
+      new THREE.PlaneGeometry(straightSideBoardLength, AD_BOARD_DISPLAY_HEIGHT),
       adMaterial,
     );
     sideOuterDisplay.position.set(
@@ -2259,13 +2343,70 @@ function addLightweightStadium(scene: THREE.Scene) {
     sideOuterDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
     stadium.add(sideOuterDisplay);
     const sideTop = new THREE.Mesh(
-      new THREE.BoxGeometry(AD_BOARD_THICKNESS + 0.08, 0.08, runoffLength + 0.46),
+      new THREE.BoxGeometry(AD_BOARD_THICKNESS + 0.08, 0.08, straightSideBoardLength),
       adTopMaterial,
     );
     sideTop.position.set(sideBoardX, AD_BOARD_BASE_Y + AD_BOARD_HEIGHT + 0.04, 0);
     sideTop.name = `ad-board-clean-top-side-${side}`;
     stadium.add(sideTop);
   });
+
+  for (const xSide of [-1, 1]) {
+    for (const zSide of [-1, 1]) {
+      let startAngle = Math.atan2(zSide, xSide) - Math.PI / 4;
+      if (startAngle < 0) startAngle += Math.PI * 2;
+      const cornerCenter = new THREE.Vector3(xSide * cornerCenterX, 0, zSide * cornerCenterZ);
+      const backing = new THREE.Mesh(
+        createAdvertisingCornerSolidGeometry(
+          AD_BOARD_CORNER_RADIUS + AD_BOARD_FACE_OFFSET,
+          AD_BOARD_CORNER_RADIUS + AD_BOARD_FACE_OFFSET + AD_BOARD_THICKNESS,
+          AD_BOARD_HEIGHT,
+          startAngle,
+        ),
+        adBackingMaterial,
+      );
+      backing.position.set(cornerCenter.x, AD_BOARD_DISPLAY_Y, cornerCenter.z);
+      backing.name = `ad-board-backing-corner-${xSide}-${zSide}`;
+
+      const innerDisplay = new THREE.Mesh(
+        createAdvertisingCornerFaceGeometry(AD_BOARD_CORNER_RADIUS, startAngle, true),
+        adMaterial,
+      );
+      innerDisplay.position.set(cornerCenter.x, AD_BOARD_DISPLAY_Y, cornerCenter.z);
+      innerDisplay.name = `animated-ad-board-corner-inner-${xSide}-${zSide}`;
+      innerDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
+
+      const outerDisplay = new THREE.Mesh(
+        createAdvertisingCornerFaceGeometry(
+          AD_BOARD_CORNER_RADIUS + AD_BOARD_THICKNESS + AD_BOARD_FACE_OFFSET * 2,
+          startAngle,
+          false,
+          true,
+        ),
+        adMaterial,
+      );
+      outerDisplay.position.set(cornerCenter.x, AD_BOARD_DISPLAY_Y, cornerCenter.z);
+      outerDisplay.name = `animated-ad-board-corner-outer-${xSide}-${zSide}`;
+      outerDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
+
+      const top = new THREE.Mesh(
+        createAdvertisingCornerSolidGeometry(
+          AD_BOARD_CORNER_RADIUS + AD_BOARD_FACE_OFFSET - 0.04,
+          AD_BOARD_CORNER_RADIUS + AD_BOARD_FACE_OFFSET + AD_BOARD_THICKNESS + 0.04,
+          0.08,
+          startAngle,
+        ),
+        adTopMaterial,
+      );
+      top.position.set(
+        cornerCenter.x,
+        AD_BOARD_BASE_Y + AD_BOARD_HEIGHT + 0.04,
+        cornerCenter.z,
+      );
+      top.name = `ad-board-clean-top-corner-${xSide}-${zSide}`;
+      stadium.add(backing, innerDisplay, outerDisplay, top);
+    }
+  }
 
   const concrete = new THREE.MeshLambertMaterial({ color: "#344553" });
   const upperConcrete = new THREE.MeshLambertMaterial({ color: "#263641" });
@@ -2404,7 +2545,7 @@ function addLightweightStadium(scene: THREE.Scene) {
 
 function updateAdvertisingBoards(active: MatchRuntime, dt: number) {
   active.adBrandTimer += dt;
-  active.adBoardTexture.offset.x = (active.adBoardTexture.offset.x - dt * 0.055 + 1) % 1;
+  active.adBoardTexture.offset.x = (active.adBoardTexture.offset.x - dt * AD_BOARD_SCROLL_SPEED + 1) % 1;
   if (active.adBrandTimer >= 30) {
     active.adBrandTimer %= 30;
     active.adBrandIndex = (active.adBrandIndex + 1) % ADVERTISING_BRANDS.length;
@@ -2419,35 +2560,66 @@ function updateAdvertisingBoards(active: MatchRuntime, dt: number) {
   active.renderer.domElement.dataset.adBrandFontSize = String(active.adBoardTexture.userData.advertisingFontSize ?? "");
   active.renderer.domElement.dataset.adBrandFontSizes = (active.adBoardTexture.userData.advertisingFontSizes as number[] | undefined)?.join(",") ?? "";
   active.renderer.domElement.dataset.adBoardMipmaps = String(active.adBoardTexture.generateMipmaps);
+  active.renderer.domElement.dataset.adBoardCornerRadius = AD_BOARD_CORNER_RADIUS.toFixed(2);
+  active.renderer.domElement.dataset.adBoardCornerSegments = String(AD_BOARD_CORNER_SEGMENTS);
+  active.renderer.domElement.dataset.adBoardScrollSpeed = AD_BOARD_SCROLL_SPEED.toFixed(3);
 }
 
 function resolveAdvertisingBoardCollision(active: MatchRuntime) {
   if (active.ballOwnerId || active.ballPos.y > AD_BOARD_COLLISION_TOP) return;
   const xLimit = AD_BOARD_INNER_X - BALL_RADIUS;
   const zLimit = AD_BOARD_INNER_Z - BALL_RADIUS;
-  let hitAxis: "x" | "z" | null = null;
-  if (Math.abs(active.ballPos.x) >= xLimit && active.ballVel.x * active.ballPos.x > 0) {
+  const cornerCenterX = AD_BOARD_INNER_X - AD_BOARD_FACE_OFFSET - AD_BOARD_CORNER_RADIUS;
+  const cornerCenterZ = AD_BOARD_INNER_Z - AD_BOARD_FACE_OFFSET - AD_BOARD_CORNER_RADIUS;
+  const cornerCollisionRadius = AD_BOARD_CORNER_RADIUS + AD_BOARD_FACE_OFFSET - BALL_RADIUS;
+  const absX = Math.abs(active.ballPos.x);
+  const absZ = Math.abs(active.ballPos.z);
+  let hitSurface: "x" | "z" | "corner" | null = null;
+  if (absZ <= cornerCenterZ && absX >= xLimit && active.ballVel.x * active.ballPos.x > 0) {
     active.ballPos.x = Math.sign(active.ballPos.x || 1) * xLimit;
     active.ballVel.x *= -0.58;
     active.ballVel.z *= 0.9;
-    hitAxis = "x";
+    hitSurface = "x";
   }
-  if (Math.abs(active.ballPos.z) >= zLimit && active.ballVel.z * active.ballPos.z > 0) {
+  if (absX <= cornerCenterX && absZ >= zLimit && active.ballVel.z * active.ballPos.z > 0) {
     active.ballPos.z = Math.sign(active.ballPos.z || 1) * zLimit;
     active.ballVel.z *= -0.58;
     active.ballVel.x *= 0.9;
-    hitAxis = "z";
+    hitSurface = "z";
   }
-  if (!hitAxis) return;
+  if (absX > cornerCenterX && absZ > cornerCenterZ) {
+    const center = new THREE.Vector3(
+      Math.sign(active.ballPos.x || 1) * cornerCenterX,
+      active.ballPos.y,
+      Math.sign(active.ballPos.z || 1) * cornerCenterZ,
+    );
+    const normal = active.ballPos.clone().sub(center).setY(0);
+    const distance = normal.length();
+    if (distance > cornerCollisionRadius && distance > 0.0001) {
+      normal.multiplyScalar(1 / distance);
+      const outwardSpeed = active.ballVel.dot(normal);
+      active.ballPos.copy(center).addScaledVector(normal, cornerCollisionRadius);
+      if (outwardSpeed > 0) {
+        active.ballVel.addScaledVector(normal, -(1 + 0.58) * outwardSpeed);
+        active.ballVel.x *= 0.9;
+        active.ballVel.z *= 0.9;
+      }
+      hitSurface = "corner";
+      active.renderer.domElement.dataset.lastAdBoardCornerNormalX = normal.x.toFixed(4);
+      active.renderer.domElement.dataset.lastAdBoardCornerNormalZ = normal.z.toFixed(4);
+    }
+  }
+  if (!hitSurface) return;
   active.ballVel.y = Math.max(0.4, Math.abs(active.ballVel.y) * 0.28);
   active.adBoardBounces += 1;
-  active.renderer.domElement.dataset.lastAdBoardBounce = hitAxis;
+  active.renderer.domElement.dataset.lastAdBoardBounce = hitSurface;
   active.renderer.domElement.dataset.adBoardBounces = String(active.adBoardBounces);
 }
 
 function animationParts(mesh: THREE.Group): PlayerAnimationParts {
   return {
     bodyRoot: mesh.getObjectByName("body-root") ?? null,
+    head: mesh.getObjectByName("head") ?? null,
     leftLeg: mesh.getObjectByName("left-leg") ?? null,
     rightLeg: mesh.getObjectByName("right-leg") ?? null,
     leftKnee: mesh.getObjectByName("left-knee") ?? null,
@@ -2886,6 +3058,7 @@ export function ArcadeSoccerGame() {
   const [shotChargePosition, setShotChargePosition] = useState({ x: 0, y: 0 });
   const [phaseUi, setPhaseUi] = useState<PlayPhase>("kickoff");
   const [p1AiUi, setP1AiUi] = useState(false);
+  const [keyboardGuideOpen, setKeyboardGuideOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [minimapSnapshot, setMinimapSnapshot] = useState<MinimapSnapshot | null>(null);
   const [tutorialUi, setTutorialUi] = useState({ active: false, lessonIndex: 0, status: "active" as TutorialStatus });
@@ -3925,16 +4098,38 @@ export function ArcadeSoccerGame() {
     const previewTestCharge = clamp(Number(new URLSearchParams(window.location.search).get("previewCharge") ?? "0.45"), 0.08, 1);
     const keeperFrontClaimTest = new URLSearchParams(window.location.search).has("keeperFrontClaimTest");
     const adBoardCollisionTest = new URLSearchParams(window.location.search).has("adBoardCollisionTest");
+    const requestedAdBoardCornerTests = clamp(
+      Number(new URLSearchParams(window.location.search).get("adBoardCornerTest") ?? "0"),
+      0,
+      8,
+    );
     let keeperFrontClaimTestApplied = false;
     let adBoardCollisionTestApplied = false;
+    let remainingAdBoardCornerTests = requestedAdBoardCornerTests;
+    let nextAdBoardCornerTestAt = performance.now() + 1200;
+    runtime.renderer.domElement.dataset.adBoardCornerTestsRequested = String(requestedAdBoardCornerTests);
+    runtime.renderer.domElement.dataset.adBoardCornerTestsPassed = "0";
+    runtime.renderer.domElement.dataset.adBoardCornerTestsFailed = "0";
     let tacticalTestApplied = false;
     let mechanicsTestApplied = false;
     const mechanicsTestAt = performance.now() + 1200;
-    const requestedHeaderTests = clamp(Number(new URLSearchParams(window.location.search).get("headerTest") ?? "0"), 0, 15);
+    const requestedHeaderTests = clamp(Number(new URLSearchParams(window.location.search).get("headerTest") ?? "0"), 0, 24);
     let remainingHeaderTests = requestedHeaderTests;
     let nextHeaderTestAt = performance.now() + 1200;
+    let pendingHeaderTestCheck: { kind: string; expected: boolean; baseline: number; at: number } | null = null;
     runtime.renderer.domElement.dataset.headerTestsRequested = String(requestedHeaderTests);
     runtime.renderer.domElement.dataset.headerExpectedContacts = "0";
+    if (requestedHeaderTests > 0) runtime.renderer.domElement.dataset.headerContacts = "0";
+    const requestedLandingMarkerTests = clamp(
+      Number(new URLSearchParams(window.location.search).get("landingMarkerTest") ?? "0"),
+      0,
+      15,
+    );
+    let remainingLandingMarkerTests = requestedLandingMarkerTests;
+    let nextLandingMarkerTestAt = performance.now() + 900;
+    runtime.renderer.domElement.dataset.landingMarkerTestsRequested = String(requestedLandingMarkerTests);
+    runtime.renderer.domElement.dataset.landingMarkerTestsPassed = "0";
+    runtime.renderer.domElement.dataset.landingMarkerTestsFailed = "0";
     const requestedAerialReceptionTests = clamp(
       Number(new URLSearchParams(window.location.search).get("aerialReceptionTest") ?? "0"),
       0,
@@ -4100,6 +4295,7 @@ export function ArcadeSoccerGame() {
       || requestedGoalKickTests
       || manualCornerTest
       || requestedHeaderTests
+      || requestedLandingMarkerTests
       || requestedAerialReceptionTests
       || requestedLoftedPassTests
       || requestedPassIntentTests
@@ -4251,6 +4447,54 @@ export function ArcadeSoccerGame() {
           active.ballCurve.set(0, 0, 0);
           adBoardCollisionTestApplied = true;
           active.renderer.domElement.dataset.adBoardCollisionTestApplied = "true";
+        }
+        if (
+          remainingAdBoardCornerTests > 0
+          && active.phase === "open"
+          && now >= nextAdBoardCornerTestAt
+        ) {
+          const testIndex = requestedAdBoardCornerTests - remainingAdBoardCornerTests;
+          const xSide = testIndex % 4 < 2 ? 1 : -1;
+          const zSide = testIndex % 2 === 0 ? 1 : -1;
+          const cornerCenterX = AD_BOARD_INNER_X - AD_BOARD_FACE_OFFSET - AD_BOARD_CORNER_RADIUS;
+          const cornerCenterZ = AD_BOARD_INNER_Z - AD_BOARD_FACE_OFFSET - AD_BOARD_CORNER_RADIUS;
+          const normal = new THREE.Vector3(xSide, 0, zSide).normalize();
+          const collisionRadius = AD_BOARD_CORNER_RADIUS + AD_BOARD_FACE_OFFSET - BALL_RADIUS;
+          const savedBallPos = active.ballPos.clone();
+          const savedBallVel = active.ballVel.clone();
+          const savedBallCurve = active.ballCurve.clone();
+          const savedOwnerId = active.ballOwnerId;
+          const savedBallState = active.ballState;
+          const savedIntendedReceiverId = active.intendedReceiverId;
+          const baseline = active.adBoardBounces;
+          active.ballOwnerId = null;
+          active.ballPos.set(xSide * cornerCenterX, BALL_RADIUS, zSide * cornerCenterZ)
+            .addScaledVector(normal, collisionRadius + 0.06);
+          active.ballVel.copy(normal).multiplyScalar(testIndex < 4 ? 5.2 : 24);
+          active.ballCurve.set(0, 0, 0);
+          resolveAdvertisingBoardCollision(active);
+          const bouncedVelocity = active.ballVel.clone();
+          const passed = active.adBoardBounces > baseline
+            && active.renderer.domElement.dataset.lastAdBoardBounce === "corner"
+            && bouncedVelocity.dot(normal) < 0;
+          const resultKey = passed ? "adBoardCornerTestsPassed" : "adBoardCornerTestsFailed";
+          active.renderer.domElement.dataset[resultKey] = String(Number(active.renderer.domElement.dataset[resultKey] ?? "0") + 1);
+          active.renderer.domElement.dataset.adBoardCornerLastResult = JSON.stringify({
+            index: testIndex,
+            speed: testIndex < 4 ? "slow" : "hard",
+            passed,
+            normalX: active.renderer.domElement.dataset.lastAdBoardCornerNormalX ?? "",
+            normalZ: active.renderer.domElement.dataset.lastAdBoardCornerNormalZ ?? "",
+          });
+          active.ballPos.copy(savedBallPos);
+          active.ballVel.copy(savedBallVel);
+          active.ballCurve.copy(savedBallCurve);
+          active.ballOwnerId = savedOwnerId;
+          active.ballState = savedBallState;
+          active.intendedReceiverId = savedIntendedReceiverId;
+          remainingAdBoardCornerTests -= 1;
+          active.renderer.domElement.dataset.adBoardCornerTestsRemaining = String(remainingAdBoardCornerTests);
+          nextAdBoardCornerTestAt = now + 260;
         }
         active.matchUpdatesThisFrame += 1;
         updateMatch(active, keysRef.current, dt);
@@ -5037,11 +5281,55 @@ export function ArcadeSoccerGame() {
             active.renderer.domElement.dataset.keeperBuildupTestsRemaining = String(remainingKeeperBuildupTests);
           }
         }
-        if (remainingHeaderTests > 0 && active.phase === "open" && now >= nextHeaderTestAt) {
+        if (pendingHeaderTestCheck && now >= pendingHeaderTestCheck.at) {
+          const currentContacts = Number(active.renderer.domElement.dataset.headerContacts ?? "0");
+          const contacted = currentContacts > pendingHeaderTestCheck.baseline;
+          const results = active.renderer.domElement.dataset.headerTestResults
+            ? JSON.parse(active.renderer.domElement.dataset.headerTestResults) as unknown[]
+            : [];
+          results.push({ kind: pendingHeaderTestCheck.kind, expected: pendingHeaderTestCheck.expected, contacted });
+          active.renderer.domElement.dataset.headerTestResults = JSON.stringify(results);
+          pendingHeaderTestCheck = null;
+        }
+        if (
+          remainingLandingMarkerTests > 0
+          && active.phase === "open"
+          && now >= nextLandingMarkerTestAt
+        ) {
+          const testIndex = requestedLandingMarkerTests - remainingLandingMarkerTests;
+          const player = active.players.find((candidate) => candidate.team === "home" && candidate.role !== "keeper" && !candidate.sentOff) ?? null;
+          if (player) {
+            const xPositions = [-FIELD_W / 2 + 3, 0, FIELD_W / 2 - 3];
+            const zPositions = [-FIELD_L / 2 + 4, -FIELD_L / 4, 0, FIELD_L / 4, FIELD_L / 2 - 4];
+            const target = new THREE.Vector3(
+              xPositions[testIndex % xPositions.length],
+              BALL_RADIUS,
+              zPositions[Math.floor(testIndex / xPositions.length) % zPositions.length],
+            );
+            const savedBallPos = active.ballPos.clone();
+            active.ballPos.copy(player.pos).add(facingDirection(player).multiplyScalar(0.92)).setY(BALL_RADIUS);
+            updateKickTrajectoryPreview(active, player, target, "long", 0.12 + (testIndex % 8) * 0.11);
+            const markerY = active.kickLandingZone.position.y;
+            const passed = active.kickLandingZone.visible && Math.abs(markerY - LANDING_MARKER_Y) < 0.0001;
+            const resultKey = passed ? "landingMarkerTestsPassed" : "landingMarkerTestsFailed";
+            active.renderer.domElement.dataset[resultKey] = String(Number(active.renderer.domElement.dataset[resultKey] ?? "0") + 1);
+            const results = active.renderer.domElement.dataset.landingMarkerTestResults
+              ? JSON.parse(active.renderer.domElement.dataset.landingMarkerTestResults) as unknown[]
+              : [];
+            results.push({ index: testIndex, x: target.x, z: target.z, y: markerY, passed });
+            active.renderer.domElement.dataset.landingMarkerTestResults = JSON.stringify(results);
+            active.ballPos.copy(savedBallPos);
+          }
+          remainingLandingMarkerTests -= 1;
+          active.renderer.domElement.dataset.landingMarkerTestsRemaining = String(remainingLandingMarkerTests);
+          nextLandingMarkerTestAt = now + 120;
+        }
+        if (remainingHeaderTests > 0 && !pendingHeaderTestCheck && active.phase === "open" && now >= nextHeaderTestAt) {
           const headerPlayer = active.players.find((player) => player.team === "home" && player.line === "forward" && !player.sentOff) ?? null;
           if (headerPlayer) {
             const testIndex = requestedHeaderTests - remainingHeaderTests;
-            const shouldContact = testIndex % 3 !== 2;
+            const testKind = ["forehead", "above", "shoulder", "chest", "fast-cross"][testIndex % 5];
+            const shouldContact = testKind === "forehead" || testKind === "fast-cross";
             active.players.forEach((player) => {
               if (player.id === headerPlayer.id || player.role === "keeper") return;
               const side = player.team === "home" ? -1 : 1;
@@ -5055,15 +5343,24 @@ export function ArcadeSoccerGame() {
             headerPlayer.mesh.rotation.y = headerPlayer.heading;
             headerPlayer.mesh.position.copy(headerPlayer.pos);
             headerPlayer.mesh.updateMatrixWorld(true);
-            const head = headerPlayer.mesh.getObjectByName("head");
+            const head = headerPlayer.parts.head;
             const headPoint = head?.getWorldPosition(new THREE.Vector3()) ?? headerPlayer.pos.clone().setY(2.3);
-            const lateralMiss = new THREE.Vector3(1.15, testIndex % 2 === 0 ? 0 : 0.85, -0.42);
-            const velocity = new THREE.Vector3(0, -1.8, 15.5);
+            const shoulderPoint = headerPlayer.parts.rightArm?.getWorldPosition(new THREE.Vector3()) ?? headPoint.clone().add(new THREE.Vector3(0.9, -0.55, 0));
+            const chestPoint = headerPlayer.mesh.getObjectByName("torso")?.getWorldPosition(new THREE.Vector3()) ?? headPoint.clone().add(new THREE.Vector3(0, -0.9, 0));
+            const startPoint = testKind === "above"
+              ? headPoint.clone().add(new THREE.Vector3(0, 1.6, -0.42))
+              : testKind === "shoulder"
+                ? shoulderPoint.clone().add(new THREE.Vector3(0, 0, -0.42))
+                : testKind === "chest"
+                  ? chestPoint.clone().add(new THREE.Vector3(0, 0, -0.42))
+                  : headPoint.clone().add(new THREE.Vector3(0, testKind === "fast-cross" ? 0.04 : 0.02, testKind === "fast-cross" ? -1.1 : -0.48));
+            const velocity = new THREE.Vector3(0, testKind === "fast-cross" ? -0.7 : -1.2, testKind === "fast-cross" ? 54 : 19);
             releasePossession(active, "kicked");
-            active.ballPos.copy(headPoint).add(shouldContact ? new THREE.Vector3(0, 0.02, -0.42) : lateralMiss);
+            active.ballPos.copy(startPoint);
+            active.previousBallPhysicsPos.copy(startPoint);
             active.ballVel.copy(velocity);
             active.ballCurve.set(0, 0, 0);
-            active.intendedReceiverId = shouldContact ? headerPlayer.id : null;
+            active.intendedReceiverId = headerPlayer.id;
             active.ballIgnorePlayerId = null;
             active.ballIgnoreTimer = 0;
             headerPlayer.headerTimer = 0;
@@ -5071,6 +5368,13 @@ export function ArcadeSoccerGame() {
             if (shouldContact) {
               active.renderer.domElement.dataset.headerExpectedContacts = String(Number(active.renderer.domElement.dataset.headerExpectedContacts ?? "0") + 1);
             }
+            pendingHeaderTestCheck = {
+              kind: testKind,
+              expected: shouldContact,
+              baseline: Number(active.renderer.domElement.dataset.headerContacts ?? "0"),
+              at: now + 220,
+            };
+            active.renderer.domElement.dataset.headerLastTestKind = testKind;
             remainingHeaderTests -= 1;
             nextHeaderTestAt = now + 1100;
             active.renderer.domElement.dataset.headerTestsRemaining = String(remainingHeaderTests);
@@ -5740,16 +6044,18 @@ export function ArcadeSoccerGame() {
         ? active.players.find((player) => player.id === active.loftChargingPlayerId)
         : null;
       const gaugePlayer = chargingPlayer ?? passChargingPlayer ?? loftChargingPlayer;
+      const displayedMatchSecond = Math.floor(active.gameClock);
+      if (Math.floor(gameClockUiRef.current) !== displayedMatchSecond) {
+        gameClockUiRef.current = displayedMatchSecond;
+        setGameClock(displayedMatchSecond);
+      }
+      active.renderer.domElement.dataset.displayedMatchSecond = String(displayedMatchSecond);
       const shouldUpdateHud = performance.now() - active.lastHudUpdate > (gaugePlayer ? 90 : 180);
       if (shouldUpdateHud) {
         active.lastHudUpdate = performance.now();
         if (scoreUiRef.current.home !== active.score.home || scoreUiRef.current.away !== active.score.away) {
           scoreUiRef.current = { ...active.score };
           setScore({ ...active.score });
-        }
-        if (Math.floor(gameClockUiRef.current) !== Math.floor(active.gameClock)) {
-          gameClockUiRef.current = active.gameClock;
-          setGameClock(active.gameClock);
         }
         const totalPossession = active.possessionTime.home + active.possessionTime.away;
         const homePossession = totalPossession > 0.25
@@ -6167,33 +6473,73 @@ export function ArcadeSoccerGame() {
       {matchState === "playing" && !tutorialUi.active && (
         <button
           type="button"
-          className="pointer-events-auto fixed right-4 top-28 z-[70] inline-flex items-center gap-2 rounded-md border border-white/20 bg-black/60 px-4 py-2 text-xs font-black uppercase tracking-wide text-white shadow-lg backdrop-blur-sm active:bg-white/15 sm:right-6"
+          className="pointer-events-auto fixed right-4 top-[calc(env(safe-area-inset-top)+7rem)] z-[70] inline-flex items-center gap-2 rounded-md border border-white/20 bg-black/60 px-4 py-2 text-xs font-black uppercase tracking-wide text-white shadow-lg backdrop-blur-sm active:bg-white/15 sm:right-6"
           onClick={openSettings}
         >
           <Settings size={15} />
           Settings
         </button>
       )}
-      {matchState === "playing" && !tutorialUi.active && (
-        <button
-          type="button"
-          className={`pointer-events-auto fixed right-4 top-40 z-[70] flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-black uppercase shadow-lg backdrop-blur-sm sm:right-6 ${
-            p1AiUi ? "border-lime-200/55 bg-lime-400/25 text-lime-50" : "border-white/20 bg-black/55 text-white/85"
-          }`}
-          onClick={() => {
-            const active = sceneRef.current;
-            if (!active || active.state !== "playing") return;
-            setP1AutopilotMode(active, !active.p1Autopilot);
-            syncP1AiUi(active.p1Autopilot);
-          }}
-          aria-pressed={p1AiUi}
+      {matchState === "playing" && !tutorialUi.active && !showTouchControls && (
+        <div
+          data-testid="desktop-hud-tools"
+          className="pointer-events-auto fixed right-4 top-[calc(env(safe-area-inset-top)+10.25rem)] z-[70] flex w-48 flex-col items-end gap-2 sm:right-6"
         >
-          <span>AI</span>
-          <span className={`relative inline-flex h-5 w-9 rounded-full border ${p1AiUi ? "border-lime-100/60 bg-lime-300/35" : "border-white/25 bg-white/10"}`}>
-            <span className={`absolute top-0.5 h-3.5 w-3.5 rounded-full bg-white transition-transform ${p1AiUi ? "translate-x-4" : "translate-x-0.5"}`} />
-          </span>
-          <span>{p1AiUi ? "ON" : "OFF"}</span>
-        </button>
+          <button
+            data-testid="ai-toggle"
+            type="button"
+            className={`flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-black uppercase shadow-lg backdrop-blur-sm ${
+              p1AiUi ? "border-lime-200/55 bg-lime-400/25 text-lime-50" : "border-white/20 bg-black/55 text-white/85"
+            }`}
+            onClick={() => {
+              const active = sceneRef.current;
+              if (!active || active.state !== "playing") return;
+              setP1AutopilotMode(active, !active.p1Autopilot);
+              syncP1AiUi(active.p1Autopilot);
+            }}
+            aria-pressed={p1AiUi}
+          >
+            <span>AI</span>
+            <span className={`relative inline-flex h-5 w-9 rounded-full border ${p1AiUi ? "border-lime-100/60 bg-lime-300/35" : "border-white/25 bg-white/10"}`}>
+              <span className={`absolute top-0.5 h-3.5 w-3.5 rounded-full bg-white transition-transform ${p1AiUi ? "translate-x-4" : "translate-x-0.5"}`} />
+            </span>
+            <span>{p1AiUi ? "ON" : "OFF"}</span>
+          </button>
+          <button
+            data-testid="keyboard-guide-toggle"
+            type="button"
+            className="hidden items-center gap-2 rounded-md border border-white/20 bg-black/55 px-3 py-2 text-xs font-black uppercase text-white/85 shadow-lg backdrop-blur-sm md:inline-flex"
+            onClick={() => setKeyboardGuideOpen((open) => !open)}
+            aria-expanded={keyboardGuideOpen}
+            aria-controls="keyboard-guide"
+          >
+            <Keyboard size={15} />
+            Controls
+          </button>
+          {keyboardGuideOpen && (
+            <div
+              id="keyboard-guide"
+              data-testid="keyboard-guide"
+              className="hidden w-48 grid-cols-2 gap-x-2 gap-y-1.5 rounded-md border border-white/15 bg-black/55 px-2.5 py-2 text-[11px] font-bold text-white/80 shadow-lg backdrop-blur-sm md:grid"
+            >
+              {[
+                ["Arrow Keys", "Move"],
+                ["S", "Pass"],
+                ["A", "Loft / Cross"],
+                ["W", "Switch"],
+                ["D", "Shoot / Kick"],
+                ["Z + D", "Finesse"],
+                ["U", "AI Mode"],
+                ["F", "Fullscreen"],
+              ].map(([key, label]) => (
+                <span key={key} className="inline-flex min-w-0 items-center gap-1">
+                  <kbd className="shrink-0 rounded border border-white/25 bg-white/10 px-1.5 py-0.5 font-mono text-[10px] font-black text-white">{key}</kbd>
+                  <span className="truncate text-white/65">{label}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       )}
       {matchState === "playing" && shotChargeUi > 0 && (
         <div
@@ -6237,28 +6583,6 @@ export function ArcadeSoccerGame() {
               }}
             />
           </div>
-        </div>
-      )}
-      {matchState === "playing" && !tutorialUi.active && !showTouchControls && (
-        <div
-          data-testid="keyboard-guide"
-          className="pointer-events-none fixed right-4 top-[calc(env(safe-area-inset-top)+12.5rem)] z-20 hidden w-48 grid-cols-2 gap-x-2 gap-y-1.5 rounded-md border border-white/15 bg-black/45 px-2.5 py-2 text-[11px] font-bold text-white/80 shadow-lg backdrop-blur-sm md:grid xl:right-5 xl:top-[calc(env(safe-area-inset-top)+11.5rem)]"
-        >
-          {[
-            ["Arrow Keys", "Move"],
-            ["S", "Pass"],
-            ["A", "Loft / Cross"],
-            ["W", "Switch"],
-            ["D", "Shoot / Kick"],
-            ["Z + D", "Finesse"],
-            ["U", "AI Mode"],
-            ["F", "Fullscreen"],
-          ].map(([key, label]) => (
-            <span key={key} className="inline-flex min-w-0 items-center gap-1">
-              <kbd className="shrink-0 rounded border border-white/25 bg-white/10 px-1.5 py-0.5 font-mono text-[10px] font-black text-white">{key}</kbd>
-              <span className="truncate text-white/65">{label}</span>
-            </span>
-          ))}
         </div>
       )}
       {matchState === "playing" && !tutorialUi.active && phaseUi === "halftime" && (
@@ -8665,6 +8989,8 @@ function chooseSetPieceCrossTarget(actor: PlayerBody, active: MatchRuntime, phas
 type HeaderContact = {
   distance: number;
   headPoint: THREE.Vector3;
+  ballPoint: THREE.Vector3;
+  contactNormal: THREE.Vector3;
 };
 
 type AerialReceptionPrediction = {
@@ -8983,25 +9309,33 @@ function realHeaderContact(player: PlayerBody, active: MatchRuntime, dt: number)
     if (traceHeader) active.renderer.domElement.dataset.headerRejectReason = "cooldown";
     return null;
   }
-  const head = player.mesh.getObjectByName("head");
+  const head = player.parts.head;
   if (!head) {
     if (traceHeader) active.renderer.domElement.dataset.headerRejectReason = "missing-head";
     return null;
   }
   player.mesh.updateMatrixWorld(true);
-  const headPoint = head.getWorldPosition(new THREE.Vector3())
-    .addScaledVector(facingDirection(player), 0.19);
+  const headPoint = head.getWorldPosition(new THREE.Vector3());
   const travelDt = clamp(dt, 1 / 240, 0.05);
-  const relativeBallVelocity = active.ballVel.clone().sub(player.vel);
-  const previousBall = active.ballPos.clone().addScaledVector(relativeBallVelocity, -travelDt);
-  const contact = sweptPointDistance(headPoint, previousBall, active.ballPos);
-  const contactRadius = BALL_RADIUS + 0.29;
+  // Header resolution runs before this frame's ball integration. Sweep the
+  // relative ball path through the animated head instead of testing only the
+  // current sample, which would let fast crosses tunnel through the forehead.
+  const ballStart = active.ballPos.clone();
+  const relativeVelocity = active.ballVel.clone().sub(player.vel);
+  const relativeBallEnd = ballStart.clone().addScaledVector(relativeVelocity, travelDt);
+  const contact = sweptPointDistance(headPoint, ballStart, relativeBallEnd);
+  const contactRadius = BALL_RADIUS + HEAD_COLLIDER_RADIUS;
   if (contact.distance > contactRadius) {
     if (traceHeader) active.renderer.domElement.dataset.headerRejectReason = `distance:${contact.distance.toFixed(3)}`;
     return null;
   }
-  const contactBallPoint = previousBall.clone().lerp(active.ballPos, contact.t);
-  const ballToHead = headPoint.clone().sub(previousBall);
+  const contactBallPoint = ballStart.clone().addScaledVector(active.ballVel, travelDt * contact.t);
+  const contactHeadPoint = headPoint.clone().addScaledVector(player.vel, travelDt * contact.t);
+  if (contactBallPoint.y < contactHeadPoint.y - HEAD_COLLIDER_RADIUS * 0.62) {
+    if (traceHeader) active.renderer.domElement.dataset.headerRejectReason = "below-head";
+    return null;
+  }
+  const ballToHead = contactHeadPoint.clone().sub(ballStart);
   const towardHead = ballToHead.lengthSq() < 0.0001
     || active.ballVel.clone().normalize().dot(ballToHead.normalize()) > 0.1
     || active.ballPos.distanceTo(headPoint) < contactRadius * 0.82;
@@ -9009,20 +9343,37 @@ function realHeaderContact(player: PlayerBody, active: MatchRuntime, dt: number)
     if (traceHeader) active.renderer.domElement.dataset.headerRejectReason = "moving-away";
     return null;
   }
-  const horizontalBall = contactBallPoint.setY(player.pos.y);
+  const horizontalBall = contactBallPoint.clone().setY(player.pos.y);
   const lookToBall = horizontalBall.sub(player.pos);
   if (lookToBall.lengthSq() > 0.04 && facingDirection(player).dot(lookToBall.normalize()) < -0.18) {
     if (traceHeader) active.renderer.domElement.dataset.headerRejectReason = "not-facing-contact";
     return null;
   }
+  const contactNormal = contactBallPoint.clone().sub(contactHeadPoint);
+  if (contactNormal.lengthSq() < 0.0001) contactNormal.copy(facingDirection(player));
+  else contactNormal.normalize();
   if (traceHeader) active.renderer.domElement.dataset.headerRejectReason = "contact";
-  return { distance: contact.distance, headPoint };
+  return { distance: contact.distance, headPoint: contactHeadPoint, ballPoint: contactBallPoint, contactNormal };
 }
 
 function recordHeaderContact(active: MatchRuntime, contact: HeaderContact) {
   const element = active.renderer.domElement;
   element.dataset.headerContacts = String(Number(element.dataset.headerContacts ?? "0") + 1);
   element.dataset.lastHeaderDistance = contact.distance.toFixed(3);
+  element.dataset.lastHeaderPointY = contact.headPoint.y.toFixed(3);
+  element.dataset.lastHeaderBallY = contact.ballPoint.y.toFixed(3);
+  element.dataset.headColliderRadius = HEAD_COLLIDER_RADIUS.toFixed(3);
+}
+
+function headedDirection(player: PlayerBody, target: THREE.Vector3, contact: HeaderContact) {
+  const aimed = target.clone().sub(contact.ballPoint).setY(0);
+  if (aimed.lengthSq() < 0.01) aimed.copy(facingDirection(player));
+  else aimed.normalize();
+  const facing = facingDirection(player).setY(0).normalize();
+  const physicalNormal = contact.contactNormal.clone().setY(0);
+  if (physicalNormal.lengthSq() > 0.01) physicalNormal.normalize();
+  else physicalNormal.copy(facing);
+  return aimed.multiplyScalar(0.76).addScaledVector(facing, 0.16).addScaledVector(physicalNormal, 0.08).normalize();
 }
 
 function tryHeader(player: PlayerBody, active: MatchRuntime, dt = 1 / 60) {
@@ -9033,11 +9384,12 @@ function tryHeader(player: PlayerBody, active: MatchRuntime, dt = 1 / 60) {
   const goalZ = attackingGoalZ(player.team, active.half);
   if (Math.abs(goalZ - player.pos.z) > 33) return false;
   const target = quickKickPoint(player, active);
-  const direction = target.clone().sub(active.ballPos).setY(0);
-  if (direction.lengthSq() < 0.12) return false;
+  const aimedDirection = target.clone().sub(active.ballPos).setY(0);
+  if (aimedDirection.lengthSq() < 0.12) return false;
+  const direction = headedDirection(player, target, contact);
   const distance = clamp(target.distanceTo(active.ballPos), 8, 42);
   releasePossession(active, "kicked");
-  active.ballVel.copy(direction.normalize().multiplyScalar(clamp(20 + distance * 0.28, 22, 34)));
+  active.ballVel.copy(direction.multiplyScalar(clamp(20 + distance * 0.28, 22, 34)));
   active.ballVel.y = clamp(2.2 + distance * 0.075, 2.6, 5.7);
   active.ballCurve.set(0, 0, 0);
   active.intendedReceiverId = null;
@@ -9096,11 +9448,12 @@ function tryAerialHeaderDuel(active: MatchRuntime, dt: number) {
     if (teammate) active.intendedReceiverId = teammate.id;
   }
 
-  const direction = target.clone().sub(active.ballPos).setY(0);
-  if (direction.lengthSq() < 0.1) return false;
+  const aimedDirection = target.clone().sub(active.ballPos).setY(0);
+  if (aimedDirection.lengthSq() < 0.1) return false;
+  const direction = headedDirection(winner, target, winnerEntry.contact);
   const distance = clamp(target.distanceTo(active.ballPos), 8, 48);
   releasePossession(active, "kicked");
-  active.ballVel.copy(direction.normalize().multiplyScalar(clamp(18 + distance * 0.32, 22, 37)));
+  active.ballVel.copy(direction.multiplyScalar(clamp(18 + distance * 0.32, 22, 37)));
   active.ballVel.y = winner.line === "defender"
     ? clamp(3.2 + distance * 0.08, 4.4, 7.4)
     : clamp(1.8 + distance * 0.06, 2.4, 5.6);
@@ -13282,6 +13635,7 @@ function updateKickTrajectoryPreview(
     active.kickPreviewLine.visible = false;
     active.kickPreviewEndpoint.visible = false;
     active.kickLandingZone.visible = false;
+    active.kickLandingZone.position.set(0, LANDING_MARKER_Y, 0);
     return;
   }
   const distance = clamp(direction.length(), 6, 88);
@@ -13386,9 +13740,10 @@ function updateKickTrajectoryPreview(
   active.kickLandingZone.visible = style === "long";
   if (style === "long") {
     const landing = landingPoint ?? point;
-    active.kickLandingZone.position.set(landing.x, 0.18, landing.z);
+    active.kickLandingZone.position.set(landing.x, LANDING_MARKER_Y, landing.z);
     active.kickLandingZone.scale.setScalar(0.82 + chargeProgress * 0.24);
     active.renderer.domElement.dataset.loftLandingX = landing.x.toFixed(3);
+    active.renderer.domElement.dataset.loftLandingY = LANDING_MARKER_Y.toFixed(3);
     active.renderer.domElement.dataset.loftLandingZ = landing.z.toFixed(3);
   }
   active.renderer.domElement.dataset.previewEndpointX = point.x.toFixed(3);
@@ -13533,6 +13888,7 @@ function updateAimIndicators(active: MatchRuntime, keys: Set<string>) {
     active.kickPreviewLine.visible = false;
     active.kickPreviewEndpoint.visible = false;
     active.kickLandingZone.visible = false;
+    active.kickLandingZone.position.set(0, LANDING_MARKER_Y, 0);
   }
   active.players.forEach((player) => {
     if (!player.receiverMarker || active.passIntent) return;
