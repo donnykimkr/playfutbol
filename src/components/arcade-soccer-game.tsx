@@ -463,8 +463,12 @@ const AD_BOARD_DISPLAY_RENDER_ORDER = 4;
 const AD_BOARD_COLLISION_TOP = AD_BOARD_BASE_Y + AD_BOARD_HEIGHT + BALL_RADIUS;
 const AD_BOARD_CORNER_RADIUS = 3.2;
 const AD_BOARD_CORNER_SEGMENTS = 20;
-const AD_BOARD_TEXTURE_REPEATS = 7;
-const AD_BOARD_SCROLL_SPEED = 0.075;
+const AD_BOARD_TEXTURE_REPEATS = 21;
+// The repeat count is 3x denser than the previous ribbon, so the UV rate is
+// scaled by the same amount to preserve the established world-space motion.
+const AD_BOARD_SCROLL_SPEED = 0.225;
+const AD_BOARD_TEXTURE_WIDTH = 2048;
+const AD_BOARD_TEXTURE_HEIGHT = 192;
 const GRASS_DARK_COLOR = "#176b37";
 const GRASS_LIGHT_COLOR = "#218247";
 const GRASS_STRIPE_WIDTH = 8;
@@ -1526,20 +1530,81 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
     }));
 }
 
-function createTorsoGeometry() {
+function createEllipticalSectionGeometry(
+  rings: Array<{ y: number; radiusX: number; radiusZ: number }>,
+  radialSegments = 8,
+) {
   const geometry = new THREE.BufferGeometry();
-  const vertices = new Float32Array([
-    -0.58, 0.64, -0.25, 0.58, 0.64, -0.25, 0.58, 0.64, 0.25, -0.58, 0.64, 0.25,
-    -0.29, -0.62, -0.19, 0.29, -0.62, -0.19, 0.29, -0.62, 0.19, -0.29, -0.62, 0.19,
+  const positions: number[] = [];
+  const indices: number[] = [];
+  rings.forEach((ring) => {
+    for (let segment = 0; segment < radialSegments; segment += 1) {
+      const angle = segment / radialSegments * Math.PI * 2;
+      positions.push(
+        Math.cos(angle) * ring.radiusX,
+        ring.y,
+        Math.sin(angle) * ring.radiusZ,
+      );
+    }
+  });
+  for (let ring = 0; ring < rings.length - 1; ring += 1) {
+    for (let segment = 0; segment < radialSegments; segment += 1) {
+      const next = (segment + 1) % radialSegments;
+      const currentBottom = ring * radialSegments + segment;
+      const nextBottom = ring * radialSegments + next;
+      const currentTop = (ring + 1) * radialSegments + segment;
+      const nextTop = (ring + 1) * radialSegments + next;
+      indices.push(currentBottom, currentTop, nextBottom, nextBottom, currentTop, nextTop);
+    }
+  }
+  const bottomCenter = positions.length / 3;
+  positions.push(0, rings[0].y, 0);
+  const topCenter = positions.length / 3;
+  positions.push(0, rings[rings.length - 1].y, 0);
+  for (let segment = 0; segment < radialSegments; segment += 1) {
+    const next = (segment + 1) % radialSegments;
+    indices.push(bottomCenter, next, segment);
+    const topOffset = (rings.length - 1) * radialSegments;
+    indices.push(topCenter, topOffset + segment, topOffset + next);
+  }
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function createTorsoGeometry() {
+  return createEllipticalSectionGeometry([
+    { y: -0.64, radiusX: 0.29, radiusZ: 0.19 },
+    { y: -0.34, radiusX: 0.34, radiusZ: 0.21 },
+    { y: 0.08, radiusX: 0.46, radiusZ: 0.25 },
+    { y: 0.44, radiusX: 0.56, radiusZ: 0.27 },
+    { y: 0.62, radiusX: 0.49, radiusZ: 0.23 },
+  ], 10);
+}
+
+function createPelvisGeometry() {
+  return createEllipticalSectionGeometry([
+    { y: -0.24, radiusX: 0.34, radiusZ: 0.2 },
+    { y: 0.02, radiusX: 0.4, radiusZ: 0.23 },
+    { y: 0.22, radiusX: 0.34, radiusZ: 0.2 },
+  ], 8);
+}
+
+function createFootballBootGeometry() {
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array([
+    -0.11, -0.09, -0.16, 0.11, -0.09, -0.16, 0.1, 0.09, -0.13, -0.1, 0.09, -0.13,
+    -0.145, -0.08, 0.36, 0.145, -0.08, 0.36, 0.12, 0.055, 0.32, -0.12, 0.055, 0.32,
   ]);
-  geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setIndex([
     0, 1, 2, 0, 2, 3,
     4, 6, 5, 4, 7, 6,
     0, 4, 5, 0, 5, 1,
+    3, 2, 6, 3, 6, 7,
     1, 5, 6, 1, 6, 2,
-    2, 6, 7, 2, 7, 3,
-    3, 7, 4, 3, 4, 0,
+    0, 3, 7, 0, 7, 4,
   ]);
   geometry.computeVertexNormals();
   return geometry;
@@ -1583,35 +1648,20 @@ function makeHumanFigure({
   const pelvisRoot = new THREE.Group();
   pelvisRoot.name = "pelvis-root";
   pelvisRoot.position.y = 0.96;
-  const hip = new THREE.Mesh(sharedGeometry("player-hip", () => new THREE.CapsuleGeometry(0.23, 0.2, 2, 6)), shortsMaterial);
-  hip.scale.set(1.45, 0.78, 0.9);
+  const hip = new THREE.Mesh(sharedGeometry("player-hip-athletic", createPelvisGeometry), shortsMaterial);
   hip.position.y = 0;
   const torsoRoot = new THREE.Group();
   torsoRoot.name = "torso-root";
   torsoRoot.position.y = 1.02;
-  const waist = new THREE.Mesh(sharedGeometry("player-waist", () => new THREE.CapsuleGeometry(0.22, 0.3, 2, 6)), shirtMaterial);
-  waist.scale.set(1.2, 1, 0.82);
-  waist.position.y = 0.2;
-  const torso = new THREE.Mesh(sharedGeometry("player-torso", createTorsoGeometry), shirtMaterial);
+  const torso = new THREE.Mesh(sharedGeometry("player-torso-athletic", createTorsoGeometry), shirtMaterial);
   torso.name = "torso";
-  torso.position.y = 0.66;
-  torso.scale.set(1.03, 0.9, 0.8);
+  torso.position.y = 0.68;
   const chestRoot = new THREE.Group();
   chestRoot.name = "chest-root";
   chestRoot.position.y = 0.98;
-  const chestVolume = new THREE.Mesh(sharedGeometry("player-chest-volume", () => new THREE.CapsuleGeometry(0.25, 0.4, 2, 7)), shirtMaterial);
-  chestVolume.scale.set(1.48, 0.9, 0.78);
-  chestVolume.position.y = -0.2;
-  const shoulderBand = new THREE.Mesh(sharedGeometry("player-shoulder-band", () => new THREE.CapsuleGeometry(0.14, 0.88, 2, 6)), trimMaterial);
-  shoulderBand.rotation.z = Math.PI / 2;
-  shoulderBand.scale.z = 0.7;
-  shoulderBand.position.y = 0.02;
   const collar = new THREE.Mesh(sharedGeometry("player-collar", () => new THREE.TorusGeometry(0.16, 0.034, 5, 10, Math.PI)), trimMaterial);
   collar.rotation.x = Math.PI / 2;
   collar.position.set(0, 0.14, 0.23);
-  const shortsMesh = new THREE.Mesh(sharedGeometry("player-shorts", () => new THREE.CapsuleGeometry(0.26, 0.3, 2, 6)), shortsMaterial);
-  shortsMesh.scale.set(1.5, 0.85, 0.82);
-  shortsMesh.position.y = -0.08;
   const headRoot = new THREE.Group();
   headRoot.name = "head-root";
   headRoot.position.y = 0.24;
@@ -1625,14 +1675,22 @@ function makeHumanFigure({
   const hairCap = new THREE.Mesh(sharedGeometry("player-hair-cap", () => new THREE.SphereGeometry(0.26, 7, 4, 0, Math.PI * 2, 0, Math.PI / 2)), hairMaterial);
   hairCap.scale.set(0.88, 0.5, 0.94);
   hairCap.position.y = 0.48;
+  const jaw = new THREE.Mesh(sharedGeometry("player-jaw", () => new THREE.SphereGeometry(0.19, 7, 5)), skinMaterial);
+  jaw.scale.set(0.88, 0.72, 0.84);
+  jaw.position.set(0, 0.14, 0.02);
+  const nose = new THREE.Mesh(sharedGeometry("player-nose", () => new THREE.ConeGeometry(0.035, 0.085, 4)), skinMaterial);
+  nose.rotation.x = Math.PI / 2;
+  nose.position.set(0, 0.27, 0.245);
 
   [-1, 1].forEach((side) => {
     const shoulder = new THREE.Group();
     shoulder.name = side < 0 ? "left-arm" : "right-arm";
     shoulder.position.set(side * 0.5, 0, 0.01);
     shoulder.rotation.z = side * 0.12;
-    const upperArm = new THREE.Mesh(sharedGeometry("player-upper-arm", () => new THREE.CapsuleGeometry(0.105, 0.48, 2, 6)), shirtMaterial);
-    upperArm.position.y = -0.24;
+    const sleeve = new THREE.Mesh(sharedGeometry("player-shirt-sleeve", () => new THREE.CapsuleGeometry(0.12, 0.16, 2, 7)), shirtMaterial);
+    sleeve.position.y = -0.1;
+    const upperArm = new THREE.Mesh(sharedGeometry("player-upper-arm", () => new THREE.CapsuleGeometry(0.098, 0.28, 2, 7)), skinMaterial);
+    upperArm.position.y = -0.31;
     const elbow = new THREE.Group();
     elbow.name = side < 0 ? "left-elbow" : "right-elbow";
     elbow.position.y = -0.49;
@@ -1643,7 +1701,7 @@ function makeHumanFigure({
     hand.scale.set(0.82, 1.12, 0.72);
     hand.position.y = -0.43;
     elbow.add(forearm, hand);
-    shoulder.add(upperArm, elbow);
+    shoulder.add(sleeve, upperArm, elbow);
     chestRoot.add(shoulder);
   });
 
@@ -1666,11 +1724,9 @@ function makeHumanFigure({
     const ankle = new THREE.Group();
     ankle.name = side < 0 ? "left-foot" : "right-foot";
     ankle.position.y = -0.62;
-    const bootMesh = new THREE.Mesh(sharedGeometry("player-boot", () => new THREE.CapsuleGeometry(0.12, 0.28, 2, 6)), bootMaterial);
+    const bootMesh = new THREE.Mesh(sharedGeometry("player-football-boot", createFootballBootGeometry), bootMaterial);
     bootMesh.name = side < 0 ? "left-boot" : "right-boot";
-    bootMesh.rotation.x = Math.PI / 2;
-    bootMesh.scale.set(0.9, 1, 0.72);
-    bootMesh.position.set(0, -0.03, 0.16);
+    bootMesh.position.set(0, -0.04, 0.13);
     ankle.add(bootMesh);
     knee.add(kneecap, calf, ankle);
     leg.add(shortsLeg, thigh, knee);
@@ -1679,20 +1735,20 @@ function makeHumanFigure({
 
   [-1, 1].forEach((side) => {
     const eye = new THREE.Mesh(sharedGeometry("player-eye", () => new THREE.SphereGeometry(0.025, 4, 3)), featureMaterial);
-    eye.position.set(side * 0.072, 0.32, 0.36);
+    eye.position.set(side * 0.072, 0.32, 0.225);
     headRoot.add(eye);
   });
   const mouth = new THREE.Mesh(sharedGeometry("player-mouth", () => new THREE.BoxGeometry(0.1, 0.012, 0.01)), featureMaterial);
-  mouth.position.set(0, 0.17, 0.37);
+  mouth.position.set(0, 0.17, 0.235);
 
-  headRoot.add(neck, head, hairCap, mouth);
-  chestRoot.add(chestVolume, shoulderBand, collar, headRoot);
-  torsoRoot.add(waist, torso, chestRoot);
-  pelvisRoot.add(hip, shortsMesh);
+  headRoot.add(neck, head, jaw, hairCap, nose, mouth);
+  chestRoot.add(collar, headRoot);
+  torsoRoot.add(torso, chestRoot);
+  pelvisRoot.add(hip);
   bodyRoot.add(pelvisRoot, torsoRoot);
   if (numberPanel) bodyRoot.add(numberPanel);
   group.add(bodyRoot);
-  group.scale.set(0.9, 1.1, 0.9);
+  group.scale.set(0.9, 1.12, 0.9);
 
   const receiverMaterial = sharedBasicMaterial("#67e8f9");
   receiverMaterial.transparent = true;
@@ -2160,12 +2216,12 @@ function stadiumRingGeometry(
 function advertisingBrandFontSize(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement, brandName: string) {
   const horizontalPadding = canvas.width * 0.04;
   const maximumTextWidth = canvas.width - horizontalPadding * 2;
-  let fontSize = Math.floor(canvas.height * 0.76);
+  let fontSize = Math.floor(canvas.height * 0.92);
   do {
-    context.font = `900 ${fontSize}px Arial, sans-serif`;
+    context.font = `900 ${fontSize}px "Arial Black", Arial, sans-serif`;
     if (context.measureText(brandName).width <= maximumTextWidth) break;
     fontSize -= 4;
-  } while (fontSize > 80);
+  } while (fontSize > 92);
   return fontSize;
 }
 
@@ -2175,11 +2231,16 @@ function paintAdvertisingBrand(canvas: HTMLCanvasElement, brandIndex: number) {
   const brand = ADVERTISING_BRANDS[brandIndex % ADVERTISING_BRANDS.length];
   context.fillStyle = brand.background;
   context.fillRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = brand.accent;
   context.textAlign = "center";
   context.textBaseline = "middle";
   const fontSize = advertisingBrandFontSize(context, canvas, brand.name);
-  context.fillText(brand.name, canvas.width / 2, canvas.height / 2);
+  context.font = `900 ${fontSize}px "Arial Black", Arial, sans-serif`;
+  context.lineJoin = "round";
+  context.lineWidth = Math.max(4, fontSize * 0.045);
+  context.strokeStyle = "rgba(0, 0, 0, 0.52)";
+  context.strokeText(brand.name, canvas.width / 2, canvas.height * 0.505);
+  context.fillStyle = brand.accent;
+  context.fillText(brand.name, canvas.width / 2, canvas.height * 0.505);
   return fontSize;
 }
 
@@ -2206,8 +2267,8 @@ function drawAdvertisingBrand(texture: THREE.CanvasTexture, brandIndex: number) 
 
 function createAdvertisingBoardTexture() {
   const canvas = document.createElement("canvas");
-  canvas.width = 2048;
-  canvas.height = 320;
+  canvas.width = AD_BOARD_TEXTURE_WIDTH;
+  canvas.height = AD_BOARD_TEXTURE_HEIGHT;
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
@@ -2221,6 +2282,7 @@ function createAdvertisingBoardTexture() {
   texture.userData.advertisingFontSizes = context
     ? ADVERTISING_BRANDS.map((brand) => advertisingBrandFontSize(context, canvas, brand.name))
     : [];
+  texture.userData.advertisingCanvasAspect = canvas.width / canvas.height;
   return texture;
 }
 
@@ -2608,6 +2670,9 @@ function updateAdvertisingBoards(active: MatchRuntime, dt: number) {
   active.renderer.domElement.dataset.adBoardDisplayY = AD_BOARD_DISPLAY_Y.toFixed(3);
   active.renderer.domElement.dataset.adBrandFontSize = String(active.adBoardTexture.userData.advertisingFontSize ?? "");
   active.renderer.domElement.dataset.adBrandFontSizes = (active.adBoardTexture.userData.advertisingFontSizes as number[] | undefined)?.join(",") ?? "";
+  active.renderer.domElement.dataset.adBoardTextureSize = `${AD_BOARD_TEXTURE_WIDTH}x${AD_BOARD_TEXTURE_HEIGHT}`;
+  active.renderer.domElement.dataset.adBoardTextureRepeats = String(AD_BOARD_TEXTURE_REPEATS);
+  active.renderer.domElement.dataset.adBoardTextureAspect = Number(active.adBoardTexture.userData.advertisingCanvasAspect ?? 0).toFixed(3);
   active.renderer.domElement.dataset.adBoardMipmaps = String(active.adBoardTexture.generateMipmaps);
   active.renderer.domElement.dataset.adBoardCornerRadius = AD_BOARD_CORNER_RADIUS.toFixed(2);
   active.renderer.domElement.dataset.adBoardCornerSegments = String(AD_BOARD_CORNER_SEGMENTS);
@@ -10179,23 +10244,27 @@ function updateStuckState(player: PlayerBody, intent: THREE.Vector3, active: Mat
 
 function animatePlayer(player: PlayerBody, dt: number) {
   const speed = Math.max(player.vel.length(), player.animationSpeed);
-  const moving = speed > 0.24;
-  const locomotionBlend = clamp((speed - 0.24) / 8.5, 0, 1);
+  const moving = speed > 0.18;
+  const locomotionBlend = clamp((speed - 0.18) / 8.5, 0, 1);
   const horizontalSpeed = Math.hypot(player.vel.x, player.vel.z);
   const forwardX = Math.sin(player.heading);
   const forwardZ = Math.cos(player.heading);
   const forwardMotion = horizontalSpeed > 0.08 ? (player.vel.x * forwardX + player.vel.z * forwardZ) / horizontalSpeed : 1;
   const lateralMotion = horizontalSpeed > 0.08 ? (player.vel.x * forwardZ - player.vel.z * forwardX) / horizontalSpeed : 0;
-  const gaitRatePerMeter = player.role === "keeper" ? 1.7 : 1.9 + locomotionBlend * 0.5;
+  const gaitRatePerMeter = player.role === "keeper" ? 1.62 : 1.72 + locomotionBlend * 0.42;
   player.runPhase += speed * dt * gaitRatePerMeter;
   const gaitSin = Math.sin(player.runPhase);
   const gaitCos = Math.cos(player.runPhase);
+  const gaitWave = gaitSin + Math.sin(player.runPhase * 2) * 0.1;
   const directionStrideScale = forwardMotion < -0.15 ? 0.62 : Math.abs(lateralMotion) > 0.65 ? 0.72 : 1;
-  const strideScale = (player.role === "keeper" ? 0.28 + locomotionBlend * 0.18 : 0.34 + locomotionBlend * 0.56) * directionStrideScale;
-  const stride = moving ? gaitSin * strideScale : 0;
-  const leftKneeFlex = moving ? 0.12 + Math.max(0, gaitSin) * (0.25 + locomotionBlend * 0.5) : 0.08;
-  const rightKneeFlex = moving ? 0.12 + Math.max(0, -gaitSin) * (0.25 + locomotionBlend * 0.5) : 0.08;
-  const armSwing = -stride * 0.72;
+  const strideScale = (player.role === "keeper" ? 0.24 + locomotionBlend * 0.22 : 0.3 + locomotionBlend * 0.64) * directionStrideScale;
+  const stride = moving ? gaitWave * strideScale : 0;
+  const leftKneeFlex = moving ? 0.1 + Math.max(0, gaitSin) * (0.34 + locomotionBlend * 0.56) : 0.09;
+  const rightKneeFlex = moving ? 0.1 + Math.max(0, -gaitSin) * (0.34 + locomotionBlend * 0.56) : 0.09;
+  const armSwing = -stride * (0.68 + locomotionBlend * 0.1);
+  const defensiveShuffle = player.role === "keeper"
+    || player.challengeCommitTimer > 0.04
+    || (player.blockTimer > 0 && player.forcedMoveTimer <= 0);
   const {
     bodyRoot,
     pelvis,
@@ -10215,12 +10284,12 @@ function animatePlayer(player: PlayerBody, dt: number) {
   } = player.parts;
   if (bodyRoot) {
     const turnLean = clamp(player.turnRate * -0.018, -0.11, 0.11);
-    bodyRoot.position.x = moving ? gaitCos * (player.role === "keeper" ? 0.009 : 0.025) : 0;
-    bodyRoot.position.y = moving ? Math.abs(Math.sin(player.runPhase * 2)) * (0.022 + locomotionBlend * 0.025) : 0;
+    bodyRoot.position.x = moving ? gaitCos * (player.role === "keeper" ? 0.008 : 0.018) : 0;
+    bodyRoot.position.y = moving ? Math.abs(Math.sin(player.runPhase * 2)) * (0.016 + locomotionBlend * 0.02) : 0;
     bodyRoot.position.z = 0;
     bodyRoot.rotation.x = moving && player.role !== "keeper"
-      ? (forwardMotion < -0.15 ? 0.025 : -0.035 - locomotionBlend * 0.09)
-      : 0;
+      ? (forwardMotion < -0.15 ? 0.035 : -0.045 - locomotionBlend * 0.085)
+      : defensiveShuffle ? -0.045 : 0;
     bodyRoot.rotation.y = 0;
     bodyRoot.rotation.z = moving ? gaitCos * 0.018 + turnLean - lateralMotion * 0.045 : 0;
     if (player.celebrateTimer > 0) {
@@ -10239,8 +10308,9 @@ function animatePlayer(player: PlayerBody, dt: number) {
     }
   }
   if (pelvis) {
-    pelvis.rotation.x = moving ? -0.018 * locomotionBlend : 0;
-    pelvis.rotation.y = moving ? gaitSin * (0.045 + locomotionBlend * 0.045) : 0;
+    pelvis.position.y = defensiveShuffle ? -0.045 : 0;
+    pelvis.rotation.x = moving ? -0.02 * locomotionBlend : 0;
+    pelvis.rotation.y = moving ? gaitSin * (0.035 + locomotionBlend * 0.05) : 0;
     pelvis.rotation.z = moving ? gaitCos * 0.018 : 0;
   }
   if (chest) {
@@ -10253,18 +10323,24 @@ function animatePlayer(player: PlayerBody, dt: number) {
     head.rotation.x = moving ? Math.sin(player.runPhase * 2) * 0.012 : 0;
     head.rotation.y = moving ? gaitSin * 0.015 : 0;
   }
-  if (leftLeg) leftLeg.rotation.x = stride;
-  if (rightLeg) rightLeg.rotation.x = -stride;
+  if (leftLeg) {
+    leftLeg.rotation.x = stride;
+    leftLeg.rotation.z = defensiveShuffle ? -0.07 : 0;
+  }
+  if (rightLeg) {
+    rightLeg.rotation.x = -stride;
+    rightLeg.rotation.z = defensiveShuffle ? 0.07 : 0;
+  }
   if (leftKnee) leftKnee.rotation.x = leftKneeFlex;
   if (rightKnee) rightKnee.rotation.x = rightKneeFlex;
   if (leftFoot) {
     const planted = moving && gaitSin < -0.18;
-    leftFoot.rotation.x = planted ? clamp(-stride * 0.5 - leftKneeFlex * 0.28, -0.28, 0.28) : -0.12 + locomotionBlend * 0.08;
+    leftFoot.rotation.x = planted ? clamp(-stride * 0.55 - leftKneeFlex * 0.24, -0.3, 0.28) : -0.1 + locomotionBlend * 0.11;
     leftFoot.rotation.y = 0;
   }
   if (rightFoot) {
     const planted = moving && gaitSin > 0.18;
-    rightFoot.rotation.x = planted ? clamp(stride * 0.5 - rightKneeFlex * 0.28, -0.28, 0.28) : -0.12 + locomotionBlend * 0.08;
+    rightFoot.rotation.x = planted ? clamp(stride * 0.55 - rightKneeFlex * 0.24, -0.3, 0.28) : -0.1 + locomotionBlend * 0.11;
     rightFoot.rotation.y = 0;
   }
   if (leftArm) {
@@ -10275,8 +10351,18 @@ function animatePlayer(player: PlayerBody, dt: number) {
     rightArm.rotation.x = -armSwing;
     rightArm.rotation.z = 0.11 - (moving ? gaitSin * 0.018 : 0);
   }
-  if (leftElbow) leftElbow.rotation.x = 0.5 + locomotionBlend * 0.22 + Math.max(0, -armSwing) * 0.32;
-  if (rightElbow) rightElbow.rotation.x = 0.5 + locomotionBlend * 0.22 + Math.max(0, armSwing) * 0.32;
+  if (leftElbow) leftElbow.rotation.x = 0.62 + locomotionBlend * 0.22 + Math.max(0, -armSwing) * 0.28;
+  if (rightElbow) rightElbow.rotation.x = 0.62 + locomotionBlend * 0.22 + Math.max(0, armSwing) * 0.28;
+
+  if (player.role === "keeper" && player.catchTimer <= 0 && player.diveTimer <= 0 && player.keeperAction === "none") {
+    if (bodyRoot) bodyRoot.rotation.x -= 0.055;
+    if (leftArm) { leftArm.rotation.x -= 0.32; leftArm.rotation.z = -0.3; }
+    if (rightArm) { rightArm.rotation.x -= 0.32; rightArm.rotation.z = 0.3; }
+    if (leftElbow) leftElbow.rotation.x = 0.82;
+    if (rightElbow) rightElbow.rotation.x = 0.82;
+    if (leftKnee) leftKnee.rotation.x += 0.14;
+    if (rightKnee) rightKnee.rotation.x += 0.14;
+  }
 
   if (player.passRequestTimer > 0 && player.kickTimer <= 0 && player.tackleTimer <= 0 && player.catchTimer <= 0) {
     const requestPose = Math.sin(clamp(player.passRequestTimer / 0.34, 0, 1) * Math.PI);
@@ -10296,19 +10382,20 @@ function animatePlayer(player: PlayerBody, dt: number) {
 
   if (player.kickTimer > 0) {
     const progress = clamp(1 - player.kickTimer / 0.46, 0, 1);
-    const backswing = progress < 0.35 ? -progress * 1.9 : 0;
-    const followThrough = progress >= 0.35 ? Math.sin((progress - 0.35) / 0.65 * Math.PI) * 1.35 : 0;
+    const backswing = progress < 0.34 ? -Math.sin(progress / 0.34 * Math.PI / 2) * 0.92 : 0;
+    const followThrough = progress >= 0.34 ? Math.sin((progress - 0.34) / 0.66 * Math.PI) * 1.42 : 0;
     const kickArc = backswing + followThrough;
     if (rightLeg) rightLeg.rotation.x = kickArc;
-    if (rightKnee) rightKnee.rotation.x = Math.max(0.08, -kickArc * 0.45);
-    if (leftLeg) leftLeg.rotation.x = -0.22;
-    if (leftKnee) leftKnee.rotation.x = 0.34;
+    if (rightKnee) rightKnee.rotation.x = backswing < 0 ? 0.72 : Math.max(0.08, 0.36 - followThrough * 0.2);
+    if (leftLeg) leftLeg.rotation.x = -0.16;
+    if (leftKnee) leftKnee.rotation.x = 0.28;
     if (leftFoot) leftFoot.rotation.x = 0.12;
     if (rightFoot) rightFoot.rotation.x = -0.18 + followThrough * 0.12;
     if (pelvis) pelvis.rotation.y += 0.24 * Math.sin(progress * Math.PI);
     if (chest) {
       chest.rotation.y -= 0.2 * Math.sin(progress * Math.PI);
-      chest.rotation.z += 0.07;
+      chest.rotation.z += 0.08;
+      chest.rotation.x -= 0.08 * Math.sin(progress * Math.PI);
     }
     if (bodyRoot) {
       bodyRoot.rotation.z += 0.06;
@@ -10318,8 +10405,9 @@ function animatePlayer(player: PlayerBody, dt: number) {
   if (player.headerTimer > 0) {
     const headerPose = Math.sin((1 - player.headerTimer / 0.42) * Math.PI);
     if (bodyRoot) {
-      bodyRoot.position.y += 0.34 * headerPose;
-      bodyRoot.rotation.x = -0.42 * headerPose;
+      bodyRoot.position.y += 0.38 * headerPose;
+      bodyRoot.position.z -= 0.08 * headerPose;
+      bodyRoot.rotation.x = -0.48 * headerPose;
       bodyRoot.rotation.z += (player.number % 2 === 0 ? 0.08 : -0.08) * headerPose;
     }
     if (leftArm) {
@@ -15816,7 +15904,7 @@ function formatSoccerClock(value: number) {
 function SoccerBallLogo() {
   return (
     <div className="grid h-28 w-28 place-items-center rounded-full bg-white shadow-2xl">
-      <Image src="/favicon.svg" width={104} height={104} priority alt="Black and white football" />
+      <Image src="/favicon.svg" width={104} height={104} priority alt="Classic black and white soccer ball" />
     </div>
   );
 }
