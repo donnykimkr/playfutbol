@@ -450,6 +450,8 @@ const AD_BOARD_INNER_Z = FIELD_L / 2 + TOUCHLINE_MARGIN;
 const AD_BOARD_HEIGHT = 2.25;
 const AD_BOARD_BASE_Y = 0.12;
 const AD_BOARD_THICKNESS = 0.2;
+const AD_BOARD_FACE_OFFSET = 0.05;
+const AD_BOARD_DISPLAY_RENDER_ORDER = 4;
 const AD_BOARD_COLLISION_TOP = AD_BOARD_BASE_Y + AD_BOARD_HEIGHT + BALL_RADIUS;
 const ADVERTISING_BRANDS = [
   { name: "NOVA STRIDE", category: "PERFORMANCE", background: "#0b1833", accent: "#4de8ff" },
@@ -2092,10 +2094,9 @@ function stadiumRingGeometry(
   return geometry;
 }
 
-function drawAdvertisingBrand(texture: THREE.CanvasTexture, brandIndex: number) {
-  const canvas = texture.image as HTMLCanvasElement;
+function paintAdvertisingBrand(canvas: HTMLCanvasElement, brandIndex: number) {
   const context = canvas.getContext("2d");
-  if (!context) return;
+  if (!context) return false;
   const brand = ADVERTISING_BRANDS[brandIndex % ADVERTISING_BRANDS.length];
   context.fillStyle = brand.background;
   context.fillRect(0, 0, canvas.width, canvas.height);
@@ -2107,6 +2108,25 @@ function drawAdvertisingBrand(texture: THREE.CanvasTexture, brandIndex: number) 
   context.fillText(brand.name, canvas.width / 2, canvas.height * 0.45);
   context.font = "700 42px Arial, sans-serif";
   context.fillText(brand.category, canvas.width / 2, canvas.height * 0.76);
+  return true;
+}
+
+function drawAdvertisingBrand(texture: THREE.CanvasTexture, brandIndex: number) {
+  const canvas = texture.image as HTMLCanvasElement;
+  let stagingCanvas = texture.userData.advertisingStagingCanvas as HTMLCanvasElement | undefined;
+  if (!stagingCanvas) {
+    stagingCanvas = document.createElement("canvas");
+    stagingCanvas.width = canvas.width;
+    stagingCanvas.height = canvas.height;
+    texture.userData.advertisingStagingCanvas = stagingCanvas;
+  }
+  if (!paintAdvertisingBrand(stagingCanvas, brandIndex)) return;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  context.save();
+  context.globalCompositeOperation = "copy";
+  context.drawImage(stagingCanvas, 0, 0);
+  context.restore();
   texture.needsUpdate = true;
 }
 
@@ -2119,7 +2139,8 @@ function createAdvertisingBoardTexture() {
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
   texture.repeat.set(7, 1);
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
   drawAdvertisingBrand(texture, 0);
   return texture;
@@ -2129,7 +2150,16 @@ function addLightweightStadium(scene: THREE.Scene) {
   const stadium = new THREE.Group();
   stadium.name = "lightweight-stadium";
   const adTexture = createAdvertisingBoardTexture();
-  const adMaterial = new THREE.MeshBasicMaterial({ map: adTexture, color: "#ffffff", side: THREE.FrontSide });
+  const adMaterial = new THREE.MeshBasicMaterial({
+    map: adTexture,
+    color: "#ffffff",
+    side: THREE.FrontSide,
+    depthTest: true,
+    depthWrite: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -3,
+  });
   const adBackingMaterial = new THREE.MeshLambertMaterial({ color: "#101923" });
   const adTopMaterial = new THREE.MeshLambertMaterial({ color: "#101923" });
   const runoffWidth = FIELD_W + TOUCHLINE_MARGIN * 2;
@@ -2150,11 +2180,25 @@ function addLightweightStadium(scene: THREE.Scene) {
     goalDisplay.position.set(
       0,
       AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2 - 0.02,
-      goalBoardZ - side * (AD_BOARD_THICKNESS / 2 + 0.004),
+      goalBoardZ - side * (AD_BOARD_THICKNESS / 2 + AD_BOARD_FACE_OFFSET),
     );
     goalDisplay.rotation.y = side > 0 ? Math.PI : 0;
     goalDisplay.name = `animated-ad-board-goal-${side}`;
+    goalDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
     stadium.add(goalDisplay);
+    const goalOuterDisplay = new THREE.Mesh(
+      new THREE.PlaneGeometry(runoffWidth, AD_BOARD_HEIGHT - 0.24),
+      adMaterial,
+    );
+    goalOuterDisplay.position.set(
+      0,
+      AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2 - 0.02,
+      goalBoardZ + side * (AD_BOARD_THICKNESS / 2 + AD_BOARD_FACE_OFFSET),
+    );
+    goalOuterDisplay.rotation.y = side > 0 ? 0 : Math.PI;
+    goalOuterDisplay.name = `animated-ad-board-goal-outer-${side}`;
+    goalOuterDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
+    stadium.add(goalOuterDisplay);
     const goalTop = new THREE.Mesh(
       new THREE.BoxGeometry(runoffWidth + 0.46, 0.08, AD_BOARD_THICKNESS + 0.08),
       adTopMaterial,
@@ -2176,13 +2220,27 @@ function addLightweightStadium(scene: THREE.Scene) {
       adMaterial,
     );
     sideDisplay.position.set(
-      sideBoardX - side * (AD_BOARD_THICKNESS / 2 + 0.004),
+      sideBoardX - side * (AD_BOARD_THICKNESS / 2 + AD_BOARD_FACE_OFFSET),
       AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2 - 0.02,
       0,
     );
     sideDisplay.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
     sideDisplay.name = `animated-ad-board-side-${side}`;
+    sideDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
     stadium.add(sideDisplay);
+    const sideOuterDisplay = new THREE.Mesh(
+      new THREE.PlaneGeometry(runoffLength, AD_BOARD_HEIGHT - 0.24),
+      adMaterial,
+    );
+    sideOuterDisplay.position.set(
+      sideBoardX + side * (AD_BOARD_THICKNESS / 2 + AD_BOARD_FACE_OFFSET),
+      AD_BOARD_BASE_Y + AD_BOARD_HEIGHT / 2 - 0.02,
+      0,
+    );
+    sideOuterDisplay.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+    sideOuterDisplay.name = `animated-ad-board-side-outer-${side}`;
+    sideOuterDisplay.renderOrder = AD_BOARD_DISPLAY_RENDER_ORDER;
+    stadium.add(sideOuterDisplay);
     const sideTop = new THREE.Mesh(
       new THREE.BoxGeometry(AD_BOARD_THICKNESS + 0.08, 0.08, runoffLength + 0.46),
       adTopMaterial,
@@ -2338,6 +2396,8 @@ function updateAdvertisingBoards(active: MatchRuntime, dt: number) {
   active.renderer.domElement.dataset.adBrand = ADVERTISING_BRANDS[active.adBrandIndex].name;
   active.renderer.domElement.dataset.adBrandIndex = String(active.adBrandIndex);
   active.renderer.domElement.dataset.adBrandSeconds = active.adBrandTimer.toFixed(2);
+  active.renderer.domElement.dataset.adBoardFaceOffset = AD_BOARD_FACE_OFFSET.toFixed(3);
+  active.renderer.domElement.dataset.adBoardMipmaps = String(active.adBoardTexture.generateMipmaps);
 }
 
 function resolveAdvertisingBoardCollision(active: MatchRuntime) {
