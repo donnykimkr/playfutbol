@@ -2101,7 +2101,6 @@ function paintAdvertisingBrand(canvas: HTMLCanvasElement, brandIndex: number) {
   context.fillStyle = brand.background;
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = brand.accent;
-  context.fillRect(0, canvas.height - 12, canvas.width, 12);
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.font = "900 126px Arial, sans-serif";
