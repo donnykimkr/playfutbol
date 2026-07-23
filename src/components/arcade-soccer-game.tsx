@@ -5631,13 +5631,15 @@ export function ArcadeSoccerGame() {
               pendingKeeperBuildupCheck.minDistance,
               pendingKeeper.pos.distanceTo(new THREE.Vector3(active.ballPos.x, 0, active.ballPos.z)),
             );
-            pendingKeeperBuildupCheck.usedHands ||= pendingKeeper.catchTimer > 0.01
-              || pendingKeeper.keeperAction === "secure"
-              || pendingKeeper.keeperAction === "smother";
             pendingKeeperBuildupCheck.handledWithFoot ||= (
               active.renderer.domElement.dataset.keeperBackPassRestrictedId === pendingKeeperBuildupCheck.keeperId
               && active.renderer.domElement.dataset.keeperBackPassHandledWith === "foot"
             );
+            if (!pendingKeeperBuildupCheck.handledWithFoot) {
+              pendingKeeperBuildupCheck.usedHands ||= pendingKeeper.catchTimer > 0.01
+                || pendingKeeper.keeperAction === "secure"
+                || pendingKeeper.keeperAction === "smother";
+            }
             if (
               active.ballOwnerId === pendingKeeperBuildupCheck.keeperId
               || active.renderer.domElement.dataset.lastReceived === pendingKeeperBuildupCheck.keeperId
@@ -10276,6 +10278,23 @@ function handleGoalkeeperActions(active: MatchRuntime) {
       }
       if (!mayUseHands && keeper.catchTimer > 0) keeper.catchTimer = 0;
       if (intendedTeamBackPass) {
+        const predictedReception = predictLooseBallInterceptPoint(
+          active,
+          clamp(distanceToBall / Math.max(active.ballVel.length(), 8), 0.08, 0.72),
+        ).setY(0);
+        predictedReception.x = clamp(predictedReception.x, -FIELD_W / 2 + 2.4, FIELD_W / 2 - 2.4);
+        predictedReception.z = clamp(predictedReception.z, -FIELD_L / 2 + 2.4, FIELD_L / 2 - 2.4);
+        keeper.keeperAction = "intercept";
+        keeper.keeperActionTimer = 0.32;
+        keeper.keeperClaimPoint.copy(predictedReception);
+        const receiveMove = predictedReception.clone().sub(keeper.pos);
+        if (receiveMove.lengthSq() > 0.08) {
+          const receiveDistance = receiveMove.length();
+          keeper.vel.add(receiveMove.normalize().multiplyScalar(clamp(receiveDistance * 0.11, 0.34, 0.92)));
+          capKeeperMotion(keeper);
+          setPlayerHeading(keeper, headingFromDirection(receiveMove), 1 / 60, 8.2);
+        }
+        active.renderer.domElement.dataset.keeperBackPassReceiveDistance = distanceToBall.toFixed(3);
         if (distanceToBall < 2.15 && active.ballPos.y < 1.62) {
           keeper.catchTimer = 0;
           if (takePossession(keeper, active)) {
