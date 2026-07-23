@@ -10226,9 +10226,7 @@ function handleGoalkeeperActions(active: MatchRuntime) {
       const ownZ = teamGoalZ(keeper.team, active.half);
       const intoField = -Math.sign(ownZ) || 1;
       const shotSpeed = active.ballVel.length();
-      const intendedTeamBackPass = active.ballState === "kicked"
-        && active.intendedReceiverId === keeper.id
-        && active.lastTouchTeam === keeper.team;
+      const intendedTeamBackPass = deliberateFootBackPassRestriction(keeper, active);
       const distanceFromGoal = Math.abs(active.ballPos.z - ownZ);
       const keeperToBall = flatBall.clone().sub(keeper.pos);
       const distanceToBall = keeperToBall.length();
@@ -10278,10 +10276,15 @@ function handleGoalkeeperActions(active: MatchRuntime) {
       }
       if (!mayUseHands && keeper.catchTimer > 0) keeper.catchTimer = 0;
       if (intendedTeamBackPass) {
-        const predictedReception = predictLooseBallInterceptPoint(
-          active,
-          clamp(distanceToBall / Math.max(active.ballVel.length(), 8), 0.08, 0.72),
-        ).setY(0);
+        const flatVelocity = active.ballVel.clone().setY(0);
+        const receptionLeadTime = clamp(
+          distanceToBall / Math.max(flatVelocity.length(), 14),
+          0.04,
+          0.36,
+        );
+        const predictedReception = flatBall.clone()
+          .addScaledVector(flatVelocity, receptionLeadTime)
+          .setY(0);
         predictedReception.x = clamp(predictedReception.x, -FIELD_W / 2 + 2.4, FIELD_W / 2 - 2.4);
         predictedReception.z = clamp(predictedReception.z, -FIELD_L / 2 + 2.4, FIELD_L / 2 - 2.4);
         keeper.keeperAction = "intercept";
