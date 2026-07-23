@@ -4377,7 +4377,10 @@ export function ArcadeSoccerGame() {
     active.fullTimeHandled = false;
     active.matchUpdatesThisFrame = 0;
     active.renderer.info.reset();
-    setFormationHomes(active.players, 1);
+      // Rebuild the roster from the saved team setups so formation changes made
+      // between matches replace the previous match's slot layout.
+      replaceRuntimePlayers(active);
+      setFormationHomes(active.players, 1);
     keysRef.current.clear();
     scoreUiRef.current = { home: 0, away: 0 };
     gameClockUiRef.current = 0;
