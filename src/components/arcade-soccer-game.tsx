@@ -507,8 +507,13 @@ const AD_BOARD_TEXTURE_HEIGHT = 64;
 const GRASS_DARK_COLOR = "#176b37";
 const GRASS_LIGHT_COLOR = "#218247";
 const GRASS_STRIPE_WIDTH = 8;
-const PITCH_SURFACE_Y = 0.012;
-const LANDING_MARKER_Y = 0.035;
+const FLOOR_LAYER_MIN_SEPARATION = 0.05;
+const STADIUM_BASE_TOP_Y = -0.055;
+const PITCH_SURFACE_Y = 0;
+const BLOB_SHADOW_Y = 0.055;
+const FIELD_MARKINGS_Y = 0.11;
+const LANDING_MARKER_Y = 0.17;
+const FLOOR_LAYER_NAMES = ["stadium-base-floor", "grass-surface", "field-markings"] as const;
 const HEAD_COLLIDER_RADIUS = 0.3;
 const LOCOMOTION_STRIDE_LENGTHS = {
   walk: 2,
@@ -732,7 +737,7 @@ function applyReplayFrame(active: MatchRuntime, a: ReplayFrame, b: ReplayFrame, 
 
 function syncBallVisual(active: MatchRuntime) {
   active.ball.position.copy(active.ballPos);
-  active.ballShadow.position.set(active.ballPos.x, 0.045, active.ballPos.z);
+  active.ballShadow.position.set(active.ballPos.x, BLOB_SHADOW_Y, active.ballPos.z);
   const height = Math.max(0, active.ballPos.y - BALL_RADIUS);
   const scale = clamp(1 - height * 0.09, 0.42, 1.18);
   active.ballShadow.scale.setScalar(scale);
@@ -1257,6 +1262,23 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
   active.scene.traverse(() => {
     sceneNodeCount += 1;
   });
+  active.scene.updateMatrixWorld(true);
+  const floorLayerCounts = Object.fromEntries(FLOOR_LAYER_NAMES.map((name) => [name, 0])) as Record<string, number>;
+  const floorLayerDiagnostics: Array<{ name: string; worldY: number; surfaceY: number }> = [];
+  const floorWorldPosition = new THREE.Vector3();
+  active.scene.traverse((object) => {
+    if (!FLOOR_LAYER_NAMES.includes(object.name as (typeof FLOOR_LAYER_NAMES)[number])) return;
+    floorLayerCounts[object.name] = (floorLayerCounts[object.name] ?? 0) + 1;
+    object.getWorldPosition(floorWorldPosition);
+    floorLayerDiagnostics.push({
+      name: object.name,
+      worldY: Number(floorWorldPosition.y.toFixed(3)),
+      surfaceY: Number((floorWorldPosition.y + Number(object.userData.floorSurfaceOffsetY ?? 0)).toFixed(3)),
+    });
+  });
+  const sortedFloorSurfaces = floorLayerDiagnostics.map(({ surfaceY }) => surfaceY).sort((a, b) => a - b);
+  const floorSeparations = sortedFloorSurfaces.slice(1).map((surfaceY, index) => surfaceY - sortedFloorSurfaces[index]);
+  const minimumFloorSeparation = floorSeparations.length > 0 ? Math.min(...floorSeparations) : 0;
   const canvas = active.renderer.domElement;
   canvas.dataset.phase = active.phase;
   canvas.dataset.ballState = active.ballState;
@@ -1276,6 +1298,15 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
   canvas.dataset.fullscreenListenerCount = String(runtimeLifecycleCounters.fullscreenListeners);
   canvas.dataset.p1Autopilot = String(active.p1Autopilot);
   canvas.dataset.sceneNodes = String(sceneNodeCount);
+  canvas.dataset.floorLayerCounts = JSON.stringify(floorLayerCounts);
+  canvas.dataset.floorLayerDiagnostics = JSON.stringify(floorLayerDiagnostics);
+  canvas.dataset.floorLayerMinimumSeparation = minimumFloorSeparation.toFixed(3);
+  canvas.dataset.floorLayerDuplicateCount = String(
+    Object.values(floorLayerCounts).reduce((total, count) => total + Math.max(0, count - 1), 0),
+  );
+  canvas.dataset.floorLayerOverlapCount = String(
+    floorSeparations.filter((separation) => separation < FLOOR_LAYER_MIN_SEPARATION).length,
+  );
   canvas.dataset.playerCount = String(active.players.length);
   canvas.dataset.haalandPlayers = JSON.stringify(active.players
     .filter((player) => player.profile === "haaland")
@@ -2128,7 +2159,7 @@ function createBlobShadow(radius: number, opacity: number) {
     }),
   );
   shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.045;
+  shadow.position.y = BLOB_SHADOW_Y;
   return shadow;
 }
 
@@ -2251,35 +2282,40 @@ function createKickTrajectoryPreview() {
   return { guide, line, endpoint, landingZone };
 }
 
-function addFieldMarking(scene: THREE.Scene, x: number, z: number, w: number, h: number) {
-  const material = new THREE.MeshBasicMaterial({ color: "#dffcff", transparent: true, opacity: 0.62 });
-  const top = new THREE.Mesh(new THREE.BoxGeometry(w, 0.035, 0.15), material);
+function addFieldMarking(
+  fieldMarkings: THREE.Group,
+  material: THREE.MeshBasicMaterial,
+  x: number,
+  z: number,
+  w: number,
+  h: number,
+) {
+  const top = new THREE.Mesh(new THREE.BoxGeometry(w, 0.025, 0.15), material);
   const bottom = top.clone();
-  const left = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.035, h), material);
+  const left = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.025, h), material);
   const right = left.clone();
-  top.position.set(x, 0.035, z - h / 2);
-  bottom.position.set(x, 0.035, z + h / 2);
-  left.position.set(x - w / 2, 0.035, z);
-  right.position.set(x + w / 2, 0.035, z);
-  scene.add(top, bottom, left, right);
+  top.position.set(x, 0, z - h / 2);
+  bottom.position.set(x, 0, z + h / 2);
+  left.position.set(x - w / 2, 0, z);
+  right.position.set(x + w / 2, 0, z);
+  fieldMarkings.add(top, bottom, left, right);
 }
 
-function addPitchBoundaryMarking(scene: THREE.Scene) {
-  const material = new THREE.MeshBasicMaterial({ color: "#dffcff", transparent: true, opacity: 0.62 });
-  const touchline = new THREE.BoxGeometry(0.15, 0.035, FIELD_L);
+function addPitchBoundaryMarking(fieldMarkings: THREE.Group, material: THREE.MeshBasicMaterial) {
+  const touchline = new THREE.BoxGeometry(0.15, 0.025, FIELD_L);
   [-1, 1].forEach((side) => {
     const line = new THREE.Mesh(touchline, material);
-    line.position.set(side * FIELD_W / 2, 0.035, 0);
-    scene.add(line);
+    line.position.set(side * FIELD_W / 2, 0, 0);
+    fieldMarkings.add(line);
   });
   const endSegmentWidth = (FIELD_W - GOAL_FRAME_OUTER_W) / 2;
   const endSegmentX = (FIELD_W + GOAL_FRAME_OUTER_W) / 4;
-  const endSegment = new THREE.BoxGeometry(endSegmentWidth, 0.035, 0.15);
+  const endSegment = new THREE.BoxGeometry(endSegmentWidth, 0.025, 0.15);
   [-1, 1].forEach((goalSide) => {
     [-1, 1].forEach((xSide) => {
       const line = new THREE.Mesh(endSegment, material);
-      line.position.set(xSide * endSegmentX, 0.035, goalSide * FIELD_L / 2);
-      scene.add(line);
+      line.position.set(xSide * endSegmentX, 0, goalSide * FIELD_L / 2);
+      fieldMarkings.add(line);
     });
   });
 }
@@ -2287,12 +2323,21 @@ function addPitchBoundaryMarking(scene: THREE.Scene) {
 function addPitch(scene: THREE.Scene) {
   const grassWidth = FIELD_W + TOUCHLINE_RUNOFF * 2;
   const grassLength = FIELD_L + GOAL_LINE_RUNOFF * 2;
+  const grassBaseHeight = 0.16;
   const grassBase = new THREE.Mesh(
-    new THREE.BoxGeometry(FIELD_W + TOUCHLINE_RUNOFF * 2, 0.16, FIELD_L + GOAL_LINE_RUNOFF * 2),
-    new THREE.MeshLambertMaterial({ color: GRASS_DARK_COLOR, side: THREE.FrontSide }),
+    new THREE.BoxGeometry(FIELD_W + TOUCHLINE_RUNOFF * 2, grassBaseHeight, FIELD_L + GOAL_LINE_RUNOFF * 2),
+    new THREE.MeshLambertMaterial({
+      color: GRASS_DARK_COLOR,
+      side: THREE.FrontSide,
+      transparent: false,
+      opacity: 1,
+      depthTest: true,
+      depthWrite: true,
+    }),
   );
-  grassBase.name = "continuous-grass-support-base";
-  grassBase.position.y = -0.08;
+  grassBase.name = "stadium-base-floor";
+  grassBase.position.y = STADIUM_BASE_TOP_Y - grassBaseHeight / 2;
+  grassBase.userData.floorSurfaceOffsetY = grassBaseHeight / 2;
   scene.add(grassBase);
 
   const stripeCount = Math.ceil(grassLength / GRASS_STRIPE_WIDTH);
@@ -2319,11 +2364,20 @@ function addPitch(scene: THREE.Scene) {
   grassTexture.generateMipmaps = false;
   grassTexture.minFilter = THREE.LinearFilter;
   grassTexture.magFilter = THREE.LinearFilter;
+  grassTexture.needsUpdate = true;
   const pitch = new THREE.Mesh(
     new THREE.PlaneGeometry(grassWidth, grassLength, 1, 1),
-    new THREE.MeshLambertMaterial({ map: grassTexture, color: "#ffffff", side: THREE.FrontSide }),
+    new THREE.MeshLambertMaterial({
+      map: grassTexture,
+      color: "#ffffff",
+      side: THREE.FrontSide,
+      transparent: false,
+      opacity: 1,
+      depthTest: true,
+      depthWrite: true,
+    }),
   );
-  pitch.name = "single-continuous-striped-grass-surface";
+  pitch.name = "grass-surface";
   pitch.rotation.x = -Math.PI / 2;
   pitch.position.y = PITCH_SURFACE_Y;
   pitch.receiveShadow = true;
@@ -2335,11 +2389,29 @@ function addPitch(scene: THREE.Scene) {
   pitch.userData.lightGrass = GRASS_LIGHT_COLOR;
   scene.add(pitch);
 
-  addPitchBoundaryMarking(scene);
-  addFieldMarking(scene, 0, FIELD_L / 2 - 3.5, 20, 7);
-  addFieldMarking(scene, 0, -FIELD_L / 2 + 3.5, 20, 7);
-  addFieldMarking(scene, 0, FIELD_L / 2 - 9, 44, 18);
-  addFieldMarking(scene, 0, -FIELD_L / 2 + 9, 44, 18);
+  const markingMaterial = new THREE.MeshBasicMaterial({
+    color: "#dffcff",
+    side: THREE.FrontSide,
+    transparent: false,
+    opacity: 1,
+    depthTest: true,
+    depthWrite: true,
+  });
+  const fieldMarkings = new THREE.Group();
+  fieldMarkings.name = "field-markings";
+  fieldMarkings.position.y = FIELD_MARKINGS_Y;
+  fieldMarkings.userData.floorSurfaceOffsetY = 0;
+  addPitchBoundaryMarking(fieldMarkings, markingMaterial);
+  addFieldMarking(fieldMarkings, markingMaterial, 0, FIELD_L / 2 - 3.5, 20, 7);
+  addFieldMarking(fieldMarkings, markingMaterial, 0, -FIELD_L / 2 + 3.5, 20, 7);
+  addFieldMarking(fieldMarkings, markingMaterial, 0, FIELD_L / 2 - 9, 44, 18);
+  addFieldMarking(fieldMarkings, markingMaterial, 0, -FIELD_L / 2 + 9, 44, 18);
+  const centerLine = new THREE.Mesh(new THREE.BoxGeometry(FIELD_W, 0.025, 0.18), markingMaterial);
+  fieldMarkings.add(centerLine);
+  const centerCircle = new THREE.Mesh(new THREE.TorusGeometry(8, 0.035, 8, 72), markingMaterial);
+  centerCircle.rotation.x = Math.PI / 2;
+  fieldMarkings.add(centerCircle);
+  scene.add(fieldMarkings);
 }
 
 function addNetLines(scene: THREE.Scene, side: -1 | 1) {
@@ -4461,15 +4533,6 @@ export function ArcadeSoccerGame() {
     scene.add(sun);
 
     addPitch(scene);
-
-    const lineMat = new THREE.MeshBasicMaterial({ color: "#eaffff", transparent: true, opacity: 0.68 });
-    const centerLine = new THREE.Mesh(new THREE.BoxGeometry(FIELD_W, 0.04, 0.18), lineMat);
-    centerLine.position.y = 0.08;
-    scene.add(centerLine);
-    const centerCircle = new THREE.Mesh(new THREE.TorusGeometry(8, 0.08, 8, 72), lineMat);
-    centerCircle.rotation.x = Math.PI / 2;
-    centerCircle.position.y = 0.1;
-    scene.add(centerCircle);
     const adBoardTexture = addLightweightStadium(scene);
 
     addGoal(scene, -1);
