@@ -5848,7 +5848,7 @@ export function ArcadeSoccerGame() {
             headerPlayer.mesh.rotation.y = headerPlayer.heading;
             headerPlayer.mesh.position.copy(headerPlayer.pos);
             headerPlayer.mesh.updateMatrixWorld(true);
-            const head = headerPlayer.parts.head;
+            const head = headerPlayer.parts.headContact ?? headerPlayer.parts.head;
             const headPoint = head?.getWorldPosition(new THREE.Vector3()) ?? headerPlayer.pos.clone().setY(2.3);
             const shoulderPoint = headerPlayer.parts.rightArm?.getWorldPosition(new THREE.Vector3()) ?? headPoint.clone().add(new THREE.Vector3(0.9, -0.55, 0));
             const chestPoint = headerPlayer.mesh.getObjectByName("torso")?.getWorldPosition(new THREE.Vector3()) ?? headPoint.clone().add(new THREE.Vector3(0, -0.9, 0));
