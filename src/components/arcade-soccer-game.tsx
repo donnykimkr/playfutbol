@@ -8,6 +8,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 
 type MatchState = "menu" | "playing" | "ended";
 type TeamId = "home" | "away";
+type PlayerId = string;
 type PlayerRole = "field" | "keeper";
 type PlayerLine = "keeper" | "defender" | "midfielder" | "forward";
 type PlayPhase = "open" | "goal" | "halftime" | "kickoff" | "throw-in" | "goal-kick" | "corner";
@@ -29,6 +30,22 @@ type DefensiveDangerPhase = "NORMAL_BLOCK" | "DEEP_BLOCK" | "EMERGENCY_GOAL_DEFE
 type FirstTouchType = "foot" | "thigh" | "chest";
 type BallBoundaryState = "IN_PLAY" | "TOUCHLINE_OUT" | "GOAL_LINE_OUT" | "GOAL";
 type TutorialStatus = "active" | "success" | "complete";
+type StrikerProfile = "default" | "haaland";
+type LocomotionState = "idle" | "walk" | "jog" | "run" | "sprint" | "acceleration" | "deceleration"
+  | "sharp-turn" | "lateral-shuffle" | "backpedal" | "dribble-jog" | "dribble-sprint"
+  | "pass-approach" | "shot-approach" | "recovery";
+type BallTouchBodyPart = "foot" | "head" | "chest" | "knee" | "other";
+type BallTouchAction = "pass" | "clearance" | "shot" | "deflection" | "control" | "tackle" | "throwIn";
+
+type BallTouchRecord = {
+  teamId: TeamId;
+  playerId: PlayerId;
+  bodyPart: BallTouchBodyPart;
+  action: BallTouchAction;
+  intentional: boolean;
+  intendedReceiverId?: PlayerId;
+  time: number;
+};
 
 type TutorialRuntime = {
   active: boolean;
@@ -75,11 +92,18 @@ type PlayerBody = {
   controlMarker: THREE.Object3D | null;
   receiverMarker: THREE.Object3D | null;
   aimArrow: THREE.Object3D | null;
+  possessionLabel: THREE.Object3D | null;
   parts: PlayerAnimationParts;
+  profile: StrikerProfile;
+  preferredFoot: "left" | "right";
   heading: number;
   turnRate: number;
   stamina: number;
   runPhase: number;
+  distanceTravelled: number;
+  previousHorizontalSpeed: number;
+  locomotionState: LocomotionState;
+  locomotionBlend: number;
   animationSpeed: number;
   kickTimer: number;
   actionCooldown: number;
@@ -104,6 +128,7 @@ type PlayerBody = {
   fallbackTimer: number;
   fallbackTarget: THREE.Vector3;
   lastPos: THREE.Vector3;
+  animationLastPos: THREE.Vector3;
   frameStartPos: THREE.Vector3;
   supportRunTimer: number;
   supportRunTarget: THREE.Vector3;
@@ -130,9 +155,15 @@ type PlayerBody = {
 type PlayerAnimationParts = {
   bodyRoot: THREE.Object3D | null;
   pelvis: THREE.Object3D | null;
+  spineLower: THREE.Object3D | null;
+  spineUpper: THREE.Object3D | null;
   chest: THREE.Object3D | null;
-  neck: THREE.Object3D | null;
+  neckBase: THREE.Object3D | null;
+  neckTop: THREE.Object3D | null;
   head: THREE.Object3D | null;
+  headContact: THREE.Object3D | null;
+  leftClavicle: THREE.Object3D | null;
+  rightClavicle: THREE.Object3D | null;
   leftLeg: THREE.Object3D | null;
   rightLeg: THREE.Object3D | null;
   leftKnee: THREE.Object3D | null;
@@ -143,6 +174,8 @@ type PlayerAnimationParts = {
   rightArm: THREE.Object3D | null;
   leftElbow: THREE.Object3D | null;
   rightElbow: THREE.Object3D | null;
+  leftHand: THREE.Object3D | null;
+  rightHand: THREE.Object3D | null;
 };
 
 type BallState = "loose" | "possessed" | "kicked";
@@ -189,6 +222,7 @@ type FormationKey = "4-2-3-1" | "4-3-3" | "4-4-2" | "3-5-2";
 type OfflineSettings = {
   formation: Extract<FormationKey, "4-3-3" | "4-4-2">;
   homeColor: string;
+  strikerProfile: StrikerProfile;
 };
 
 type TutorialLessonDefinition = {
@@ -339,6 +373,7 @@ type MatchRuntime = {
   lastCheerSound: number;
   lastTouchTeam: TeamId;
   lastTouchPlayerId: string | null;
+  lastTouchRecord: BallTouchRecord | null;
   restartProtectionTeam: TeamId | null;
   restartProtectionTimer: number;
   goalKickLockPlayerId: string | null;
@@ -428,7 +463,8 @@ const PERSONAL_SPACE = 1.75;
 const DRIBBLE_DISTANCE = PLAYER_RADIUS + BALL_RADIUS + 0.06;
 const CONTROL_TOUCH_DISTANCE = PLAYER_RADIUS + BALL_RADIUS + 0.26;
 const ACTION_COOLDOWN = 0.22;
-const TOUCHLINE_MARGIN = 4.6;
+const TOUCHLINE_RUNOFF = 6.1;
+const GOAL_LINE_RUNOFF = 8.2;
 const PENALTY_AREA_HALF_WIDTH = 22;
 const PENALTY_AREA_DEPTH = 18;
 const OUT_OF_PLAY_DELAY = 1.75;
@@ -451,8 +487,8 @@ const BROADCAST_LOOK_AT_Y = 1.05;
 const BROADCAST_LOOK_AT_Z = 0;
 const VISITOR_STORAGE_KEY = "futbol_visitor_id";
 const SETTINGS_STORAGE_KEY = "futbol_offline_settings";
-const AD_BOARD_INNER_X = FIELD_W / 2 + TOUCHLINE_MARGIN;
-const AD_BOARD_INNER_Z = FIELD_L / 2 + TOUCHLINE_MARGIN;
+const AD_BOARD_INNER_X = FIELD_W / 2 + TOUCHLINE_RUNOFF;
+const AD_BOARD_INNER_Z = FIELD_L / 2 + GOAL_LINE_RUNOFF;
 const AD_BOARD_HEIGHT = 2.25;
 const AD_BOARD_BASE_Y = 0.12;
 const AD_BOARD_THICKNESS = 0.2;
@@ -499,6 +535,7 @@ const HOME_KIT = {
 const DEFAULT_OFFLINE_SETTINGS: OfflineSettings = {
   formation: "4-3-3",
   homeColor: HOME_KIT.primary,
+  strikerProfile: "default",
 };
 
 const TUTORIAL_LESSONS: TutorialLessonDefinition[] = [
@@ -512,7 +549,6 @@ const TUTORIAL_LESSONS: TutorialLessonDefinition[] = [
   { title: "Defend", instruction: "Stay between the attacker and your goal for two seconds.", key: "Arrow Keys" },
   { title: "Tackle & Intercept", instruction: "Approach from the front or side and make clean contact with the ball.", key: "Arrow Keys" },
   { title: "Through Pass", instruction: "Aim ahead of the runner and release S into the highlighted space.", key: "S + Arrow" },
-  { title: "Fullscreen", instruction: "Press F to enter or exit fullscreen.", key: "F" },
 ];
 let activeOfflineSettings: OfflineSettings = { ...DEFAULT_OFFLINE_SETTINGS };
 
@@ -584,7 +620,14 @@ function normalizeOfflineSettings(value: Partial<OfflineSettings> | null | undef
   return {
     formation,
     homeColor: sanitizeHomeColor(value?.homeColor ?? DEFAULT_OFFLINE_SETTINGS.homeColor),
+    strikerProfile: value?.strikerProfile === "haaland" ? "haaland" : "default",
   };
+}
+
+function detectAppleMobile() {
+  if (typeof navigator === "undefined") return false;
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 }
 
 function loadOfflineSettings() {
@@ -777,8 +820,44 @@ function pointInsideOwnPenaltyArea(team: TeamId, half: 1 | 2, point: THREE.Vecto
     && depth <= PENALTY_AREA_DEPTH + margin;
 }
 
+function recordBallTouch(
+  active: MatchRuntime,
+  player: PlayerBody,
+  bodyPart: BallTouchBodyPart,
+  action: BallTouchAction,
+  intentional: boolean,
+  intendedReceiverId?: PlayerId,
+) {
+  const touch: BallTouchRecord = {
+    teamId: player.team,
+    playerId: player.id,
+    bodyPart,
+    action,
+    intentional,
+    intendedReceiverId,
+    time: performance.now(),
+  };
+  active.lastTouchTeam = player.team;
+  active.lastTouchPlayerId = player.id;
+  active.lastTouchRecord = touch;
+  active.renderer.domElement.dataset.lastTouchRecord = JSON.stringify(touch);
+}
+
+function deliberateFootBackPassRestriction(keeper: PlayerBody, active: MatchRuntime) {
+  const touch = active.lastTouchRecord;
+  if (!touch) return false;
+  return touch.teamId === keeper.team
+    && touch.playerId !== keeper.id
+    && touch.bodyPart === "foot"
+    && touch.intentional
+    && touch.intendedReceiverId === keeper.id
+    && (touch.action === "pass" || touch.action === "clearance");
+}
+
 function keeperMayUseHands(keeper: PlayerBody, active: MatchRuntime, margin = 0) {
-  return keeper.role === "keeper" && pointInsideOwnPenaltyArea(keeper.team, active.half, active.ballPos, margin);
+  return keeper.role === "keeper"
+    && pointInsideOwnPenaltyArea(keeper.team, active.half, active.ballPos, margin)
+    && !deliberateFootBackPassRestriction(keeper, active);
 }
 
 function cornerKickDirection(team: TeamId, half: 1 | 2, spot: THREE.Vector3) {
@@ -1618,6 +1697,7 @@ function makeHumanFigure({
   hair = "#3f2b1d",
   accent,
   numberPanel,
+  profile = "default",
 }: {
   shirt: string;
   trim: string;
@@ -1629,6 +1709,7 @@ function makeHumanFigure({
   accent?: string;
   numberPanel?: THREE.Object3D;
   sponsor?: string;
+  profile?: StrikerProfile;
 }) {
   const group = new THREE.Group();
   const bodyRoot = new THREE.Group();
@@ -1650,43 +1731,60 @@ function makeHumanFigure({
   pelvisRoot.userData.restY = pelvisRestY;
   const hip = new THREE.Mesh(sharedGeometry("player-hip-athletic", createPelvisGeometry), shortsMaterial);
   hip.position.y = 0;
-  const torsoRoot = new THREE.Group();
-  torsoRoot.name = "torso-root";
-  torsoRoot.position.y = 1.48;
+  const spineLower = new THREE.Group();
+  spineLower.name = "spine-lower";
+  spineLower.position.y = 0.18;
+  const spineUpper = new THREE.Group();
+  spineUpper.name = "spine-upper";
+  spineUpper.position.y = 0.5;
   const torso = new THREE.Mesh(sharedGeometry("player-torso-athletic", createTorsoGeometry), shirtMaterial);
   torso.name = "torso";
-  torso.position.y = 0.58;
+  torso.position.y = 0.43;
   const chestRoot = new THREE.Group();
   chestRoot.name = "chest-root";
-  chestRoot.position.y = 1.06;
+  chestRoot.position.y = 0.36;
   const collar = new THREE.Mesh(sharedGeometry("player-collar", () => new THREE.TorusGeometry(0.16, 0.034, 5, 10, Math.PI)), trimMaterial);
   collar.rotation.x = Math.PI / 2;
   collar.position.set(0, 0.14, 0.23);
+  const neckBase = new THREE.Group();
+  neckBase.name = "neck-base";
+  neckBase.position.y = 0.28;
+  const neckBaseMesh = new THREE.Mesh(sharedGeometry("player-neck-base", () => new THREE.CylinderGeometry(0.105, 0.14, 0.15, 7)), skinMaterial);
+  neckBaseMesh.position.y = 0.065;
+  const neckTop = new THREE.Group();
+  neckTop.name = "neck-top";
+  neckTop.position.y = 0.14;
+  const neckTopMesh = new THREE.Mesh(sharedGeometry("player-neck-top", () => new THREE.CylinderGeometry(0.095, 0.108, 0.14, 7)), skinMaterial);
+  neckTopMesh.position.y = 0.055;
   const headRoot = new THREE.Group();
   headRoot.name = "head-root";
-  headRoot.position.y = 0.27;
-  const neck = new THREE.Mesh(sharedGeometry("player-neck", () => new THREE.CylinderGeometry(0.105, 0.135, 0.22, 7)), skinMaterial);
-  neck.name = "neck";
-  neck.position.y = 0.02;
+  headRoot.position.y = 0.12;
   const head = new THREE.Mesh(sharedGeometry("player-head", () => new THREE.SphereGeometry(0.245, 8, 6)), skinMaterial);
   head.name = "head";
   head.scale.set(0.84, 1.08, 0.88);
-  head.position.y = 0.26;
+  head.position.y = 0.17;
+  const headContact = new THREE.Object3D();
+  headContact.name = "head-contact";
+  headContact.position.set(0, 0.2, 0.2);
   const hairCap = new THREE.Mesh(sharedGeometry("player-hair-cap", () => new THREE.SphereGeometry(0.26, 7, 4, 0, Math.PI * 2, 0, Math.PI / 2)), hairMaterial);
   hairCap.scale.set(0.88, 0.5, 0.94);
-  hairCap.position.y = 0.48;
+  hairCap.position.y = 0.39;
   const jaw = new THREE.Mesh(sharedGeometry("player-jaw", () => new THREE.SphereGeometry(0.19, 7, 5)), skinMaterial);
   jaw.scale.set(0.88, 0.72, 0.84);
-  jaw.position.set(0, 0.14, 0.02);
+  jaw.position.set(0, 0.06, 0.02);
   const nose = new THREE.Mesh(sharedGeometry("player-nose", () => new THREE.ConeGeometry(0.035, 0.085, 4)), skinMaterial);
   nose.rotation.x = Math.PI / 2;
-  nose.position.set(0, 0.27, 0.245);
+  nose.position.set(0, 0.18, 0.245);
 
   [-1, 1].forEach((side) => {
+    const clavicle = new THREE.Group();
+    clavicle.name = side < 0 ? "left-clavicle" : "right-clavicle";
+    clavicle.position.set(side * 0.3, 0.17, 0.01);
+    clavicle.rotation.z = side * 0.045;
     const shoulder = new THREE.Group();
     shoulder.name = side < 0 ? "left-arm" : "right-arm";
-    shoulder.position.set(side * 0.51, -0.01, 0.01);
-    shoulder.rotation.z = side * 0.13;
+    shoulder.position.set(side * (profile === "haaland" ? 0.27 : 0.24), 0, 0);
+    shoulder.rotation.z = side * 0.105;
     const sleeve = new THREE.Mesh(sharedGeometry("player-shirt-sleeve", () => new THREE.CapsuleGeometry(0.13, 0.18, 2, 7)), shirtMaterial);
     sleeve.position.y = -0.11;
     const upperArm = new THREE.Mesh(sharedGeometry("player-upper-arm", () => new THREE.CapsuleGeometry(0.108, 0.3, 2, 7)), skinMaterial);
@@ -1694,21 +1792,26 @@ function makeHumanFigure({
     const elbow = new THREE.Group();
     elbow.name = side < 0 ? "left-elbow" : "right-elbow";
     elbow.position.y = -0.53;
-    elbow.rotation.x = 0.34;
+    // Elbow animation uses one positive local-X hinge convention on both sides.
+    // The relaxed bend is supplied by locomotion rather than baked into rest.
+    elbow.rotation.x = 0;
     const forearm = new THREE.Mesh(sharedGeometry("player-forearm", () => new THREE.CapsuleGeometry(0.09, 0.33, 2, 6)), skinMaterial);
     forearm.position.y = -0.25;
     const hand = new THREE.Mesh(sharedGeometry("player-hand", () => new THREE.SphereGeometry(0.105, 6, 5)), skinMaterial);
+    hand.name = side < 0 ? "left-hand" : "right-hand";
     hand.scale.set(0.82, 1.12, 0.72);
     hand.position.y = -0.52;
     elbow.add(forearm, hand);
     shoulder.add(sleeve, upperArm, elbow);
-    chestRoot.add(shoulder);
+    clavicle.add(shoulder);
+    chestRoot.add(clavicle);
   });
 
   [-1, 1].forEach((side) => {
     const leg = new THREE.Group();
     leg.name = side < 0 ? "left-leg" : "right-leg";
     leg.position.set(side * 0.225, -0.03, 0);
+    if (profile === "haaland") leg.scale.y = 1.075;
     const shortsLeg = new THREE.Mesh(sharedGeometry("player-shorts-leg", () => new THREE.CapsuleGeometry(0.18, 0.18, 2, 7)), shortsMaterial);
     shortsLeg.position.y = -0.13;
     const thigh = new THREE.Mesh(sharedGeometry("player-thigh", () => new THREE.CapsuleGeometry(0.17, 0.37, 2, 7)), skinMaterial);
@@ -1739,20 +1842,74 @@ function makeHumanFigure({
 
   [-1, 1].forEach((side) => {
     const eye = new THREE.Mesh(sharedGeometry("player-eye", () => new THREE.SphereGeometry(0.025, 4, 3)), featureMaterial);
-    eye.position.set(side * 0.072, 0.32, 0.225);
+    eye.position.set(side * 0.072, 0.23, 0.225);
     headRoot.add(eye);
   });
   const mouth = new THREE.Mesh(sharedGeometry("player-mouth", () => new THREE.BoxGeometry(0.1, 0.012, 0.01)), featureMaterial);
-  mouth.position.set(0, 0.17, 0.235);
+  mouth.position.set(0, 0.08, 0.235);
 
-  headRoot.add(neck, head, jaw, hairCap, nose, mouth);
-  chestRoot.add(collar, headRoot);
-  torsoRoot.add(torso, chestRoot);
-  pelvisRoot.add(hip);
-  bodyRoot.add(pelvisRoot, torsoRoot);
+  if (profile === "haaland") {
+    torso.scale.x = 1.07;
+    const hairTie = new THREE.Mesh(sharedGeometry("haaland-hair-tie", () => new THREE.SphereGeometry(0.1, 6, 4)), hairMaterial);
+    hairTie.position.set(0, 0.32, -0.2);
+    const hairTail = new THREE.Mesh(sharedGeometry("haaland-hair-tail", () => new THREE.CapsuleGeometry(0.065, 0.25, 2, 6)), hairMaterial);
+    hairTail.position.set(0, 0.18, -0.25);
+    hairTail.rotation.x = -0.2;
+    headRoot.add(hairTie, hairTail);
+  }
+
+  headRoot.add(head, headContact, jaw, hairCap, nose, mouth);
+  neckTop.add(neckTopMesh, headRoot);
+  neckBase.add(neckBaseMesh, neckTop);
+  chestRoot.add(collar, neckBase);
+  spineUpper.add(chestRoot);
+  spineLower.add(torso, spineUpper);
+  pelvisRoot.add(hip, spineLower);
+  bodyRoot.add(pelvisRoot);
   if (numberPanel) bodyRoot.add(numberPanel);
   group.add(bodyRoot);
-  group.scale.set(0.94, 0.94, 0.94);
+  group.scale.set(profile === "haaland" ? 0.96 : 0.94, profile === "haaland" ? 1.005 : 0.94, profile === "haaland" ? 0.96 : 0.94);
+
+  bodyRoot.traverse((joint) => {
+    if (!(joint instanceof THREE.Group || joint instanceof THREE.Object3D)) return;
+    joint.userData.restQuaternion = joint.quaternion.clone();
+    joint.userData.restPosition = joint.position.clone();
+  });
+
+  if (profile === "haaland") {
+    const labelCanvas = document.createElement("canvas");
+    labelCanvas.width = 512;
+    labelCanvas.height = 128;
+    const labelContext = labelCanvas.getContext("2d");
+    if (labelContext) {
+      labelContext.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+      labelContext.font = "900 72px Arial, sans-serif";
+      labelContext.textAlign = "center";
+      labelContext.textBaseline = "middle";
+      labelContext.lineWidth = 12;
+      labelContext.strokeStyle = "rgba(0,0,0,0.8)";
+      labelContext.strokeText("HAALAND", labelCanvas.width / 2, labelCanvas.height / 2);
+      labelContext.fillStyle = "#ffffff";
+      labelContext.fillText("HAALAND", labelCanvas.width / 2, labelCanvas.height / 2);
+    }
+    const labelTexture = new THREE.CanvasTexture(labelCanvas);
+    labelTexture.colorSpace = THREE.SRGBColorSpace;
+    labelTexture.generateMipmaps = false;
+    labelTexture.minFilter = THREE.LinearFilter;
+    labelTexture.magFilter = THREE.LinearFilter;
+    const label = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: labelTexture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    }));
+    label.name = "haaland-possession-label";
+    label.position.set(0, 3.75, 0);
+    label.scale.set(2.8, 0.7, 1);
+    label.renderOrder = 30;
+    label.visible = false;
+    group.add(label);
+  }
 
   const receiverMaterial = sharedBasicMaterial("#67e8f9");
   receiverMaterial.transparent = true;
@@ -1810,7 +1967,7 @@ function makeHumanFigure({
   return group;
 }
 
-function makeKit(team: TeamId, role: PlayerRole, accent: string, number: number) {
+function makeKit(team: TeamId, role: PlayerRole, accent: string, number: number, profile: StrikerProfile = "default") {
   const isKeeper = role === "keeper";
   const home = HOME_KIT;
   const homeColor = activeOfflineSettings.homeColor || home.primary;
@@ -1825,10 +1982,12 @@ function makeKit(team: TeamId, role: PlayerRole, accent: string, number: number)
     shorts,
     socks,
     boot,
-    hair: number % 3 === 0 ? "#111827" : number % 2 === 0 ? "#6b3f1f" : "#24160f",
+    skin: profile === "haaland" ? "#f0c5a4" : "#e8b88f",
+    hair: profile === "haaland" ? "#d8bd87" : number % 3 === 0 ? "#111827" : number % 2 === 0 ? "#6b3f1f" : "#24160f",
     accent: isKeeper ? "#f8fafc" : team === "home" ? home.accent : accent,
     numberPanel: undefined,
     sponsor: team === "home" ? home.name.split(" ")[0].slice(0, 2).toUpperCase() : "AW",
+    profile,
   });
   return figure;
 }
@@ -2034,9 +2193,10 @@ function addPitchBoundaryMarking(scene: THREE.Scene) {
 
 function addPitch(scene: THREE.Scene) {
   const runoff = new THREE.Mesh(
-    new THREE.BoxGeometry(FIELD_W + TOUCHLINE_MARGIN * 2, 0.16, FIELD_L + TOUCHLINE_MARGIN * 2),
-    new THREE.MeshLambertMaterial({ color: "#116b38" }),
+    new THREE.BoxGeometry(FIELD_W + TOUCHLINE_RUNOFF * 2, 0.16, FIELD_L + GOAL_LINE_RUNOFF * 2),
+    new THREE.MeshLambertMaterial({ color: "#687477" }),
   );
+  runoff.name = "neutral-pitch-runoff";
   runoff.position.y = -0.14;
   scene.add(runoff);
 
@@ -2473,8 +2633,8 @@ function addLightweightStadium(scene: THREE.Scene) {
   });
   const adBackingMaterial = new THREE.MeshLambertMaterial({ color: "#101923" });
   const adTopMaterial = new THREE.MeshLambertMaterial({ color: "#101923" });
-  const runoffWidth = FIELD_W + TOUCHLINE_MARGIN * 2;
-  const runoffLength = FIELD_L + TOUCHLINE_MARGIN * 2;
+  const runoffWidth = FIELD_W + TOUCHLINE_RUNOFF * 2;
+  const runoffLength = FIELD_L + GOAL_LINE_RUNOFF * 2;
   const innerFaceX = AD_BOARD_INNER_X - AD_BOARD_FACE_OFFSET;
   const innerFaceZ = AD_BOARD_INNER_Z - AD_BOARD_FACE_OFFSET;
   const cornerCenterX = innerFaceX - AD_BOARD_CORNER_RADIUS;
@@ -2881,9 +3041,15 @@ function animationParts(mesh: THREE.Group): PlayerAnimationParts {
   return {
     bodyRoot: mesh.getObjectByName("body-root") ?? null,
     pelvis: mesh.getObjectByName("pelvis-root") ?? null,
+    spineLower: mesh.getObjectByName("spine-lower") ?? null,
+    spineUpper: mesh.getObjectByName("spine-upper") ?? null,
     chest: mesh.getObjectByName("chest-root") ?? null,
-    neck: mesh.getObjectByName("neck") ?? null,
-    head: mesh.getObjectByName("head") ?? null,
+    neckBase: mesh.getObjectByName("neck-base") ?? null,
+    neckTop: mesh.getObjectByName("neck-top") ?? null,
+    head: mesh.getObjectByName("head-root") ?? null,
+    headContact: mesh.getObjectByName("head-contact") ?? null,
+    leftClavicle: mesh.getObjectByName("left-clavicle") ?? null,
+    rightClavicle: mesh.getObjectByName("right-clavicle") ?? null,
     leftLeg: mesh.getObjectByName("left-leg") ?? null,
     rightLeg: mesh.getObjectByName("right-leg") ?? null,
     leftKnee: mesh.getObjectByName("left-knee") ?? null,
@@ -2894,11 +3060,35 @@ function animationParts(mesh: THREE.Group): PlayerAnimationParts {
     rightArm: mesh.getObjectByName("right-arm") ?? null,
     leftElbow: mesh.getObjectByName("left-elbow") ?? null,
     rightElbow: mesh.getObjectByName("right-elbow") ?? null,
+    leftHand: mesh.getObjectByName("left-hand") ?? null,
+    rightHand: mesh.getObjectByName("right-hand") ?? null,
   };
 }
 
+function attachDevelopmentRigDebug(mesh: THREE.Group) {
+  if (process.env.NODE_ENV === "production" || typeof window === "undefined") return;
+  if (!new URLSearchParams(window.location.search).has("rigDebug")) return;
+  [
+    "pelvis-root", "spine-lower", "spine-upper", "chest-root", "neck-base", "neck-top", "head-root",
+    "left-clavicle", "right-clavicle", "left-arm", "right-arm", "left-elbow", "right-elbow",
+    "left-leg", "right-leg", "left-knee", "right-knee", "left-foot", "right-foot",
+  ].forEach((name) => {
+    const joint = mesh.getObjectByName(name);
+    if (!joint) return;
+    const axes = new THREE.AxesHelper(0.34);
+    axes.name = `rig-debug-${name}`;
+    axes.renderOrder = 80;
+    joint.add(axes);
+  });
+}
+
 function createPlayer(id: string, team: TeamId, role: PlayerRole, line: PlayerLine, x: number, z: number, number: number, formationSlot: string, controlledBy?: "p1") {
-  const mesh = makeKit(team, role, "#ffffff", number);
+  const selectedStrikerSlot = formationSlot === "ST" || formationSlot === "LST";
+  const profile: StrikerProfile = team === "home" && role === "field" && selectedStrikerSlot
+    ? activeOfflineSettings.strikerProfile
+    : "default";
+  const mesh = makeKit(team, role, "#ffffff", number, profile);
+  attachDevelopmentRigDebug(mesh);
   const shadow = createBlobShadow(role === "keeper" ? 1.45 : 1.08, role === "keeper" ? 0.22 : 0.18);
   shadow.name = "blob-shadow";
   mesh.add(shadow);
@@ -2908,6 +3098,7 @@ function createPlayer(id: string, team: TeamId, role: PlayerRole, line: PlayerLi
   if (marker) marker.visible = Boolean(controlledBy);
   const receiverMarker = mesh.getObjectByName("receiver-marker") ?? null;
   const aimArrow = mesh.getObjectByName("aim-arrow") ?? null;
+  const possessionLabel = mesh.getObjectByName("haaland-possession-label") ?? null;
   return {
     id,
     team,
@@ -2922,11 +3113,18 @@ function createPlayer(id: string, team: TeamId, role: PlayerRole, line: PlayerLi
     controlMarker: marker,
     receiverMarker,
     aimArrow,
+    possessionLabel,
     parts: animationParts(mesh),
+    profile,
+    preferredFoot: profile === "haaland" ? "left" : "right",
     heading: headingForHome(z),
     turnRate: 0,
     stamina: 1,
     runPhase: 0,
+    distanceTravelled: 0,
+    previousHorizontalSpeed: 0,
+    locomotionState: "idle",
+    locomotionBlend: 0,
     animationSpeed: 0,
     kickTimer: 0,
     actionCooldown: 0,
@@ -2951,6 +3149,7 @@ function createPlayer(id: string, team: TeamId, role: PlayerRole, line: PlayerLi
     fallbackTimer: 0,
     fallbackTarget: new THREE.Vector3(x, 0, z),
     lastPos: new THREE.Vector3(x, 0, z),
+    animationLastPos: new THREE.Vector3(x, 0, z),
     frameStartPos: new THREE.Vector3(x, 0, z),
     supportRunTimer: 0,
     supportRunTarget: new THREE.Vector3(x, 0, z),
@@ -3201,8 +3400,6 @@ function setupTutorialLesson(active: MatchRuntime, lessonIndex: number) {
     tutorial.target.z = controlled.pos.z + attackSign * 34;
     tutorial.targetPlayerId = teammate.id;
     seedTutorialPossession(controlled, active);
-  } else if (lessonIndex === 10) {
-    setTutorialPlayerPose(controlled, new THREE.Vector3(0, 0, 8));
   }
   active.passTargetMarker.visible = lessonIndex === 0 || lessonIndex === 9;
   active.passTargetMarker.position.copy(tutorial.target).setY(0.13);
@@ -3289,7 +3486,6 @@ function updateTutorialProgress(active: MatchRuntime, dt: number) {
   }
   if (tutorial.lessonIndex === 8 && controlled && active.ballOwnerId === controlled.id) completeTutorialLesson(active);
   if (tutorial.lessonIndex === 9 && targetPlayer && active.ballOwnerId === targetPlayer.id && targetPlayer.pos.distanceTo(tutorial.target) < 12) completeTutorialLesson(active);
-  if (tutorial.lessonIndex === 10 && Boolean(document.fullscreenElement) !== tutorial.initialFullscreen) completeTutorialLesson(active);
 }
 
 export function ArcadeSoccerGame() {
@@ -3318,7 +3514,7 @@ export function ArcadeSoccerGame() {
   const [engineRequested, setEngineRequested] = useState(false);
   const [score, setScore] = useState({ home: 0, away: 0 });
   const [gameClock, setGameClock] = useState(0);
-  const [possessionPercent, setPossessionPercent] = useState({ home: 50, away: 50 });
+  const [, setPossessionPercent] = useState({ home: 50, away: 50 });
   const [showTouchControls, setShowTouchControls] = useState(false);
   const [shotChargeUi, setShotChargeUi] = useState(0);
   const [shotChargePosition, setShotChargePosition] = useState({ x: 0, y: 0 });
@@ -3326,6 +3522,7 @@ export function ArcadeSoccerGame() {
   const [p1AiUi, setP1AiUi] = useState(false);
   const [keyboardGuideOpen, setKeyboardGuideOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isAppleMobile, setIsAppleMobile] = useState(false);
   const [minimapSnapshot, setMinimapSnapshot] = useState<MinimapSnapshot | null>(null);
   const [tutorialUi, setTutorialUi] = useState({ active: false, lessonIndex: 0, status: "active" as TutorialStatus });
   const [mobileTutorialNotice, setMobileTutorialNotice] = useState(false);
@@ -3352,6 +3549,10 @@ export function ArcadeSoccerGame() {
   useEffect(() => {
     settingsOpenRef.current = settingsOpen;
   }, [settingsOpen]);
+
+  useEffect(() => {
+    setIsAppleMobile(detectAppleMobile());
+  }, []);
 
   const openSettings = useCallback(() => {
     setDraftSettings(offlineSettings);
@@ -3393,6 +3594,16 @@ export function ArcadeSoccerGame() {
     setSettingsOpen(false);
   }, [draftSettings]);
 
+  const selectStrikerProfile = useCallback((strikerProfile: StrikerProfile) => {
+    const next = normalizeOfflineSettings({ ...offlineSettings, strikerProfile });
+    activeOfflineSettings = next;
+    saveOfflineSettings(next);
+    setOfflineSettings(next);
+    setDraftSettings(next);
+    const active = sceneRef.current;
+    if (active && active.state !== "playing") applyOfflineSettingsToRuntime(active);
+  }, [offlineSettings]);
+
   useEffect(() => {
     const visitorId = getAnonymousVisitorId();
     visitorIdRef.current = visitorId;
@@ -3402,7 +3613,7 @@ export function ArcadeSoccerGame() {
   }, []);
 
   const requestGameFullscreen = useCallback(async () => {
-    if (typeof document === "undefined") return;
+    if (typeof document === "undefined" || detectAppleMobile()) return;
     const root = gameRootRef.current ?? document.documentElement;
     type FullscreenElement = HTMLElement & {
       webkitRequestFullscreen?: () => Promise<void> | void;
@@ -3425,6 +3636,7 @@ export function ArcadeSoccerGame() {
     if (settingsOpenRef.current) return;
     const active = sceneRef.current;
     if (action === "fullscreen") {
+      if (detectAppleMobile()) return;
       void requestGameFullscreen();
       return;
     }
@@ -3455,6 +3667,10 @@ export function ArcadeSoccerGame() {
       player.mesh.rotation.y = player.heading;
       player.mesh.position.copy(player.pos);
       player.runPhase = 0;
+      player.distanceTravelled = 0;
+      player.previousHorizontalSpeed = 0;
+      player.locomotionState = "idle";
+      player.locomotionBlend = 0;
       player.animationSpeed = 0;
       player.kickTimer = 0;
       player.actionCooldown = 0;
@@ -3479,6 +3695,8 @@ export function ArcadeSoccerGame() {
       player.fallbackTimer = 0;
       player.fallbackTarget.copy(player.home);
       player.lastPos.copy(player.home);
+      player.animationLastPos.copy(player.home);
+      if (player.possessionLabel) player.possessionLabel.visible = false;
       player.supportRunTimer = 0;
       player.supportRunTarget.copy(player.home);
       player.skillTimer = 0;
@@ -3633,6 +3851,7 @@ export function ArcadeSoccerGame() {
     active.tutorial.scenarioActionDone = false;
     active.lastTouchTeam = servingTeam;
     active.lastTouchPlayerId = null;
+    active.lastTouchRecord = null;
     syncBallVisual(active);
     active.ball.rotation.set(0, 0, 0);
     active.lastHudUpdate = 0;
@@ -3731,7 +3950,7 @@ export function ArcadeSoccerGame() {
     clearRuntimeAudioSources(active);
     active.lastKickSound = 0;
     active.lastCheerSound = 0;
-    if (showTouchControls) void requestGameFullscreen();
+    if (showTouchControls && !detectAppleMobile()) void requestGameFullscreen();
     ensureAudio(active);
     const visitorId = visitorIdRef.current ?? getAnonymousVisitorId();
     visitorIdRef.current = visitorId;
@@ -3861,7 +4080,7 @@ export function ArcadeSoccerGame() {
     const coarseOnly = window.matchMedia("(any-pointer: coarse) and (any-hover: none)");
     const fineInput = window.matchMedia("(any-pointer: fine) and (any-hover: hover)");
     const forcedTouch = new URLSearchParams(window.location.search).has("touch");
-    const update = () => setShowTouchControls(forcedTouch || (coarseOnly.matches && !fineInput.matches));
+    const update = () => setShowTouchControls(forcedTouch || detectAppleMobile() || (coarseOnly.matches && !fineInput.matches));
     update();
     coarseOnly.addEventListener("change", update);
     fineInput.addEventListener("change", update);
@@ -4182,6 +4401,7 @@ export function ArcadeSoccerGame() {
       lastCheerSound: 0,
       lastTouchTeam: "home",
       lastTouchPlayerId: null,
+      lastTouchRecord: null,
       restartProtectionTeam: null,
       restartProtectionTimer: 0,
       goalKickLockPlayerId: null,
@@ -4518,6 +4738,8 @@ export function ArcadeSoccerGame() {
       team: TeamId;
       side: number;
       received: boolean;
+      usedHands: boolean;
+      handledWithFoot: boolean;
     } | null = null;
     runtime.renderer.domElement.dataset.keeperBuildupTestsRequested = String(requestedKeeperBuildupTests);
     runtime.renderer.domElement.dataset.keeperBuildupTestsPassed = "0";
@@ -5409,6 +5631,13 @@ export function ArcadeSoccerGame() {
               pendingKeeperBuildupCheck.minDistance,
               pendingKeeper.pos.distanceTo(new THREE.Vector3(active.ballPos.x, 0, active.ballPos.z)),
             );
+            pendingKeeperBuildupCheck.usedHands ||= pendingKeeper.catchTimer > 0.01
+              || pendingKeeper.keeperAction === "secure"
+              || pendingKeeper.keeperAction === "smother";
+            pendingKeeperBuildupCheck.handledWithFoot ||= (
+              active.renderer.domElement.dataset.keeperBackPassRestrictedId === pendingKeeperBuildupCheck.keeperId
+              && active.renderer.domElement.dataset.keeperBackPassHandledWith === "foot"
+            );
             if (
               active.ballOwnerId === pendingKeeperBuildupCheck.keeperId
               || active.renderer.domElement.dataset.lastReceived === pendingKeeperBuildupCheck.keeperId
@@ -5420,6 +5649,9 @@ export function ArcadeSoccerGame() {
         if (pendingKeeperBuildupCheck && now >= pendingKeeperBuildupCheck.at) {
           const pendingKeeper = active.players.find((player) => player.id === pendingKeeperBuildupCheck?.keeperId) ?? null;
           const received = pendingKeeperBuildupCheck.received;
+          const legalFootControl = received
+            && pendingKeeperBuildupCheck.handledWithFoot
+            && !pendingKeeperBuildupCheck.usedHands;
           active.renderer.domElement.dataset.keeperBuildupMinDistance = pendingKeeperBuildupCheck.minDistance.toFixed(3);
           const previousResults = active.renderer.domElement.dataset.keeperBuildupResults
             ? JSON.parse(active.renderer.domElement.dataset.keeperBuildupResults) as unknown[]
@@ -5429,6 +5661,9 @@ export function ArcadeSoccerGame() {
             team: pendingKeeperBuildupCheck.team,
             side: pendingKeeperBuildupCheck.side,
             received,
+            usedHands: pendingKeeperBuildupCheck.usedHands,
+            handledWithFoot: pendingKeeperBuildupCheck.handledWithFoot,
+            legalFootControl,
             minDistance: Number(pendingKeeperBuildupCheck.minDistance.toFixed(3)),
             keeperPosition: pendingKeeper?.pos.toArray().map((value) => Number(value.toFixed(2))),
             ballPosition: active.ballPos.toArray().map((value) => Number(value.toFixed(2))),
@@ -5443,7 +5678,7 @@ export function ArcadeSoccerGame() {
             keeperSupportRunTimer: Number((pendingKeeper?.supportRunTimer ?? 0).toFixed(2)),
           });
           active.renderer.domElement.dataset.keeperBuildupResults = JSON.stringify(previousResults);
-          const resultKey = received ? "keeperBuildupTestsPassed" : "keeperBuildupTestsFailed";
+          const resultKey = legalFootControl ? "keeperBuildupTestsPassed" : "keeperBuildupTestsFailed";
           active.renderer.domElement.dataset[resultKey] = String(Number(active.renderer.domElement.dataset[resultKey] ?? "0") + 1);
           pendingKeeperBuildupCheck = null;
         }
@@ -5538,6 +5773,8 @@ export function ArcadeSoccerGame() {
                 team,
                 side,
                 received: false,
+                usedHands: false,
+                handledWithFoot: false,
               };
             } else {
               active.renderer.domElement.dataset.keeperBuildupTestsFailed = String(Number(active.renderer.domElement.dataset.keeperBuildupTestsFailed ?? "0") + 1);
@@ -6560,7 +6797,7 @@ export function ArcadeSoccerGame() {
     const down = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || Boolean(target?.isContentEditable);
-      if (!typing && !event.repeat && event.code === "KeyF") {
+      if (!typing && !event.repeat && event.code === "KeyF" && !detectAppleMobile()) {
         void requestGameFullscreen();
         event.preventDefault();
         return;
@@ -6690,50 +6927,23 @@ export function ArcadeSoccerGame() {
   return (
     <main
       ref={gameRootRef}
-      className="relative min-h-screen overflow-hidden bg-[#07110c] text-white"
+      className="relative min-h-[100dvh] overflow-hidden bg-[#07110c] text-white"
       data-match-state={matchState}
       data-play-phase={phaseUi}
     >
       <div ref={mountRef} className="absolute inset-0" aria-label="3D arcade soccer match" />
       {matchState === "playing" && !tutorialUi.active && (
-      <section className="pointer-events-none relative z-10 flex min-h-screen flex-col justify-between p-4 sm:p-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="w-[min(17rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-white/20 bg-[#07110ee8] shadow-2xl backdrop-blur-md lg:w-[22rem]">
-            <div className="flex h-7 items-center justify-between border-b border-white/10 bg-[#15231f] px-3 text-[10px] font-black uppercase text-white/80">
-              <span>Futbol</span>
-              <span className="inline-flex items-center gap-1.5 text-emerald-200">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                Live
-              </span>
-            </div>
-            <div className="grid grid-cols-[1fr_auto_1fr] items-stretch">
-              <div className="border-l-4 border-cyan-400 px-3 py-2.5">
-                <div className="text-[10px] font-bold uppercase text-cyan-100/70">Home</div>
-                <div className="text-2xl font-black text-white">{score.home}</div>
-              </div>
-              <div className="flex min-w-24 flex-col items-center justify-center border-x border-white/10 px-3">
-                <span className="font-mono text-base font-black text-emerald-100">{formatSoccerClock(gameClock)}</span>
-                <span className="text-[9px] font-bold uppercase text-white/40">Match time</span>
-              </div>
-              <div className="border-r-4 border-rose-400 px-3 py-2.5 text-right">
-                <div className="text-[10px] font-bold uppercase text-rose-100/70">Away</div>
-                <div className="text-2xl font-black text-white">{score.away}</div>
-              </div>
-            </div>
-            <div className="border-t border-white/10 px-3 py-2">
-              <div className="mb-1 flex items-center justify-between text-[10px] font-bold text-white/70">
-                <span>Home {possessionPercent.home}%</span>
-                <span className="uppercase text-white/35">Possession</span>
-                <span>Away {possessionPercent.away}%</span>
-              </div>
-              <div className="flex h-1.5 overflow-hidden rounded-full bg-white/10">
-                <span className="bg-cyan-400" style={{ width: `${possessionPercent.home}%` }} />
-                <span className="bg-rose-400" style={{ width: `${possessionPercent.away}%` }} />
-              </div>
-            </div>
-          </div>
+      <section className="pointer-events-none fixed inset-x-0 top-0 z-40 flex justify-center px-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] sm:px-4">
+        <div
+          aria-label="Match scoreboard"
+          className="grid max-w-[calc(100vw-1rem)] grid-cols-[auto_minmax(3.8rem,1fr)_2.3rem_2.3rem_minmax(3.8rem,1fr)] items-stretch overflow-hidden rounded-md border border-white/20 bg-[#07110ee8] text-[10px] font-black uppercase text-white shadow-xl backdrop-blur-md sm:grid-cols-[5.5rem_minmax(6rem,1fr)_3rem_3rem_minmax(6rem,1fr)] sm:text-xs"
+        >
+          <span className="grid place-items-center border-r border-white/10 px-2 font-mono text-emerald-100 sm:px-3">{formatSoccerClock(gameClock)}</span>
+          <span className="grid min-w-0 place-items-center truncate border-r border-white/10 px-2 text-rose-100 sm:px-4">Rivals</span>
+          <span className="grid place-items-center bg-rose-400/20 py-2 text-lg text-white sm:text-xl">{score.away}</span>
+          <span className="grid place-items-center bg-cyan-400/20 py-2 text-lg text-white sm:text-xl">{score.home}</span>
+          <span className="grid min-w-0 place-items-center truncate border-l border-white/10 px-2 text-cyan-100 sm:px-4">Futbol</span>
         </div>
-        <div />
       </section>
       )}
       {matchState === "playing" && !tutorialUi.active && (
@@ -6796,7 +7006,7 @@ export function ArcadeSoccerGame() {
                 ["D", "Shoot / Kick"],
                 ["Z + D", "Finesse"],
                 ["U", "AI Mode"],
-                ["F", "Fullscreen"],
+                ...(isAppleMobile ? [] : [["F", "Fullscreen"]]),
               ].map(([key, label]) => (
                 <span key={key} className="inline-flex min-w-0 items-center gap-1">
                   <kbd className="shrink-0 rounded border border-white/25 bg-white/10 px-1.5 py-0.5 font-mono text-[10px] font-black text-white">{key}</kbd>
@@ -6825,7 +7035,7 @@ export function ArcadeSoccerGame() {
       )}
       {matchState === "playing" && !tutorialUi.active && minimapSnapshot && (
         <div
-          className="pointer-events-none fixed right-3 top-[calc(env(safe-area-inset-top)+13rem)] z-20 h-16 w-28 rounded-md border border-white/25 bg-black/45 shadow-lg backdrop-blur-sm sm:left-1/2 sm:right-auto sm:top-5 sm:h-20 sm:w-36 sm:-translate-x-1/2 lg:top-6 lg:h-24 lg:w-44"
+          className="pointer-events-none fixed right-3 top-[calc(env(safe-area-inset-top)+13rem)] z-20 h-16 w-28 rounded-md border border-white/25 bg-black/45 shadow-lg backdrop-blur-sm sm:left-1/2 sm:right-auto sm:top-[calc(env(safe-area-inset-top)+4.25rem)] sm:h-20 sm:w-36 sm:-translate-x-1/2 lg:h-24 lg:w-44"
           aria-label="Match minimap"
         >
           <div className="absolute inset-2 rounded-sm border border-emerald-100/45">
@@ -6968,7 +7178,9 @@ export function ArcadeSoccerGame() {
           <div className="pointer-events-auto absolute bottom-[calc(env(safe-area-inset-bottom)+1rem)] left-1/2 flex -translate-x-1/2 items-center gap-2">
             <span className="rounded-full border border-amber-200/40 bg-amber-300/90 px-4 py-2 text-xs font-black text-slate-950">AI ON</span>
             <button className="rounded-full border border-white/20 bg-black/60 px-4 py-2 text-xs font-black text-white" onClick={openSettings}>Pause / Settings</button>
-            <button className="rounded-full border border-white/20 bg-black/60 px-4 py-2 text-xs font-black text-white" onClick={() => performMobileAction("fullscreen")}>{isFullscreen ? "Exit Fullscreen" : "Fullscreen"}</button>
+            {!isAppleMobile && (
+              <button className="rounded-full border border-white/20 bg-black/60 px-4 py-2 text-xs font-black text-white" onClick={() => performMobileAction("fullscreen")}>{isFullscreen ? "Exit Fullscreen" : "Fullscreen"}</button>
+            )}
           </div>
           <p className="absolute bottom-[calc(env(safe-area-inset-bottom)+4.6rem)] left-1/2 -translate-x-1/2 rounded bg-black/55 px-3 py-1.5 text-center text-[11px] font-bold text-white/75">AI match viewer · manual play requires a keyboard and PC</p>
         </div>
@@ -7027,8 +7239,26 @@ export function ArcadeSoccerGame() {
             <SoccerBallLogo />
             <h1 className="mt-5 text-4xl font-black tracking-normal">Futbol</h1>
             {matchState === "ended" && <p className="mt-2 text-lg font-black text-white/85">{resultText} {score.home}-{score.away}</p>}
+            <div className="mt-6 w-full" aria-label="Select striker">
+              <div className="mb-2 text-xs font-black uppercase text-white/55">Test Striker</div>
+              <div className="grid grid-cols-2 rounded-md border border-white/15 bg-black/30 p-1">
+                {([
+                  ["default", "Default Striker"],
+                  ["haaland", "Erling Haaland"],
+                ] as const).map(([profile, label]) => (
+                  <button
+                    key={profile}
+                    type="button"
+                    className={`min-w-0 rounded px-2 py-2 text-xs font-black ${offlineSettings.strikerProfile === profile ? "bg-emerald-300 text-slate-950" : "text-white/70 hover:bg-white/10"}`}
+                    onClick={() => selectStrikerProfile(profile)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <button
-              className="mt-8 inline-flex w-full items-center justify-center gap-3 rounded-md bg-emerald-300 px-6 py-4 text-xl font-black text-slate-950 transition hover:bg-emerald-200 active:scale-[0.98]"
+              className="mt-4 inline-flex w-full items-center justify-center gap-3 rounded-md bg-emerald-300 px-6 py-4 text-xl font-black text-slate-950 transition hover:bg-emerald-200 active:scale-[0.98]"
               onClick={() => startMatch()}
               disabled={engineRequested && !sceneRef.current}
             >
@@ -7466,6 +7696,11 @@ function updateMatch(
     }
     player.mesh.position.copy(player.pos);
     animatePlayer(player, dt);
+    if (player.possessionLabel) {
+      player.possessionLabel.visible = player.profile === "haaland"
+        && active.ballOwnerId === player.id
+        && active.possession === player.team;
+    }
     if (player.role === "keeper") updateKeeperHeadTracking(player, active, dt);
     player.animationSpeed = Math.max(0, player.animationSpeed - dt * 18);
     updateStuckState(player, input.dir, active, dt);
@@ -7749,8 +7984,7 @@ function updateMatch(
           Number(active.renderer.domElement.dataset.looseContactImpulses ?? "0") + 1,
         );
         if (approachSpeed > 2.8 && push > 1.2) playKickSound(active, 0.35 + push * 0.08);
-        active.lastTouchTeam = player.team;
-        active.lastTouchPlayerId = player.id;
+        recordBallTouch(active, player, "other", "deflection", false);
         if (interceptingPass) recordPassInterception(active, player);
         if (active.intendedReceiverId === player.id && active.ballVel.length() > 34) {
           active.intendedReceiverId = null;
@@ -8098,8 +8332,7 @@ function trySweptPassInterception(active: MatchRuntime, start: THREE.Vector3, en
     const deflection = facingDirection(contact.player);
     active.ballVel.addScaledVector(deflection, clamp(ballSpeed * 0.12, 1.8, 5.2));
     active.ballState = "loose";
-    active.lastTouchTeam = contact.player.team;
-    active.lastTouchPlayerId = contact.player.id;
+    recordBallTouch(active, contact.player, "other", "deflection", false);
     contact.player.ballContactCooldown = 0.22;
   }
   active.renderer.domElement.dataset.sweptInterceptions = String(
@@ -8661,6 +8894,7 @@ function executeSimpleGoalKick(active: MatchRuntime, actor: PlayerBody | null, m
   active.tackleLockTimer = Math.max(active.tackleLockTimer, 1.15);
   active.lastTouchTeam = active.restartTeam;
   active.lastTouchPlayerId = keeper?.id ?? null;
+  active.lastTouchRecord = null;
   lockGoalKickBallOnGround(active);
   const plan = chooseGoalKickPlan(active, keeper, direction);
   if (manualCharge !== undefined) {
@@ -8855,6 +9089,7 @@ function releasePreparedGoalKick(active: MatchRuntime) {
   active.ballIgnoreTimer = 1.25;
   active.lastTouchTeam = active.restartTeam;
   active.lastTouchPlayerId = keeper?.id ?? null;
+  if (keeper) recordBallTouch(active, keeper, "foot", "pass", true, active.intendedReceiverId ?? undefined);
   playKickSound(active, 1.25);
 }
 
@@ -8945,8 +9180,20 @@ function resumeRestart(active: MatchRuntime) {
   } else {
     active.ballCurve.set(0, 0, 0);
   }
-  active.lastTouchTeam = active.restartTeam;
-  active.lastTouchPlayerId = active.restartActorId;
+  if (actor) {
+    recordBallTouch(
+      active,
+      actor,
+      restartingPhase === "throw-in" ? "other" : "foot",
+      restartingPhase === "throw-in" ? "throwIn" : "pass",
+      true,
+      active.intendedReceiverId ?? undefined,
+    );
+  } else {
+    active.lastTouchTeam = active.restartTeam;
+    active.lastTouchPlayerId = active.restartActorId;
+    active.lastTouchRecord = null;
+  }
   active.restartActorId = null;
   active.ballState = "kicked";
   active.ballOwnerId = null;
@@ -9185,8 +9432,7 @@ function forceKickoffPass(actor: PlayerBody, active: MatchRuntime) {
     active.ballCurve.set(0, 0, 0);
     active.ballIgnorePlayerId = actor.id;
     active.ballIgnoreTimer = 0.3;
-    active.lastTouchTeam = actor.team;
-    active.lastTouchPlayerId = actor.id;
+    recordBallTouch(active, actor, "foot", "pass", true, supportTarget.id);
     actor.kickTimer = 0.42;
     actor.actionCooldown = ACTION_COOLDOWN;
     playKickSound(active, 1.32);
@@ -9575,7 +9821,7 @@ function realHeaderContact(player: PlayerBody, active: MatchRuntime, dt: number)
     if (traceHeader) active.renderer.domElement.dataset.headerRejectReason = "cooldown";
     return null;
   }
-  const head = player.parts.head;
+  const head = player.parts.headContact ?? player.parts.head;
   if (!head) {
     if (traceHeader) active.renderer.domElement.dataset.headerRejectReason = "missing-head";
     return null;
@@ -9661,8 +9907,7 @@ function tryHeader(player: PlayerBody, active: MatchRuntime, dt = 1 / 60) {
   active.intendedReceiverId = null;
   active.ballIgnorePlayerId = player.id;
   active.ballIgnoreTimer = 0.22;
-  active.lastTouchTeam = player.team;
-  active.lastTouchPlayerId = player.id;
+  recordBallTouch(active, player, "head", "shot", true);
   player.kickTimer = 0.24;
   player.actionCooldown = 0.32;
   player.recoveryTimer = Math.max(player.recoveryTimer, 0.12);
@@ -9726,8 +9971,7 @@ function tryAerialHeaderDuel(active: MatchRuntime, dt: number) {
   active.ballCurve.set(0, 0, 0);
   active.ballIgnorePlayerId = winner.id;
   active.ballIgnoreTimer = 0.24;
-  active.lastTouchTeam = winner.team;
-  active.lastTouchPlayerId = winner.id;
+  recordBallTouch(active, winner, "head", winner.line === "defender" ? "clearance" : "pass", true, active.intendedReceiverId ?? undefined);
   winner.headerTimer = 0.42;
   winner.actionCooldown = 0.34;
   winner.recoveryTimer = Math.max(winner.recoveryTimer, 0.1);
@@ -10189,8 +10433,7 @@ function handleGoalkeeperActions(active: MatchRuntime) {
         active.ballIgnoreTimer = 0.3;
         active.looseContactPlayerId = keeper.id;
         active.looseContactCooldownTimer = 0.22;
-        active.lastTouchTeam = keeper.team;
-        active.lastTouchPlayerId = keeper.id;
+        recordBallTouch(active, keeper, "other", "deflection", false);
         active.renderer.domElement.dataset.keeperParries = String(
           Number(active.renderer.domElement.dataset.keeperParries ?? "0") + 1,
         );
@@ -10383,6 +10626,48 @@ function updateStuckState(player: PlayerBody, intent: THREE.Vector3, active: Mat
   player.lastPos.copy(player.pos);
 }
 
+const jointAnimationEuler = new THREE.Euler(0, 0, 0, "YXZ");
+const jointAnimationQuaternion = new THREE.Quaternion();
+
+function setJointDelta(joint: THREE.Object3D | null, x = 0, y = 0, z = 0) {
+  if (!joint) return;
+  const rest = joint.userData.restQuaternion as THREE.Quaternion | undefined;
+  jointAnimationEuler.set(x, y, z);
+  jointAnimationQuaternion.setFromEuler(jointAnimationEuler);
+  if (rest) joint.quaternion.copy(rest).multiply(jointAnimationQuaternion);
+  else joint.quaternion.copy(jointAnimationQuaternion);
+}
+
+function setJointRestPosition(joint: THREE.Object3D | null) {
+  if (!joint) return;
+  const rest = joint.userData.restPosition as THREE.Vector3 | undefined;
+  if (rest) joint.position.copy(rest);
+}
+
+function locomotionStateForPlayer(
+  player: PlayerBody,
+  speed: number,
+  acceleration: number,
+  turnAngle: number,
+  lateralMotion: number,
+  forwardMotion: number,
+  carryingBall: boolean,
+): LocomotionState {
+  if (player.kickTimer > 0) return player.actionCooldown > 0.08 ? "shot-approach" : "pass-approach";
+  if (player.recoveryTimer > 0 || player.tackleTimer > 0) return "recovery";
+  if (speed < 0.18) return "idle";
+  if (Math.abs(turnAngle) > 0.8) return "sharp-turn";
+  if (forwardMotion < -0.2) return "backpedal";
+  if (Math.abs(lateralMotion) > 0.58) return "lateral-shuffle";
+  if (acceleration > 3.4) return "acceleration";
+  if (acceleration < -3.8) return "deceleration";
+  if (carryingBall) return speed > 7 ? "dribble-sprint" : "dribble-jog";
+  if (speed < 2.2) return "walk";
+  if (speed < 5.2) return "jog";
+  if (speed < 8.6) return "run";
+  return "sprint";
+}
+
 function animatePlayer(player: PlayerBody, dt: number) {
   const speed = Math.max(player.vel.length(), player.animationSpeed);
   const moving = speed > 0.14;
@@ -10400,10 +10685,35 @@ function animatePlayer(player: PlayerBody, dt: number) {
     || (player.blockTimer > 0 && player.forcedMoveTimer <= 0)
     || (Math.abs(lateralMotion) > 0.58 && forwardMotion < 0.72 && speed < 6.4);
   const shuffleBlend = defensiveShuffle ? clamp((Math.abs(lateralMotion) - 0.24) / 0.7, 0.35, 1) : 0;
-  const gaitRatePerMeter = player.role === "keeper"
-    ? 1.04 + locomotionBlend * 0.12
-    : 1.08 + jogBlend * 0.08 + sprintBlend * 0.12;
-  player.runPhase += moving ? speed * dt * gaitRatePerMeter : dt * 0.72;
+  const travelled = Math.hypot(
+    player.pos.x - player.animationLastPos.x,
+    player.pos.z - player.animationLastPos.z,
+  );
+  player.animationLastPos.copy(player.pos);
+  player.distanceTravelled += travelled;
+  const horizontalAcceleration = dt > 0 ? (horizontalSpeed - player.previousHorizontalSpeed) / dt : 0;
+  player.previousHorizontalSpeed = horizontalSpeed;
+  const velocityHeading = horizontalSpeed > 0.08 ? Math.atan2(player.vel.x, player.vel.z) : player.heading;
+  const turnAngle = angleDelta(player.heading, velocityHeading);
+  const nextLocomotionState = locomotionStateForPlayer(
+    player,
+    speed,
+    horizontalAcceleration,
+    turnAngle,
+    lateralMotion,
+    forwardMotion,
+    carryingBall,
+  );
+  if (nextLocomotionState !== player.locomotionState) {
+    player.locomotionState = nextLocomotionState;
+    player.locomotionBlend = 0;
+  }
+  player.locomotionBlend = Math.min(1, player.locomotionBlend + dt * 7.5);
+  const strideLength = player.role === "keeper"
+    ? 2.5
+    : carryingBall ? 2.05 + sprintBlend * 0.28 : 2.25 + jogBlend * 0.28 + sprintBlend * 0.45;
+  if (moving && travelled > 0.0001) player.runPhase += travelled / strideLength * Math.PI * 2;
+  else if (!moving) player.runPhase += dt * 0.72;
   const gaitSin = Math.sin(player.runPhase);
   const gaitCos = Math.cos(player.runPhase);
   const gaitDouble = Math.sin(player.runPhase * 2);
@@ -10415,7 +10725,7 @@ function animatePlayer(player: PlayerBody, dt: number) {
     * directionStrideScale
     * ballControlStride
     * (1 - shuffleBlend * 0.28);
-  const stride = moving ? gaitSin * strideScale : 0;
+  const stride = moving ? gaitSin * strideScale * (0.48 + locomotionBlend * 0.52) : 0;
   const leftRecovery = Math.max(0, gaitSin);
   const rightRecovery = Math.max(0, -gaitSin);
   const leftPushOff = Math.max(0, -gaitCos);
@@ -10437,9 +10747,14 @@ function animatePlayer(player: PlayerBody, dt: number) {
   const {
     bodyRoot,
     pelvis,
+    spineLower,
+    spineUpper,
     chest,
-    neck,
+    neckBase,
+    neckTop,
     head,
+    leftClavicle,
+    rightClavicle,
     leftLeg,
     rightLeg,
     leftKnee,
@@ -10452,6 +10767,7 @@ function animatePlayer(player: PlayerBody, dt: number) {
     rightElbow,
   } = player.parts;
   if (bodyRoot) {
+    setJointRestPosition(bodyRoot);
     bodyRoot.position.x = moving
       ? gaitCos * (player.role === "keeper" ? 0.01 : 0.012 + sprintBlend * 0.008) + lateralMotion * 0.012
       : 0;
@@ -10459,11 +10775,14 @@ function animatePlayer(player: PlayerBody, dt: number) {
       ? Math.abs(gaitDouble) * (0.01 + jogBlend * 0.01 + sprintBlend * 0.01)
       : idleBreath;
     bodyRoot.position.z = 0;
-    bodyRoot.rotation.x = forwardMotion < -0.15 ? 0.025 : forwardLean;
-    bodyRoot.rotation.y = moving ? gaitSin * 0.018 * (1 - shuffleBlend) : 0;
-    bodyRoot.rotation.z = moving
+    setJointDelta(
+      bodyRoot,
+      forwardMotion < -0.15 ? 0.025 : forwardLean,
+      moving ? gaitSin * 0.018 * (1 - shuffleBlend) : 0,
+      moving
       ? gaitCos * (0.012 + sprintBlend * 0.012) + turnLean - lateralMotion * (0.025 + shuffleBlend * 0.035)
-      : 0;
+      : 0,
+    );
     if (player.celebrateTimer > 0) {
       bodyRoot.position.y += Math.max(0, Math.sin(player.celebrateTimer * 14)) * 0.16;
       bodyRoot.rotation.z += Math.sin(player.celebrateTimer * 10) * 0.18;
@@ -10480,86 +10799,104 @@ function animatePlayer(player: PlayerBody, dt: number) {
     }
   }
   if (pelvis) {
+    setJointRestPosition(pelvis);
     const pelvisRestY = typeof pelvis.userData.restY === "number" ? pelvis.userData.restY : 1.48;
     pelvis.position.y = pelvisRestY + (defensiveShuffle ? -0.055 : 0) + idleBreath * 0.35;
-    pelvis.rotation.x = moving ? -0.014 * jogBlend : 0;
-    pelvis.rotation.y = moving ? gaitSin * (0.035 + jogBlend * 0.035 + sprintBlend * 0.025) : 0;
-    pelvis.rotation.z = moving ? gaitCos * (0.014 + sprintBlend * 0.018) + turnLean * 0.32 : 0;
+    setJointDelta(
+      pelvis,
+      moving ? -0.014 * jogBlend : 0,
+      moving ? gaitSin * (0.035 + jogBlend * 0.035 + sprintBlend * 0.025) : 0,
+      moving ? gaitCos * (0.014 + sprintBlend * 0.018) + turnLean * 0.32 : 0,
+    );
   }
+  setJointDelta(
+    spineLower,
+    moving ? forwardLean * 0.24 : idleBreath * 0.3,
+    moving ? gaitSin * (0.026 + sprintBlend * 0.018) : 0,
+    moving ? gaitCos * 0.012 + turnLean * 0.22 : 0,
+  );
+  setJointDelta(
+    spineUpper,
+    moving ? forwardLean * 0.32 : idleBreath * 0.5,
+    moving ? -gaitSin * (0.04 + sprintBlend * 0.025) : 0,
+    moving ? -gaitCos * 0.012 - turnLean * 0.28 : 0,
+  );
   if (chest) {
-    chest.rotation.x = moving ? -0.018 * jogBlend - sprintBlend * 0.024 : idleBreath * 0.8;
-    chest.rotation.y = moving ? -gaitSin * (0.055 + jogBlend * 0.045 + sprintBlend * 0.035) : 0;
-    chest.rotation.z = moving ? -gaitCos * (0.012 + sprintBlend * 0.012) - turnLean * 0.2 : 0;
+    setJointDelta(
+      chest,
+      moving ? -0.018 * jogBlend - sprintBlend * 0.024 : idleBreath * 0.8,
+      moving ? -gaitSin * (0.035 + jogBlend * 0.035 + sprintBlend * 0.03) : 0,
+      moving ? -gaitCos * (0.012 + sprintBlend * 0.012) - turnLean * 0.2 : 0,
+    );
   }
-  if (neck) {
-    neck.rotation.x = moving ? -forwardLean * 0.18 : 0;
-    neck.rotation.y = moving ? gaitSin * 0.016 : 0;
-    neck.rotation.z = moving ? -turnLean * 0.18 : 0;
-  }
-  if (head) {
-    head.rotation.x = moving ? gaitDouble * 0.007 - forwardLean * 0.1 : 0;
-    head.rotation.y = moving ? gaitSin * 0.012 : 0;
-    head.rotation.z = moving ? -turnLean * 0.22 : 0;
-  }
-  if (leftLeg) {
-    leftLeg.rotation.x = stride;
-    leftLeg.rotation.z = defensiveShuffle ? -0.09 - shuffleBlend * 0.04 : turnLean * -0.05;
-  }
-  if (rightLeg) {
-    rightLeg.rotation.x = -stride;
-    rightLeg.rotation.z = defensiveShuffle ? 0.09 + shuffleBlend * 0.04 : turnLean * -0.05;
-  }
-  if (leftKnee) leftKnee.rotation.x = leftKneeFlex;
-  if (rightKnee) rightKnee.rotation.x = rightKneeFlex;
+  setJointDelta(
+    neckBase,
+    moving ? -forwardLean * 0.16 : 0,
+    moving ? gaitSin * 0.012 : 0,
+    moving ? -turnLean * 0.16 : 0,
+  );
+  setJointDelta(
+    neckTop,
+    moving ? -forwardLean * 0.1 : 0,
+    moving ? -gaitSin * 0.008 : 0,
+    moving ? -turnLean * 0.12 : 0,
+  );
+  setJointDelta(
+    head,
+    moving ? gaitDouble * 0.006 - forwardLean * 0.08 : 0,
+    moving ? gaitSin * 0.008 : 0,
+    moving ? -turnLean * 0.14 : 0,
+  );
+  setJointDelta(leftClavicle, 0, moving ? gaitSin * 0.018 : 0, moving ? -gaitCos * 0.012 : 0);
+  setJointDelta(rightClavicle, 0, moving ? -gaitSin * 0.018 : 0, moving ? gaitCos * 0.012 : 0);
+  setJointDelta(leftLeg, stride, 0, defensiveShuffle ? -0.09 - shuffleBlend * 0.04 : turnLean * -0.05);
+  setJointDelta(rightLeg, -stride, 0, defensiveShuffle ? 0.09 + shuffleBlend * 0.04 : turnLean * -0.05);
+  setJointDelta(leftKnee, leftKneeFlex, 0, 0);
+  setJointDelta(rightKnee, rightKneeFlex, 0, 0);
   if (leftFoot) {
     const leftSwinging = moving && gaitSin > 0.04;
-    leftFoot.rotation.x = leftSwinging
+    const footPitch = leftSwinging
       ? clamp(-0.2 + leftKneeFlex * 0.34, -0.18, 0.3)
       : clamp(-stride * 0.24 - sprintBlend * 0.06, -0.22, 0.16);
-    leftFoot.rotation.y = 0;
+    setJointDelta(leftFoot, footPitch, 0, 0);
   }
   if (rightFoot) {
     const rightSwinging = moving && gaitSin < -0.04;
-    rightFoot.rotation.x = rightSwinging
+    const footPitch = rightSwinging
       ? clamp(-0.2 + rightKneeFlex * 0.34, -0.18, 0.3)
       : clamp(stride * 0.24 - sprintBlend * 0.06, -0.22, 0.16);
-    rightFoot.rotation.y = 0;
+    setJointDelta(rightFoot, footPitch, 0, 0);
   }
   if (leftArm) {
-    leftArm.rotation.x = leftArmSwing;
-    leftArm.rotation.z = -0.11 - (carryingBall ? 0.06 : 0) - shuffleBlend * 0.17 + (moving ? gaitSin * 0.012 : 0);
+    setJointDelta(leftArm, leftArmSwing, 0, -(carryingBall ? 0.06 : 0) - shuffleBlend * 0.17 + (moving ? gaitSin * 0.012 : 0));
   }
   if (rightArm) {
-    rightArm.rotation.x = rightArmSwing;
-    rightArm.rotation.z = 0.11 + (carryingBall ? 0.06 : 0) + shuffleBlend * 0.17 - (moving ? gaitSin * 0.012 : 0);
+    setJointDelta(rightArm, rightArmSwing, 0, (carryingBall ? 0.06 : 0) + shuffleBlend * 0.17 - (moving ? gaitSin * 0.012 : 0));
   }
-  if (leftElbow) leftElbow.rotation.x = 0.52 + jogBlend * 0.2 + sprintBlend * 0.2 + Math.max(0, -leftArmSwing) * 0.18;
-  if (rightElbow) rightElbow.rotation.x = 0.52 + jogBlend * 0.2 + sprintBlend * 0.2 + Math.max(0, -rightArmSwing) * 0.18;
+  setJointDelta(leftElbow, clamp(0.12 + jogBlend * 0.2 + sprintBlend * 0.2 + Math.max(0, -leftArmSwing) * 0.18, 0.08, 1.18), 0, 0);
+  setJointDelta(rightElbow, clamp(0.12 + jogBlend * 0.2 + sprintBlend * 0.2 + Math.max(0, -rightArmSwing) * 0.18, 0.08, 1.18), 0, 0);
 
   if (player.role === "keeper" && player.catchTimer <= 0 && player.diveTimer <= 0 && player.keeperAction === "none") {
     if (bodyRoot) bodyRoot.rotation.x -= 0.055;
-    if (leftArm) { leftArm.rotation.x -= 0.32; leftArm.rotation.z = -0.3; }
-    if (rightArm) { rightArm.rotation.x -= 0.32; rightArm.rotation.z = 0.3; }
-    if (leftElbow) leftElbow.rotation.x = 0.82;
-    if (rightElbow) rightElbow.rotation.x = 0.82;
+    setJointDelta(leftArm, -0.32, 0, -0.3);
+    setJointDelta(rightArm, -0.32, 0, 0.3);
+    setJointDelta(leftElbow, 0.82, 0, 0);
+    setJointDelta(rightElbow, 0.82, 0, 0);
     if (leftKnee) leftKnee.rotation.x += 0.14;
     if (rightKnee) rightKnee.rotation.x += 0.14;
   }
 
   if (player.passRequestTimer > 0 && player.kickTimer <= 0 && player.tackleTimer <= 0 && player.catchTimer <= 0) {
     const requestPose = Math.sin(clamp(player.passRequestTimer / 0.34, 0, 1) * Math.PI);
-    if (rightArm) {
-      rightArm.rotation.x = -1.94 - requestPose * 0.34;
-      rightArm.rotation.z = 0.46;
-    }
-    if (rightElbow) rightElbow.rotation.x = -0.28;
+    setJointDelta(rightArm, -1.94 - requestPose * 0.34, 0, 0.46);
+    setJointDelta(rightElbow, 0.18, 0, 0);
   }
 
   if (player.celebrateTimer > 0) {
-    if (leftArm) leftArm.rotation.x = -2.45 + Math.sin(player.celebrateTimer * 9) * 0.18;
-    if (rightArm) rightArm.rotation.x = -2.45 - Math.sin(player.celebrateTimer * 9) * 0.18;
-    if (leftElbow) leftElbow.rotation.x = -0.2;
-    if (rightElbow) rightElbow.rotation.x = -0.2;
+    setJointDelta(leftArm, -2.45 + Math.sin(player.celebrateTimer * 9) * 0.18, 0, 0);
+    setJointDelta(rightArm, -2.45 - Math.sin(player.celebrateTimer * 9) * 0.18, 0, 0);
+    setJointDelta(leftElbow, 0.14, 0, 0);
+    setJointDelta(rightElbow, 0.14, 0, 0);
   }
 
   if (player.kickTimer > 0) {
@@ -10567,12 +10904,18 @@ function animatePlayer(player: PlayerBody, dt: number) {
     const backswing = progress < 0.34 ? -Math.sin(progress / 0.34 * Math.PI / 2) * 0.92 : 0;
     const followThrough = progress >= 0.34 ? Math.sin((progress - 0.34) / 0.66 * Math.PI) * 1.42 : 0;
     const kickArc = backswing + followThrough;
-    if (rightLeg) rightLeg.rotation.x = kickArc;
-    if (rightKnee) rightKnee.rotation.x = backswing < 0 ? 0.72 : Math.max(0.08, 0.36 - followThrough * 0.2);
-    if (leftLeg) leftLeg.rotation.x = -0.16;
-    if (leftKnee) leftKnee.rotation.x = 0.28;
-    if (leftFoot) leftFoot.rotation.x = 0.12;
-    if (rightFoot) rightFoot.rotation.x = -0.18 + followThrough * 0.12;
+    const kickingLeg = player.preferredFoot === "left" ? leftLeg : rightLeg;
+    const kickingKnee = player.preferredFoot === "left" ? leftKnee : rightKnee;
+    const kickingFoot = player.preferredFoot === "left" ? leftFoot : rightFoot;
+    const plantLeg = player.preferredFoot === "left" ? rightLeg : leftLeg;
+    const plantKnee = player.preferredFoot === "left" ? rightKnee : leftKnee;
+    const plantFoot = player.preferredFoot === "left" ? rightFoot : leftFoot;
+    if (kickingLeg) kickingLeg.rotation.x = kickArc;
+    if (kickingKnee) kickingKnee.rotation.x = backswing < 0 ? 0.72 : Math.max(0.08, 0.36 - followThrough * 0.2);
+    if (plantLeg) plantLeg.rotation.x = -0.16;
+    if (plantKnee) plantKnee.rotation.x = 0.28;
+    if (plantFoot) plantFoot.rotation.x = 0.12;
+    if (kickingFoot) kickingFoot.rotation.x = -0.18 + followThrough * 0.12;
     if (pelvis) pelvis.rotation.y += 0.24 * Math.sin(progress * Math.PI);
     if (chest) {
       chest.rotation.y -= 0.2 * Math.sin(progress * Math.PI);
@@ -10592,16 +10935,10 @@ function animatePlayer(player: PlayerBody, dt: number) {
       bodyRoot.rotation.x = -0.48 * headerPose;
       bodyRoot.rotation.z += (player.number % 2 === 0 ? 0.08 : -0.08) * headerPose;
     }
-    if (leftArm) {
-      leftArm.rotation.x = -0.7 * headerPose;
-      leftArm.rotation.z = -0.42;
-    }
-    if (rightArm) {
-      rightArm.rotation.x = -0.7 * headerPose;
-      rightArm.rotation.z = 0.42;
-    }
+    setJointDelta(leftArm, -0.7 * headerPose, 0, -0.42);
+    setJointDelta(rightArm, -0.7 * headerPose, 0, 0.42);
     if (chest) chest.rotation.x = -0.24 * headerPose;
-    if (neck) neck.rotation.x = 0.22 * headerPose;
+    if (neckBase) neckBase.rotation.x = 0.22 * headerPose;
     if (leftKnee) leftKnee.rotation.x = 0.5 * headerPose;
     if (rightKnee) rightKnee.rotation.x = 0.5 * headerPose;
   }
@@ -10620,8 +10957,8 @@ function animatePlayer(player: PlayerBody, dt: number) {
         bodyRoot.rotation.x += 0.2 * controlPose;
         bodyRoot.position.z -= 0.08 * controlPose;
       }
-      if (leftArm) leftArm.rotation.z = -0.34 * controlPose;
-      if (rightArm) rightArm.rotation.z = 0.34 * controlPose;
+      setJointDelta(leftArm, 0, 0, -0.34 * controlPose);
+      setJointDelta(rightArm, 0, 0, 0.34 * controlPose);
     }
   }
   if (player.skillTimer > 0 && player.skillMove) {
@@ -10633,13 +10970,13 @@ function animatePlayer(player: PlayerBody, dt: number) {
       if (rightKnee) rightKnee.rotation.x = 0.72 + rainbowPose * 0.44;
       if (leftLeg) leftLeg.rotation.x = 0.28 - rainbowPose * 0.34;
       if (leftKnee) leftKnee.rotation.x = 0.52;
-      if (leftArm) leftArm.rotation.z = -0.42;
-      if (rightArm) rightArm.rotation.z = 0.42;
+      setJointDelta(leftArm, 0, 0, -0.42);
+      setJointDelta(rightArm, 0, 0, 0.42);
     } else if (player.skillMove === "shot-fake" || player.skillMove === "fake-pass") {
       if (rightLeg) rightLeg.rotation.x = Math.max(rightLeg.rotation.x, 0.62 + movePose * 0.28);
       if (leftLeg) leftLeg.rotation.x = -0.18;
-      if (rightArm) rightArm.rotation.z = 0.28;
-      if (leftArm) leftArm.rotation.z = -0.28;
+      setJointDelta(rightArm, 0, 0, 0.28);
+      setJointDelta(leftArm, 0, 0, -0.28);
     } else if (player.skillMove === "stepovers" || player.skillMove === "elastico" || player.skillMove === "hocus-pocus") {
       if (leftLeg) {
         leftLeg.rotation.x = Math.sin(player.skillTimer * 31) * 0.38;
@@ -10654,22 +10991,16 @@ function animatePlayer(player: PlayerBody, dt: number) {
     } else {
       if (leftLeg) leftLeg.rotation.z = side * 0.12 * Math.abs(movePose);
       if (rightLeg) rightLeg.rotation.z = -side * 0.12 * Math.abs(movePose);
-      if (leftArm) leftArm.rotation.z = -0.16 - side * 0.08;
-      if (rightArm) rightArm.rotation.z = 0.16 - side * 0.08;
+      setJointDelta(leftArm, 0, 0, -0.16 - side * 0.08);
+      setJointDelta(rightArm, 0, 0, 0.16 - side * 0.08);
     }
   }
   if (player.catchTimer > 0) {
     const catchPose = Math.sin((1 - player.catchTimer / 0.62) * Math.PI);
-    if (leftArm) {
-      leftArm.rotation.x = -1.12 - catchPose * 0.3;
-      leftArm.rotation.z = -0.42;
-    }
-    if (rightArm) {
-      rightArm.rotation.x = -1.12 - catchPose * 0.3;
-      rightArm.rotation.z = 0.42;
-    }
-    if (leftElbow) leftElbow.rotation.x = -0.2;
-    if (rightElbow) rightElbow.rotation.x = -0.2;
+    setJointDelta(leftArm, -1.12 - catchPose * 0.3, 0, -0.42);
+    setJointDelta(rightArm, -1.12 - catchPose * 0.3, 0, 0.42);
+    setJointDelta(leftElbow, 0.18, 0, 0);
+    setJointDelta(rightElbow, 0.18, 0, 0);
     if (bodyRoot) bodyRoot.rotation.x = -0.08;
     if (chest) chest.rotation.x = -0.13 * catchPose;
   }
@@ -10685,14 +11016,8 @@ function animatePlayer(player: PlayerBody, dt: number) {
       bodyRoot.rotation.z = -visualDiveSide * 0.7 * divePose;
       bodyRoot.rotation.x = -0.12 * divePose;
     }
-    if (leftArm) {
-      leftArm.rotation.x = -1.62;
-      leftArm.rotation.z = -0.54 - visualDiveSide * 0.32;
-    }
-    if (rightArm) {
-      rightArm.rotation.x = -1.62;
-      rightArm.rotation.z = 0.54 - visualDiveSide * 0.32;
-    }
+    setJointDelta(leftArm, -1.62, 0, -0.54 - visualDiveSide * 0.32);
+    setJointDelta(rightArm, -1.62, 0, 0.54 - visualDiveSide * 0.32);
     if (leftLeg) leftLeg.rotation.x = -0.42 * divePose;
     if (rightLeg) rightLeg.rotation.x = 0.3 * divePose;
   }
@@ -10703,8 +11028,8 @@ function animatePlayer(player: PlayerBody, dt: number) {
       bodyRoot.position.y = -0.18 * smotherPose;
       bodyRoot.position.z = 0.32 * smotherPose;
     }
-    if (leftArm) { leftArm.rotation.x = -1.72; leftArm.rotation.z = -0.3; }
-    if (rightArm) { rightArm.rotation.x = -1.72; rightArm.rotation.z = 0.3; }
+    setJointDelta(leftArm, -1.72, 0, -0.3);
+    setJointDelta(rightArm, -1.72, 0, 0.3);
     if (leftKnee) leftKnee.rotation.x = 0.82;
     if (rightKnee) rightKnee.rotation.x = 0.82;
   }
@@ -10720,8 +11045,8 @@ function animatePlayer(player: PlayerBody, dt: number) {
       if (rightKnee) rightKnee.rotation.x = 0.42 * blockPose;
       if (leftLeg) leftLeg.rotation.x = -0.24 * blockPose;
     }
-    if (leftArm) leftArm.rotation.x = -1.18 * blockPose;
-    if (rightArm) rightArm.rotation.x = -1.24 * blockPose;
+    setJointDelta(leftArm, -1.18 * blockPose, 0, 0);
+    setJointDelta(rightArm, -1.24 * blockPose, 0, 0);
   }
   if (player.tackleTimer > 0) {
     const lunge = Math.sin((1 - player.tackleTimer / 0.58) * Math.PI);
@@ -10737,9 +11062,13 @@ function animatePlayer(player: PlayerBody, dt: number) {
     if (leftKnee) leftKnee.rotation.x = 0.72 * lunge;
     if (rightFoot) rightFoot.rotation.x = -0.22 * lunge;
     if (pelvis) pelvis.rotation.y += (player.number % 2 === 0 ? 0.16 : -0.16) * lunge;
-    if (leftArm) leftArm.rotation.x = -0.82 * lunge;
-    if (rightArm) rightArm.rotation.x = 0.46 * lunge;
+    setJointDelta(leftArm, -0.82 * lunge, 0, 0);
+    setJointDelta(rightArm, 0.46 * lunge, 0, 0);
   }
+  // The forearms are local children of their upper arms. Keeping one positive
+  // hinge convention on both sides prevents mirrored elbows from hyperextending.
+  if (leftElbow) leftElbow.rotation.x = clamp(leftElbow.rotation.x, 0.08, 1.55);
+  if (rightElbow) rightElbow.rotation.x = clamp(rightElbow.rotation.x, 0.08, 1.55);
 }
 
 function ensureAudio(active: MatchRuntime) {
@@ -11958,8 +12287,7 @@ function tryRainbowFlick(player: PlayerBody, active: MatchRuntime, goalDistance:
   active.intendedReceiverId = player.id;
   active.ballIgnorePlayerId = player.id;
   active.ballIgnoreTimer = 0.24;
-  active.lastTouchTeam = player.team;
-  active.lastTouchPlayerId = player.id;
+  recordBallTouch(active, player, "foot", "control", true, player.id);
   player.skillMove = "rainbow-flick";
   player.skillTimer = 0.68;
   player.skillCooldown = 6.4 + (player.number % 3) * 0.8;
@@ -14533,8 +14861,7 @@ function handleFieldShotBlocks(active: MatchRuntime) {
   active.ballVel.y = active.ballPos.y > 1.25 ? clamp(active.ballPos.y * 0.32, 0.7, 1.55) : 0.42;
   active.ballCurve.set(0, 0, 0);
   active.ballState = "loose";
-  active.lastTouchTeam = blockingPlayer.team;
-  active.lastTouchPlayerId = blockingPlayer.id;
+  recordBallTouch(active, blockingPlayer, "other", "deflection", false);
   active.emergencyBlocks += 1;
   active.ballIgnorePlayerId = blockingPlayer.id;
   active.ballIgnoreTimer = 0.08;
@@ -14925,6 +15252,7 @@ function takePossession(player: PlayerBody, active: MatchRuntime, verifiedFirstT
   }
   const flatBall = new THREE.Vector3(active.ballPos.x, 0, active.ballPos.z);
   const contactDistance = player.pos.distanceTo(flatBall);
+  const restrictedBackPass = player.role === "keeper" && deliberateFootBackPassRestriction(player, active);
   const legalKeeperHands = player.role === "keeper" && keeperMayUseHands(player, active);
   const maximumContactDistance = legalKeeperHands
     ? active.ballPos.y > 1.35 ? 2.5 : 2.25
@@ -14980,8 +15308,19 @@ function takePossession(player: PlayerBody, active: MatchRuntime, verifiedFirstT
   ).toFixed(4);
   clearPassIntent(active, completedPassIntent ? "resolved" : "abandoned");
   active.possession = player.team;
-  active.lastTouchTeam = player.team;
-  active.lastTouchPlayerId = player.id;
+  const controlBodyPart: BallTouchBodyPart = verifiedFirstTouch?.type === "thigh"
+    ? "knee"
+    : verifiedFirstTouch?.type === "chest"
+      ? "chest"
+      : "foot";
+  if (restrictedBackPass) {
+    active.lastTouchTeam = player.team;
+    active.lastTouchPlayerId = player.id;
+    active.renderer.domElement.dataset.keeperBackPassHandledWith = "foot";
+    active.renderer.domElement.dataset.keeperBackPassRestrictedId = player.id;
+  } else {
+    recordBallTouch(active, player, controlBodyPart, "control", false);
+  }
   if (player.role === "keeper" && !legalKeeperHands) player.catchTimer = 0;
   active.ballVel.copy(player.vel).multiplyScalar(intendedAerialTrap ? 0.34 : 0.78);
   active.tackleLockTimer = Math.max(active.tackleLockTimer, intendedAerialTrap ? 0.7 : player.role === "keeper" ? 0.64 : 0.58);
@@ -15196,8 +15535,12 @@ function kickTowardPoint(
   active.cooldown = style === "short" || style === "low-through" ? 0.2 : 0.28;
   active.ballIgnorePlayerId = player.id;
   active.ballIgnoreTimer = style === "shot" || style === "driven" || style === "finesse" || style === "chip" ? 0.18 : style === "short" ? 0.24 : 0.16;
-  active.lastTouchTeam = player.team;
-  active.lastTouchPlayerId = player.id;
+  const touchAction: BallTouchAction = untargetedKick === "clearance"
+    ? "clearance"
+    : shotStyle
+      ? "shot"
+      : "pass";
+  recordBallTouch(active, player, "foot", touchAction, true, intendedReceiver?.id);
   player.kickTimer = style === "long" || style === "chip" ? 0.5 : 0.42;
   player.actionCooldown = style === "short" || style === "low-through" ? ACTION_COOLDOWN : 0.34;
   playKickSound(active, force.power > 26 ? 1.55 : 1.2);
