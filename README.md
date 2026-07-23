@@ -1,6 +1,6 @@
 # Futbol Arcade Soccer
 
-Futbol Arcade Soccer is an ad-free 3D browser football game. It focuses on fast local play: one active player, AI teammates, AI opponents, ball physics, goal kicks, throw-ins, corners, and a side broadcast camera.
+Futbol Arcade Soccer is an ad-free 3D browser football game. It focuses on fast local play with two independently configurable anonymous, numbered teams: one active player, AI teammates, AI opponents, ball physics, goal kicks, throw-ins, corners, and a side broadcast camera.
 
 Use Brave Browser as the primary browser for testing and playing. Brave is fast, Chromium-based, better for privacy by default, and suitable for modern WebGL game performance.
 
@@ -70,16 +70,31 @@ The app generates a `visitor_id` with `crypto.randomUUID()` on first visit and s
 
 Mobile and iPad controls show a joystick plus action buttons for Switch, Kick, Fullscreen, and AI ON/OFF.
 
+## Anonymous Team Setup
+
+The pre-match setup configures both teams independently. Each side has exactly 11 anonymous players identified only by formation slot, position, shirt number, neutral body preset, preferred foot, and tactical role. There are no player names or likeness-specific presets.
+
+Available formations:
+
+- `4-3-3`
+- `4-4-2`
+- `4-2-3-1`
+- `3-5-2`
+- `3-2-4-1`
+- `3-2-2-3`
+
+Shirt numbers must be unique within a team and remain in the `1-99` range. The formation cards and shirt backs show position/number only.
+
 ## Audio Sources And Licensing
 
-Futbol does not ship ripped broadcast, FIFA, eFootball, or third-party stadium audio.
+Futbol does not ship ripped broadcast, commercial-game, or third-party stadium audio.
 
-- Crowd ambience and match reactions are generated at runtime with the browser Web Audio API from synthesized noise and tones.
-- Commentary uses original generic lines defined in the game and the browser's built-in Speech Synthesis voice.
-- Source URL: none; the audio is generated locally in the browser.
-- License/attribution: original project code and text, with no external audio attribution required.
+- Synthetic crowd white noise has been removed.
+- Browser `speechSynthesis` commentary has been removed.
+- The runtime supports preloaded, redistributable recorded ambience/reaction files, but disables those layers if the licensed files are absent.
+- Full source research and attribution status are documented in `public/audio/ATTRIBUTION.md`.
 
-Audio begins only after the player presses Kickoff. Crowd and commentary volumes are controlled separately in Formation & Match Settings, and all active audio sources are stopped when a match resets.
+Audio begins only after the player presses Kickoff. Active audio sources are stopped when a match resets.
 
 ## Connect Supabase To Vercel
 
@@ -110,7 +125,9 @@ Use Brave Browser for the primary test pass.
 6. Confirm `End game` returns to the menu.
 7. Confirm goal kicks choose short/medium/long options instead of always full power.
 8. Confirm there is no multiplayer UI.
-9. Open `http://localhost:3000/?perf=1` and confirm FPS/frame time.
+9. Configure different formations and names for both anonymous teams.
+10. Open `http://localhost:3000/?anonymousSetupTest=100` and confirm 600 generated teams with zero failures.
+11. Open `http://localhost:3000/?perf=1` and confirm FPS/frame time.
 
 ## Deploy On Vercel
 
