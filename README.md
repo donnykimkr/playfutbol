@@ -84,6 +84,7 @@ Available formations:
 - `3-2-2-3`
 
 Shirt numbers must be unique within a team and remain in the `1-99` range. The formation cards and shirt backs show position/number only.
+Both team setups are stored locally in the browser and restored without player identity data.
 
 ## Audio Sources And Licensing
 
