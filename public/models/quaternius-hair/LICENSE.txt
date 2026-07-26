@@ -1,0 +1,9 @@
+These hair GLB files are derived from Quaternius Universal Base Characters.
+
+Author: Quaternius (@Quaternius)
+Source: https://quaternius.com/packs/universalbasecharacters.html
+License: CC0 1.0 Universal
+License URL: https://creativecommons.org/publicdomain/zero/1.0/
+
+The source glTF files were converted to GLB and their textures were resized to
+at most 256 x 256 for browser use. Geometry and UVs were preserved.

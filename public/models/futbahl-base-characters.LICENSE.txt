@@ -1,0 +1,27 @@
+Asset family: Universal Base Characters (Standard/free edition)
+Author: Quaternius (@Quaternius)
+Original source: https://quaternius.com/packs/universalbasecharacters.html
+Downloaded from the author's official distribution on 2026-07-26.
+
+Files derived from this asset:
+- futbahl-base-male.glb
+- futbahl-base-female.glb
+- quaternius-hair/Hair_Buzzed.glb
+- quaternius-hair/Hair_SimpleParted.glb
+- quaternius-hair/Hair_Buns.glb
+- quaternius-hair/Hair_Long.glb
+
+Local processing:
+- Source glTF files were converted to binary glTF.
+- Base-character textures were resized to at most 512 x 512.
+- Hair textures were resized to at most 256 x 256.
+- Geometry, rigging, UVs, and skin weights were otherwise preserved.
+
+License:
+CC0 1.0 Universal (CC0 1.0)
+Public Domain Dedication
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Original package notice:
+Models by @Quaternius
+https://www.patreon.com/quaternius

@@ -6,7 +6,11 @@ import * as THREE from "three";
 import { GraduationCap, Keyboard, Play, RotateCcw, Settings, SkipForward, X } from "lucide-react";
 import { getSupabaseClient } from "@/lib/supabase";
 import { TeamSetupPanel } from "@/components/team-setup-panel";
-import { FutbahlLocomotionController } from "@/lib/futbahl-locomotion";
+import {
+  FutbahlLocomotionController,
+  type FutbahlPlayerAppearance,
+} from "@/lib/futbahl-locomotion";
+import { attachLicensedBallVisual } from "@/lib/futbahl-ball-visual";
 import {
   BODY_PRESETS as ANONYMOUS_BODY_PRESETS,
   DEFAULT_OFFLINE_SETTINGS as ANONYMOUS_DEFAULT_SETTINGS,
@@ -308,6 +312,10 @@ type MatchRuntime = {
   ballPhysicsAccumulator: number;
   ballGrounded: boolean;
   ballRollingDistance: number;
+  ballAngularVelocity: THREE.Vector3;
+  ballCollisionCount: number;
+  ballPhysicsSubsteps: number;
+  ballFrictionState: "airborne" | "sliding" | "rolling" | "sleeping";
   ballVel: THREE.Vector3;
   ballCurve: THREE.Vector3;
   score: { home: number; away: number };
@@ -476,18 +484,24 @@ type MatchRuntime = {
 const FIELD_SCALE = 1.5;
 const FIELD_W = 64 * FIELD_SCALE;
 const FIELD_L = 96 * FIELD_SCALE;
+const WORLD_UNITS_PER_METER = ((FIELD_L / 105) + (FIELD_W / 68)) / 2;
 const FORMATION_SCALE = 1.42;
 const GOAL_W = 16;
 const PLAYER_RADIUS = 1.08;
-const BALL_RADIUS = 0.36;
+const BALL_RADIUS = 0.11 * WORLD_UNITS_PER_METER;
+const BALL_MASS_KG = 0.43;
 const CLOCK_SPEED = 18;
 const HALF_TIME_SECONDS = 45 * 60;
 const FULL_TIME_SECONDS = 90 * 60;
-const BALL_MAX_SPEED = 78;
-const BALL_ROLLING_FRICTION = 0.58;
+const BALL_MAX_SPEED = 42 * WORLD_UNITS_PER_METER;
+const BALL_ROLLING_FRICTION = 0.7;
+const BALL_SLIDING_FRICTION = 2.7;
+const BALL_AIR_DRAG = 0.018;
+const BALL_SPIN_DAMPING = 0.36;
+const BALL_MAGNUS = 0.0018;
 const BALL_STOP_SPEED = 0.035;
-const BALL_GRAVITY = 18;
-const BALL_BOUNCE = 0.42;
+const BALL_GRAVITY = 9.81 * WORLD_UNITS_PER_METER;
+const BALL_BOUNCE = 0.46;
 const BALL_PHYSICS_STEP = 1 / 120;
 const BALL_MAX_SUBSTEPS = 5;
 const BALL_ENTER_GROUNDED_THRESHOLD = BALL_RADIUS + 0.035;
@@ -564,6 +578,7 @@ const LOCOMOTION_REFERENCE_SPEEDS = {
   sprint: 9.5,
 } as const;
 const ADVERTISING_BRANDS = [
+  { name: "FUTBAHL", background: "#15962f", accent: "#ffffff" },
   { name: "NOVA STRIDE", background: "#0b1833", accent: "#4de8ff" },
   { name: "PULSE+", background: "#4b1021", accent: "#ffcf4d" },
   { name: "ORBIT MOBILE", background: "#102a43", accent: "#7dd3fc" },
@@ -1313,6 +1328,19 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
   canvas.dataset.ballX = active.ballPos.x.toFixed(3);
   canvas.dataset.ballY = active.ballPos.y.toFixed(3);
   canvas.dataset.ballZ = active.ballPos.z.toFixed(3);
+  canvas.dataset.ballAngularVelocity = [
+    active.ballAngularVelocity.x.toFixed(2),
+    active.ballAngularVelocity.y.toFixed(2),
+    active.ballAngularVelocity.z.toFixed(2),
+  ].join(",");
+  canvas.dataset.ballGrounded = String(active.ballGrounded);
+  canvas.dataset.ballFrictionState = active.ballFrictionState;
+  canvas.dataset.ballCollisionCount = String(active.ballCollisionCount);
+  canvas.dataset.ballPhysicsSubsteps = String(active.ballPhysicsSubsteps);
+  canvas.dataset.ballRadius = BALL_RADIUS.toFixed(4);
+  canvas.dataset.ballMassKg = BALL_MASS_KG.toFixed(2);
+  canvas.dataset.worldUnitsPerMeter = WORLD_UNITS_PER_METER.toFixed(4);
+  canvas.dataset.licensedBallLoaded = String(Boolean(active.ball.userData.licensedBallLoaded));
   canvas.dataset.engineId = String(active.engineId);
   canvas.dataset.restartCount = String(active.restartCount);
   canvas.dataset.restartSeed = String(active.restartSeed);
@@ -2599,12 +2627,21 @@ function advertisingBrandFontSize(context: CanvasRenderingContext2D, canvas: HTM
   return fontSize;
 }
 
-function paintAdvertisingBrand(canvas: HTMLCanvasElement, brandIndex: number) {
+function paintAdvertisingBrand(
+  canvas: HTMLCanvasElement,
+  brandIndex: number,
+  brandingImage?: HTMLImageElement,
+) {
   const context = canvas.getContext("2d");
   if (!context) return null;
   const brand = ADVERTISING_BRANDS[brandIndex % ADVERTISING_BRANDS.length];
   context.fillStyle = brand.background;
   context.fillRect(0, 0, canvas.width, canvas.height);
+  if (brand.name === "FUTBAHL" && brandingImage?.complete && brandingImage.naturalWidth > 0) {
+    const size = canvas.height;
+    context.drawImage(brandingImage, canvas.width / 2 - size / 2, 0, size, size);
+    return canvas.height;
+  }
   context.textAlign = "center";
   context.textBaseline = "middle";
   const fontSize = advertisingBrandFontSize(context, canvas, brand.name);
@@ -2627,7 +2664,12 @@ function drawAdvertisingBrand(texture: THREE.CanvasTexture, brandIndex: number) 
     stagingCanvas.height = canvas.height;
     texture.userData.advertisingStagingCanvas = stagingCanvas;
   }
-  const fontSize = paintAdvertisingBrand(stagingCanvas, brandIndex);
+  texture.userData.advertisingBrandIndex = brandIndex;
+  const fontSize = paintAdvertisingBrand(
+    stagingCanvas,
+    brandIndex,
+    texture.userData.futbahlBrandingImage as HTMLImageElement | undefined,
+  );
   if (fontSize === null) return;
   const context = canvas.getContext("2d");
   if (!context) return;
@@ -2651,6 +2693,12 @@ function createAdvertisingBoardTexture() {
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
+  const brandingImage = new window.Image();
+  brandingImage.src = "/branding/futbahl-logo.png";
+  brandingImage.onload = () => {
+    texture.userData.futbahlBrandingImage = brandingImage;
+    drawAdvertisingBrand(texture, Number(texture.userData.advertisingBrandIndex ?? 0));
+  };
   drawAdvertisingBrand(texture, 0);
   const context = canvas.getContext("2d");
   texture.userData.advertisingFontSizes = context
@@ -3663,28 +3711,67 @@ function setFormationHomes(players: PlayerBody[], half: 1 | 2) {
   });
 }
 
-async function attachSinglePlayerLocomotionPrototype(active: MatchRuntime) {
+function locomotionAppearance(player: PlayerBody, index: number): FutbahlPlayerAppearance {
+  const isKeeper = player.role === "keeper";
+  const home = HOME_KIT;
+  const homeColor = activeOfflineSettings.homeColor || home.primary;
+  return {
+    playerId: player.id,
+    team: player.team,
+    role: player.role,
+    number: player.number,
+    index,
+    shirt: isKeeper
+      ? (player.team === "home" ? home.keeper : AWAY_KEEPER_COLOR)
+      : (player.team === "home" ? homeColor : AWAY_COLOR),
+    trim: isKeeper ? "#111827" : player.team === "home" ? home.secondary : AWAY_TRIM,
+    shorts: isKeeper ? "#111827" : player.team === "home" ? home.shorts : AWAY_SHORTS,
+    socks: isKeeper ? "#111827" : player.team === "home" ? home.socks : "#f8fafc",
+    boots: player.team === "home" ? "#d1d5db" : "#111827",
+  };
+}
+
+async function attachAllPlayerLocomotion(active: MatchRuntime) {
   const generation = ++active.locomotionAttachGeneration;
-  const testPlayer = active.players.find((player) => player.team === "home" && player.controlledBy === "p1")
-    ?? active.players.find((player) => player.team === "home" && player.role !== "keeper")
-    ?? null;
-  if (!testPlayer) return;
-  try {
-    const controller = await FutbahlLocomotionController.create(testPlayer.mesh, active.locomotionDebugElement);
+  const results = await Promise.allSettled(active.players.map(async (player, index) => {
+    const controller = await FutbahlLocomotionController.create(
+      player.mesh,
+      player.controlledBy === "p1" ? active.locomotionDebugElement : null,
+      locomotionAppearance(player, index),
+    );
+    return { player, controller };
+  }));
+  if (generation !== active.locomotionAttachGeneration) {
+    results.forEach((result) => {
+      if (result.status === "fulfilled") result.value.controller.dispose();
+    });
+    return;
+  }
+  let attached = 0;
+  const missing = new Set<string>();
+  results.forEach((result) => {
+    if (result.status === "rejected") {
+      console.warn("[Futbahl player] Licensed character could not be loaded; keeping the fallback body.", result.reason);
+      return;
+    }
+    const { player, controller } = result.value;
     const stillCurrent = generation === active.locomotionAttachGeneration
-      && active.players.includes(testPlayer)
-      && active.scene.getObjectById(testPlayer.mesh.id) === testPlayer.mesh;
+      && active.players.includes(player)
+      && active.scene.getObjectById(player.mesh.id) === player.mesh;
     if (!stillCurrent) {
       controller.dispose();
       return;
     }
-    testPlayer.locomotionController?.dispose();
-    testPlayer.locomotionController = controller;
-    active.renderer.domElement.dataset.locomotionPrototypePlayerId = testPlayer.id;
-    active.renderer.domElement.dataset.locomotionPrototypeMissingClips = controller.missingClips.join(",");
-  } catch (error) {
-    console.warn("[Futbahl locomotion] Prototype GLB could not be loaded; keeping the existing player model.", error);
-    active.renderer.domElement.dataset.locomotionPrototypeLoadError = error instanceof Error ? error.message : String(error);
+    player.locomotionController?.dispose();
+    player.locomotionController = controller;
+    controller.missingClips.forEach((clip) => missing.add(clip));
+    attached += 1;
+  });
+  active.renderer.domElement.dataset.locomotionPlayerCount = String(attached);
+  active.renderer.domElement.dataset.locomotionMissingClips = [...missing].join(",");
+  delete active.renderer.domElement.dataset.locomotionLoadError;
+  if (attached !== active.players.length) {
+    active.renderer.domElement.dataset.locomotionLoadError = `${active.players.length - attached} player fallback(s) active`;
   }
 }
 
@@ -3698,7 +3785,7 @@ function replaceRuntimePlayers(active: MatchRuntime) {
   });
   active.players = formationPlayers(active.half);
   active.players.forEach((player) => active.scene.add(player.mesh));
-  void attachSinglePlayerLocomotionPrototype(active);
+  void attachAllPlayerLocomotion(active);
 }
 
 function applyOfflineSettingsToRuntime(active: MatchRuntime) {
@@ -4191,6 +4278,10 @@ export function ArcadeSoccerGame() {
     active.ballPhysicsAccumulator = 0;
     active.ballGrounded = true;
     active.ballRollingDistance = 0;
+    active.ballAngularVelocity.set(0, 0, 0);
+    active.ballCollisionCount = 0;
+    active.ballPhysicsSubsteps = 0;
+    active.ballFrictionState = "sleeping";
     active.ballVel.set(0, 0, 0);
     active.ballCurve.set(0, 0, 0);
     active.cooldown = 1.2;
@@ -4596,7 +4687,7 @@ export function ArcadeSoccerGame() {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color("#86cfff");
-    scene.fog = null;
+    scene.fog = new THREE.Fog("#9bd5f2", 150, 255);
 
     const camera = new THREE.PerspectiveCamera(48, mount.clientWidth / mount.clientHeight, 0.1, 260);
     camera.position.set(BROADCAST_CAMERA_X, BROADCAST_CAMERA_Y, BROADCAST_CAMERA_Z);
@@ -4618,6 +4709,7 @@ export function ArcadeSoccerGame() {
       perfElement.style.background = "rgba(0,0,0,0.72)";
       perfElement.style.color = "#bbf7d0";
       perfElement.style.font = "700 12px monospace";
+      perfElement.style.whiteSpace = "pre";
       perfElement.style.pointerEvents = "none";
       perfElement.textContent = "profiling...";
       mount.appendChild(perfElement);
@@ -4654,7 +4746,8 @@ export function ArcadeSoccerGame() {
     };
     renderer.setPixelRatio(resolveRendererDpr(Math.max(1, mount.clientWidth), Math.max(1, mount.clientHeight)));
     renderer.setClearColor("#86cfff", 1);
-    renderer.shadowMap.enabled = false;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.style.width = "100%";
     renderer.domElement.style.height = "100%";
     renderer.domElement.style.display = "block";
@@ -4744,13 +4837,56 @@ export function ArcadeSoccerGame() {
 
     scene.add(new THREE.HemisphereLight("#dff7ff", "#88c98f", 2.6));
     const sky = new THREE.Mesh(
-      new THREE.SphereGeometry(180, 12, 8),
-      new THREE.MeshBasicMaterial({ color: "#7cc7ff", side: THREE.BackSide, fog: false }),
+      new THREE.SphereGeometry(210, 20, 12),
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        fog: false,
+        depthWrite: false,
+        uniforms: {
+          topColor: { value: new THREE.Color("#469ce1") },
+          horizonColor: { value: new THREE.Color("#d8f2ff") },
+          groundColor: { value: new THREE.Color("#91c9d9") },
+        },
+        vertexShader: `
+          varying vec3 vWorldPosition;
+          void main() {
+            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+            vWorldPosition = worldPosition.xyz;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          varying vec3 vWorldPosition;
+          uniform vec3 topColor;
+          uniform vec3 horizonColor;
+          uniform vec3 groundColor;
+          void main() {
+            float height = normalize(vWorldPosition).y;
+            vec3 color = height >= 0.0
+              ? mix(horizonColor, topColor, smoothstep(0.0, 0.68, height))
+              : mix(horizonColor, groundColor, smoothstep(0.0, 0.42, -height));
+            gl_FragColor = vec4(color, 1.0);
+          }
+        `,
+      }),
     );
-    sky.position.y = 30;
+    sky.position.y = 22;
+    sky.name = "futbahl-gradient-sky";
+    sky.renderOrder = -10;
     scene.add(sky);
     const sun = new THREE.DirectionalLight("#ffffff", 2.2);
     sun.position.set(16, 42, 28);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(1024, 1024);
+    sun.shadow.camera.left = -62;
+    sun.shadow.camera.right = 62;
+    sun.shadow.camera.top = 82;
+    sun.shadow.camera.bottom = -82;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 135;
+    sun.shadow.bias = -0.00035;
+    sun.shadow.normalBias = 0.025;
+    sun.shadow.radius = 2;
     scene.add(sun);
 
     addPitch(scene);
@@ -4761,6 +4897,7 @@ export function ArcadeSoccerGame() {
 
     const ball = createSoccerBall();
     scene.add(ball);
+    void attachLicensedBallVisual(ball, BALL_RADIUS);
     const ballShadow = createBlobShadow(0.62, 0.24);
     scene.add(ballShadow);
     const passTargetMarker = createPassTargetMarker();
@@ -4816,6 +4953,10 @@ export function ArcadeSoccerGame() {
       ballPhysicsAccumulator: 0,
       ballGrounded: true,
       ballRollingDistance: 0,
+      ballAngularVelocity: new THREE.Vector3(),
+      ballCollisionCount: 0,
+      ballPhysicsSubsteps: 0,
+      ballFrictionState: "sleeping",
       ballVel: new THREE.Vector3(),
       ballCurve: new THREE.Vector3(),
       score: { home: 0, away: 0 },
@@ -5000,7 +5141,7 @@ export function ArcadeSoccerGame() {
     }
     nextEngineId += 1;
     sceneRef.current = runtime;
-    void attachSinglePlayerLocomotionPrototype(runtime);
+    void attachAllPlayerLocomotion(runtime);
     const pendingLaunch = pendingLaunchRef.current;
     if (pendingLaunch) {
       pendingLaunchRef.current = null;
@@ -7308,7 +7449,17 @@ export function ArcadeSoccerGame() {
           active.renderer.domElement.dataset.averageRendererMs = (active.perfRendererTotal / Math.max(1, active.perfRendererSamples)).toFixed(3);
           const sortedLatencies = [...active.perfInputLatencies].sort((a, b) => a - b);
           active.renderer.domElement.dataset.inputLatencyP95Ms = (sortedLatencies[Math.floor(sortedLatencies.length * 0.95)] ?? 0).toFixed(2);
-          active.perfElement.textContent = `${fps.toFixed(0)} fps · ${avgMs.toFixed(1)} ms`;
+          active.perfElement.textContent = [
+            `${fps.toFixed(0)} fps · ${avgMs.toFixed(1)} ms`,
+            `${active.renderer.info.render.calls} calls · ${active.renderer.info.render.triangles.toLocaleString()} tris`,
+            `${active.renderer.info.memory.textures} textures · ${active.players.filter((player) => player.locomotionController).length} mixers`,
+            `ball p ${active.ballPos.x.toFixed(1)},${active.ballPos.y.toFixed(1)},${active.ballPos.z.toFixed(1)}`,
+            `vel ${active.ballVel.x.toFixed(1)},${active.ballVel.y.toFixed(1)},${active.ballVel.z.toFixed(1)} · ${active.ballVel.length().toFixed(1)} u/s`,
+            `${active.ballGrounded ? "grounded" : "airborne"} · ${active.ballFrictionState} · drag ${active.ballGrounded ? "turf" : BALL_AIR_DRAG.toFixed(3)}`,
+            `owner ${active.ballOwnerId ?? "loose"} · receiver ${active.passIntent?.receiverId ?? "none"}`,
+            `${active.ballCollisionCount} contacts · ${active.ballPhysicsSubsteps} substeps`,
+            `omega ${active.ballAngularVelocity.x.toFixed(1)}, ${active.ballAngularVelocity.y.toFixed(1)}, ${active.ballAngularVelocity.z.toFixed(1)}`,
+          ].join("\n");
           active.perfFrames = 0;
           active.perfFrameTotal = 0;
           active.perfLastReport = time;
@@ -7586,6 +7737,13 @@ export function ArcadeSoccerGame() {
           aria-label="Match scoreboard"
           className="futbahl-scoreboard"
         >
+          <Image
+            src="/branding/futbahl-logo.png"
+            width={28}
+            height={28}
+            className="hidden h-7 w-7 object-contain sm:block"
+            alt="Futbahl"
+          />
           <span className="futbahl-scoreboard__time">{formatSoccerClock(gameClock)}</span>
           <span className="futbahl-scoreboard__team futbahl-scoreboard__team--away">
             <span className="hidden sm:inline">{offlineSettings.aiTeam.name.toUpperCase()}</span>
@@ -7727,7 +7885,10 @@ export function ArcadeSoccerGame() {
           <div className="mx-auto my-4 w-full max-w-5xl rounded-md border border-white/15 bg-[#08130d]/95 p-4 shadow-2xl sm:p-5">
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="text-2xl font-black">Formation & Match Settings</h2>
+                <div className="flex items-center gap-3">
+                  <Image src="/branding/futbahl-logo.png" width={42} height={42} className="h-10 w-10 object-contain" alt="Futbahl" />
+                  <h2 className="text-2xl font-black">Formation & Match Settings</h2>
+                </div>
                 <p className="mt-1 text-sm text-white/60">Configure both anonymous numbered teams before kickoff.</p>
               </div>
               <div className="flex gap-2">
@@ -7929,6 +8090,9 @@ function integrateFreeBallPhysics(active: MatchRuntime, frameDt: number) {
     BALL_PHYSICS_STEP * BALL_MAX_SUBSTEPS,
   );
   const stepStart = new THREE.Vector3();
+  const horizontalVelocity = new THREE.Vector3();
+  const rollingAngularTarget = new THREE.Vector3();
+  const magnusForce = new THREE.Vector3();
   let substeps = 0;
   while (active.ballPhysicsAccumulator >= BALL_PHYSICS_STEP && substeps < BALL_MAX_SUBSTEPS) {
     const dt = BALL_PHYSICS_STEP;
@@ -7947,7 +8111,15 @@ function integrateFreeBallPhysics(active: MatchRuntime, frameDt: number) {
       active.ballGrounded = true;
     }
 
-    if (!active.ballGrounded) active.ballVel.y -= BALL_GRAVITY * dt;
+    if (!active.ballGrounded) {
+      active.ballVel.y -= BALL_GRAVITY * dt;
+      const airSpeed = active.ballVel.length();
+      active.ballVel.multiplyScalar(Math.exp(-BALL_AIR_DRAG * airSpeed * dt));
+      magnusForce.crossVectors(active.ballAngularVelocity, active.ballVel)
+        .multiplyScalar(BALL_MAGNUS * dt);
+      active.ballVel.add(magnusForce);
+      active.ballFrictionState = "airborne";
+    }
     if (active.ballCurve.lengthSq() > 0.0001) {
       const curveScale = active.ballGrounded ? 0.38 : 1;
       active.ballVel.addScaledVector(active.ballCurve, dt * curveScale);
@@ -7959,13 +8131,14 @@ function integrateFreeBallPhysics(active: MatchRuntime, frameDt: number) {
       active.ballPos.y = BALL_RADIUS;
       if (active.ballVel.y < -1.2) {
         active.ballVel.y = -active.ballVel.y * BALL_BOUNCE;
+        active.ballAngularVelocity.x *= 0.9;
+        active.ballAngularVelocity.z *= 0.9;
+        active.ballCollisionCount += 1;
         active.ballGrounded = false;
       } else {
         active.ballVel.y = 0;
         active.ballGrounded = true;
       }
-      active.ballVel.x *= 0.97;
-      active.ballVel.z *= 0.97;
     }
 
     resolveGoalFrameCollision(active.ballPos, active.ballVel);
@@ -7977,13 +8150,35 @@ function integrateFreeBallPhysics(active: MatchRuntime, frameDt: number) {
     }
     trySweptPassInterception(active, stepStart, active.ballPos);
 
-    const groundFriction = active.ballGrounded ? BALL_ROLLING_FRICTION : 0.94;
-    active.ballVel.x *= Math.pow(groundFriction, dt);
-    active.ballVel.z *= Math.pow(groundFriction, dt);
+    if (active.ballGrounded) {
+      horizontalVelocity.set(active.ballVel.x, 0, active.ballVel.z);
+      rollingAngularTarget.set(
+        horizontalVelocity.z / BALL_RADIUS,
+        active.ballAngularVelocity.y,
+        -horizontalVelocity.x / BALL_RADIUS,
+      );
+      const slip = rollingAngularTarget.distanceTo(active.ballAngularVelocity) * BALL_RADIUS;
+      if (slip > 0.65) {
+        const slidingDamping = Math.exp(-BALL_SLIDING_FRICTION * dt);
+        active.ballVel.x *= slidingDamping;
+        active.ballVel.z *= slidingDamping;
+        active.ballAngularVelocity.lerp(rollingAngularTarget, 1 - Math.exp(-5.5 * dt));
+        active.ballFrictionState = "sliding";
+      } else {
+        const rollingDamping = Math.exp(-BALL_ROLLING_FRICTION * dt);
+        active.ballVel.x *= rollingDamping;
+        active.ballVel.z *= rollingDamping;
+        active.ballAngularVelocity.lerp(rollingAngularTarget, 1 - Math.exp(-12 * dt));
+        active.ballFrictionState = "rolling";
+      }
+    }
+    active.ballAngularVelocity.multiplyScalar(Math.exp(-BALL_SPIN_DAMPING * dt));
     const horizontalSpeed = Math.hypot(active.ballVel.x, active.ballVel.z);
     if (horizontalSpeed < BALL_STOP_SPEED && active.ballGrounded) {
       active.ballVel.x = 0;
       active.ballVel.z = 0;
+      active.ballAngularVelocity.set(0, 0, 0);
+      active.ballFrictionState = "sleeping";
       if (active.ballState === "kicked") {
         active.ballState = "loose";
         active.intendedReceiverId = null;
@@ -7991,18 +8186,18 @@ function integrateFreeBallPhysics(active: MatchRuntime, frameDt: number) {
       }
     }
 
-    const dx = active.ballPos.x - stepStart.x;
-    const dz = active.ballPos.z - stepStart.z;
-    const horizontalDistance = Math.hypot(dx, dz);
-    if (horizontalDistance > 0.00001) {
-      active.ball.rotation.x += dz / BALL_RADIUS;
-      active.ball.rotation.z -= dx / BALL_RADIUS;
-      active.ballRollingDistance += horizontalDistance;
-    }
+    active.ball.rotation.x += active.ballAngularVelocity.x * dt;
+    active.ball.rotation.y += active.ballAngularVelocity.y * dt;
+    active.ball.rotation.z += active.ballAngularVelocity.z * dt;
+    active.ballRollingDistance += Math.hypot(
+      active.ballPos.x - stepStart.x,
+      active.ballPos.z - stepStart.z,
+    );
 
     active.ballPhysicsAccumulator -= dt;
     substeps += 1;
   }
+  active.ballPhysicsSubsteps = substeps;
   return false;
 }
 
@@ -8218,7 +8413,7 @@ function updateMatch(
       player.diveTimer = 0;
       player.diveSide = 0;
       player.decisionCooldown = Math.max(player.decisionCooldown, 0.3);
-      animatePlayer(player, dt);
+      animatePlayer(player, dt, active.camera, active);
       return;
     }
     const input: PlayerInputState = active.phase === "open" && !outOfPlayPending
@@ -8400,7 +8595,7 @@ function updateMatch(
       }
     }
     player.mesh.position.copy(player.pos);
-    animatePlayer(player, dt);
+    animatePlayer(player, dt, active.camera, active);
     if (player.possessionLabel) player.possessionLabel.visible = false;
     if (player.role === "keeper") updateKeeperHeadTracking(player, active, dt);
     player.animationSpeed = Math.max(0, player.animationSpeed - dt * 18);
@@ -8474,30 +8669,55 @@ function updateMatch(
         && controlGap < maximumControlGap + 1.25;
       if (canStabilize) {
         const recovery = dribblePoint.clone().sub(ball);
-        const attachStep = Math.min(recovery.length(), 28 * dt);
-        if (attachStep > 0.0001) ball.add(recovery.normalize().multiplyScalar(attachStep));
-        ballVel.copy(dribbler.vel).multiplyScalar(0.72);
+        const desiredVelocity = dribbler.vel.clone().multiplyScalar(0.72).addScaledVector(recovery, 8.5);
+        const correction = desiredVelocity.sub(ballVel).clampLength(0, 64);
+        ballVel.addScaledVector(correction, dt);
+        ball.addScaledVector(ballVel, dt);
       } else {
         releasePossession(active, "loose");
         active.renderer.domElement.dataset.rejectedDistantAttachments = String(
           Number(active.renderer.domElement.dataset.rejectedDistantAttachments ?? "0") + 1,
         );
       }
+    } else if (dribbler.role === "keeper" && dribbler.catchTimer > 0) {
+      // Explicit goalkeeper possession is the only normal-play state that may
+      // hold the ball at a hand transform.
+      ball.copy(dribblePoint);
+      ballVel.copy(dribbler.vel);
+      active.ballAngularVelocity.set(0, 0, 0);
+      active.ballFrictionState = "sleeping";
     } else {
       const toControlPoint = dribblePoint.clone().sub(ball);
-      const attachSpeed = dribbler.role === "keeper" ? 18 : dribbler.controlledBy ? 24 : 22;
-      const attachStep = Math.min(toControlPoint.length(), attachSpeed * dt);
-      if (attachStep > 0.0001) ball.add(toControlPoint.normalize().multiplyScalar(attachStep));
+      const stiffness = dribbler.controlledBy ? 12.5 : 11.2;
+      const damping = dribbler.controlledBy ? 14 : 12.5;
+      const desiredVelocity = dribbler.vel.clone()
+        .multiplyScalar(dribbler.controlledBy ? 0.96 : 0.88)
+        .addScaledVector(toControlPoint, stiffness);
+      const controlAcceleration = desiredVelocity.sub(ballVel).multiplyScalar(damping);
+      const maximumAcceleration = dribbler.controlledBy ? 112 : 98;
+      controlAcceleration.clampLength(0, maximumAcceleration);
+      ballVel.addScaledVector(controlAcceleration, dt);
+      ball.addScaledVector(ballVel, dt);
+      const attachStep = ballVel.length() * dt;
       active.renderer.domElement.dataset.maxPossessionAttachStep = Math.max(
         Number(active.renderer.domElement.dataset.maxPossessionAttachStep ?? "0"),
         attachStep,
       ).toFixed(4);
-      if (dribbler.role !== "keeper" || dribbler.catchTimer <= 0) {
-        ball.y += clamp(BALL_RADIUS - ball.y, -attachSpeed * dt, attachSpeed * dt);
-      }
-      ballVel.copy(dribbler.vel).multiplyScalar(dribbler.controlledBy ? 0.96 : 0.82);
+      const verticalError = BALL_RADIUS - ball.y;
+      ballVel.y += clamp(verticalError * 28 - ballVel.y * 9, -48, 48) * dt;
+      ball.y = Math.max(BALL_RADIUS, ball.y);
+      const horizontalSpeed = Math.hypot(ballVel.x, ballVel.z);
+      active.ballAngularVelocity.set(
+        ballVel.z / BALL_RADIUS,
+        active.ballAngularVelocity.y * 0.96,
+        -ballVel.x / BALL_RADIUS,
+      );
+      active.ballFrictionState = horizontalSpeed > 0.12 ? "rolling" : "sleeping";
       active.ballCurve.set(0, 0, 0);
     }
+    active.ball.rotation.x += active.ballAngularVelocity.x * dt;
+    active.ball.rotation.y += active.ballAngularVelocity.y * dt;
+    active.ball.rotation.z += active.ballAngularVelocity.z * dt;
   }
 
   if (!active.ballOwnerId && active.phase === "open" && !outOfPlayPending) {
@@ -11590,13 +11810,28 @@ function strideLengthForLocomotion(
   return openStride * directionFactor * controlFactor;
 }
 
-function animatePlayer(player: PlayerBody, dt: number) {
+function animatePlayer(player: PlayerBody, dt: number, camera?: THREE.Camera, active?: MatchRuntime) {
   if (player.locomotionController) {
+    const controlTargetDistance = active?.ballOwnerId === player.id
+      ? active.ballPos.distanceTo(controlledBallPoint(player))
+      : 0;
     player.locomotionController.update({
       velocity: player.vel,
       heading: player.heading,
       turnRate: player.turnRate,
       dt,
+      distanceToCamera: camera ? player.pos.distanceTo(camera.position) : 0,
+      kickTimer: player.kickTimer,
+      headerTimer: player.headerTimer,
+      catchTimer: player.catchTimer,
+      diveTimer: player.diveTimer,
+      diveSide: player.diveSide,
+      passRequestTimer: player.passRequestTimer,
+      celebrateTimer: player.celebrateTimer,
+      playerIndex: active?.players.indexOf(player) ?? -1,
+      possessionState: active?.ballOwnerId === player.id ? "owner" : active?.ballState ?? "unknown",
+      distanceToBall: active ? player.pos.distanceTo(active.ballPos.clone().setY(0)) : 0,
+      controlTargetDistance,
     });
     return;
   }
@@ -16602,12 +16837,17 @@ function kickTowardPoint(
   active.renderer.domElement.dataset.lastKickZ = kickDirection.z.toFixed(4);
   active.renderer.domElement.dataset.lastKickStyle = style;
   active.renderer.domElement.dataset.lastKickReceiver = intendedReceiver?.id ?? "";
-  active.ballVel.copy(kickDirection.multiplyScalar(kickPower)).add(player.vel.clone().multiplyScalar(style === "driven" ? 0.06 : 0.12));
+  active.ballVel.copy(kickDirection).multiplyScalar(kickPower).add(player.vel.clone().multiplyScalar(style === "driven" ? 0.06 : 0.12));
   active.ballVel.y = force.lift;
   active.ballGrounded = force.lift <= 0.65;
   active.ballCurve.copy(assistedShot
     ? assistedShot.curve
     : curveForKick(style, player, kickDirection, resolvedTarget, { ...force, power: kickPower }));
+  active.ballAngularVelocity.set(
+    active.ballVel.z / BALL_RADIUS,
+    clamp(active.ballCurve.length() * (kickDirection.x >= 0 ? 1 : -1), -42, 42),
+    -active.ballVel.x / BALL_RADIUS,
+  ).multiplyScalar(style === "driven" ? 0.9 : style === "finesse" ? 1.28 : 0.72);
   if (assistedShot) {
     active.renderer.domElement.dataset.shotAssistGoalX = assistedShot.goalTarget.x.toFixed(3);
     active.renderer.domElement.dataset.shotAssistGoalY = assistedShot.desiredGoalHeight.toFixed(3);
@@ -16982,7 +17222,10 @@ function performCurvedPassTo(player: PlayerBody, active: MatchRuntime, teammate:
   if (teammate.team !== player.team || teammate.sentOff || teammate.id === player.id) return false;
   const target = kickTargetForStyle(player, active, teammate, "short");
   const charge = tacticalChargeForKick("short", target.distanceTo(player.pos));
-  const passed = kickTowardPoint(player, target, active, "short", teammate, charge);
+  // Curved-pass candidates are prevalidated against pressure and arrival timing.
+  // The ordinary straight-lane guard would otherwise reject the exact blocker
+  // this kick is designed to bend around.
+  const passed = kickTowardPoint(player, target, active, "short", teammate, charge, true);
   if (!passed) return false;
   active.ballCurve.copy(curvedPassSpin(player, target, active, active.ballVel.length()));
   active.renderer.domElement.dataset.lastCurvedPass = "ai";
@@ -17632,8 +17875,15 @@ function formatSoccerClock(value: number) {
 
 function SoccerBallLogo() {
   return (
-    <div className="grid h-28 w-28 place-items-center rounded-full bg-white shadow-2xl">
-      <Image src="/futbahl-ball.svg" width={104} height={104} priority alt="Futbahl black and white soccer ball" />
+    <div className="grid h-32 w-32 place-items-center overflow-hidden rounded-md border border-white/15 bg-white/5 shadow-2xl">
+      <Image
+        src="/branding/futbahl-logo.png"
+        width={128}
+        height={128}
+        className="h-full w-full object-contain"
+        priority
+        alt="Futbahl"
+      />
     </div>
   );
 }

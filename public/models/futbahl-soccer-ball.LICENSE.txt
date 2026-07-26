@@ -1,0 +1,17 @@
+Asset: Soccer Ball
+Author: dLeom
+Original source: https://dleom.itch.io/3d-soccer-ball
+Downloaded from the author's official itch.io distribution on 2026-07-26.
+
+License statement on the official source page:
+"Free for any kind of usage, do whatever you want with this asset."
+"This asset is distributed under the CC0 license."
+
+License: CC0 1.0 Universal
+License URL: https://creativecommons.org/publicdomain/zero/1.0/
+
+Local file:
+- futbahl-soccer-ball.glb
+
+The distributed GLB is preserved as the visual source mesh. Futbahl uses a
+separate mathematical sphere for gameplay collision and physics.
