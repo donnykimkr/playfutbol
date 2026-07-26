@@ -272,7 +272,8 @@ type PendingReceiveAction = {
 
 type CrowdAudioBuffers = {
   ambient: AudioBuffer | null;
-  reaction: AudioBuffer | null;
+  swell: AudioBuffer | null;
+  goal: AudioBuffer | null;
 };
 
 
@@ -397,11 +398,19 @@ type MatchRuntime = {
   audio: AudioContext | null;
   activeAudioSources: Set<AudioScheduledSourceNode>;
   scheduledTimeouts: Set<number>;
-  crowdAmbienceSource: AudioBufferSourceNode | null;
-  crowdAmbienceGain: GainNode | null;
+  crowdAmbienceSources: Set<AudioBufferSourceNode>;
+  crowdAmbienceGains: Set<GainNode>;
+  crowdMasterGain: GainNode | null;
+  crowdLimiter: DynamicsCompressorNode | null;
+  crowdAmbienceSession: number;
+  crowdAmbienceTimer: number | null;
   crowdAudioBuffers: CrowdAudioBuffers;
   crowdAudioLoading: Promise<void> | null;
+  crowdAudioLoaded: boolean;
   crowdAudioUnavailable: boolean;
+  crowdAudioWarningLogged: boolean;
+  lastCrowdSwellTime: number;
+  lastGoalCrowdTime: number;
   lastCommentaryTime: number;
   lastCommentaryCue: string;
   lastKickSound: number;
@@ -564,8 +573,14 @@ const BLOB_SHADOW_Y = 0.055;
 const FIELD_MARKINGS_Y = 0.11;
 const LANDING_MARKER_Y = 0.135;
 const SHIRT_NUMBER_BACK_GAP = 0.025;
-const RECORDED_CROWD_AMBIENT_PATH = "/audio/stadium-ambience.ogg";
-const RECORDED_CROWD_REACTION_PATH = "/audio/stadium-reaction.m4a";
+const RECORDED_CROWD_AMBIENT_PATH = "/audio/stadium-ambience.m4a";
+const RECORDED_CROWD_SWELL_PATH = "/audio/stadium-swell.m4a";
+const RECORDED_CROWD_GOAL_PATH = "/audio/stadium-goal-roar.m4a";
+const CROWD_AMBIENCE_CROSSFADE_SECONDS = 4;
+const CROWD_AMBIENCE_LAYER_GAIN = 0.82;
+const CROWD_MASTER_GAIN = 0.24;
+const CROWD_SWELL_COOLDOWN_MS = 3200;
+const CROWD_GOAL_COOLDOWN_MS = 5000;
 const FLOOR_LAYER_NAMES = ["stadium-base-floor", "grass-surface", "field-markings"] as const;
 const HEAD_COLLIDER_RADIUS = 0.3;
 const LOCOMOTION_STRIDE_LENGTHS = {
@@ -1283,6 +1298,11 @@ function trackRuntimeAudioSource(active: MatchRuntime, source: AudioScheduledSou
 }
 
 function clearRuntimeAudioSources(active: MatchRuntime) {
+  active.crowdAmbienceSession += 1;
+  if (active.crowdAmbienceTimer !== null) {
+    window.clearTimeout(active.crowdAmbienceTimer);
+    active.crowdAmbienceTimer = null;
+  }
   active.activeAudioSources.forEach((source) => {
     try {
       source.stop();
@@ -1292,12 +1312,19 @@ function clearRuntimeAudioSources(active: MatchRuntime) {
     source.disconnect();
   });
   active.activeAudioSources.clear();
-  active.crowdAmbienceSource = null;
-  if (active.crowdAmbienceGain) {
-    active.crowdAmbienceGain.disconnect();
-    active.crowdAmbienceGain = null;
+  active.crowdAmbienceSources.clear();
+  active.crowdAmbienceGains.forEach((gain) => gain.disconnect());
+  active.crowdAmbienceGains.clear();
+  if (active.crowdMasterGain) {
+    active.crowdMasterGain.disconnect();
+    active.crowdMasterGain = null;
+  }
+  if (active.crowdLimiter) {
+    active.crowdLimiter.disconnect();
+    active.crowdLimiter = null;
   }
   active.renderer.domElement.dataset.crowdAmbience = "stopped";
+  active.renderer.domElement.dataset.crowdAmbienceSources = "0";
   active.renderer.domElement.dataset.audioSourceCount = "0";
 }
 
@@ -4250,8 +4277,12 @@ export function ArcadeSoccerGame() {
       scoreUiRef.current = { ...active.score };
       setScore({ ...active.score });
     }
-    if (active?.crowdAmbienceGain && active.audio) {
-      active.crowdAmbienceGain.gain.setTargetAtTime(next.crowdVolume * 0.11, active.audio.currentTime, 0.08);
+    if (active?.crowdMasterGain && active.audio) {
+      active.crowdMasterGain.gain.setTargetAtTime(
+        next.crowdVolume * CROWD_MASTER_GAIN,
+        active.audio.currentTime,
+        0.12,
+      );
     }
     settingsOpenRef.current = false;
     setSettingsOpen(false);
@@ -4613,6 +4644,8 @@ export function ArcadeSoccerGame() {
     clearRuntimeAudioSources(active);
     active.lastKickSound = 0;
     active.lastCheerSound = 0;
+    active.lastCrowdSwellTime = 0;
+    active.lastGoalCrowdTime = 0;
     if (showTouchControls && !detectAppleMobile()) void requestGameFullscreen();
     ensureAudio(active);
     const visitorId = visitorIdRef.current ?? getAnonymousVisitorId();
@@ -5130,11 +5163,19 @@ export function ArcadeSoccerGame() {
       audio: null,
       activeAudioSources: new Set<AudioScheduledSourceNode>(),
       scheduledTimeouts: new Set<number>(),
-      crowdAmbienceSource: null,
-      crowdAmbienceGain: null,
-      crowdAudioBuffers: { ambient: null, reaction: null },
+      crowdAmbienceSources: new Set<AudioBufferSourceNode>(),
+      crowdAmbienceGains: new Set<GainNode>(),
+      crowdMasterGain: null,
+      crowdLimiter: null,
+      crowdAmbienceSession: 0,
+      crowdAmbienceTimer: null,
+      crowdAudioBuffers: { ambient: null, swell: null, goal: null },
       crowdAudioLoading: null,
+      crowdAudioLoaded: false,
       crowdAudioUnavailable: false,
+      crowdAudioWarningLogged: false,
+      lastCrowdSwellTime: 0,
+      lastGoalCrowdTime: 0,
       lastCommentaryTime: 0,
       lastCommentaryCue: "",
       lastKickSound: 0,
@@ -9605,7 +9646,7 @@ function stopForRestart(active: MatchRuntime, phase: PlayPhase, team: TeamId, sp
   active.loftChargingPlayerId = null;
   active.restartBoundaryGuardTimer = 0;
   if (phase === "corner") {
-    playCrowdReaction(active, 0.42, 0.72);
+    playCrowdReaction(active, 0.42);
     playCommentary(active, "corner");
   }
   if (phase === "kickoff") {
@@ -11612,7 +11653,7 @@ function handleGoalkeeperActions(active: MatchRuntime) {
           active.eventText = "PLAY";
           active.eventTimer = 0;
           active.cooldown = Math.max(active.cooldown, 0.26);
-          playCrowdReaction(active, 0.34, 0.56);
+          playCrowdReaction(active, 0.34);
           playCommentary(active, "save");
           return;
         }
@@ -11639,7 +11680,7 @@ function handleGoalkeeperActions(active: MatchRuntime) {
         active.renderer.domElement.dataset.keeperParries = String(
           Number(active.renderer.domElement.dataset.keeperParries ?? "0") + 1,
         );
-        playCrowdReaction(active, 0.48, 0.68);
+        playCrowdReaction(active, 0.48);
         playCommentary(active, "save");
         active.eventText = "PLAY";
         active.eventTimer = 0;
@@ -12342,55 +12383,120 @@ function ensureAudio(active: MatchRuntime) {
 }
 
 async function loadRecordedCrowdAudio(active: MatchRuntime) {
-  if (!active.audio || active.crowdAudioUnavailable || active.crowdAudioLoading) return active.crowdAudioLoading;
+  if (!active.audio || active.crowdAudioLoaded || active.crowdAudioLoading) return active.crowdAudioLoading;
   const context = active.audio;
-  active.crowdAudioLoading = Promise.all([
-    fetch(RECORDED_CROWD_AMBIENT_PATH).then((response) => {
-      if (!response.ok) throw new Error(`ambient crowd audio ${response.status}`);
-      return response.arrayBuffer();
-    }).then((buffer) => context.decodeAudioData(buffer)),
-    fetch(RECORDED_CROWD_REACTION_PATH).then((response) => {
-      if (!response.ok) throw new Error(`reaction crowd audio ${response.status}`);
-      return response.arrayBuffer();
-    }).then((buffer) => context.decodeAudioData(buffer)),
-  ]).then(([ambient, reaction]) => {
-    active.crowdAudioBuffers.ambient = ambient;
-    active.crowdAudioBuffers.reaction = reaction;
-    active.renderer.domElement.dataset.recordedCrowdAudio = "ready";
-  }).catch(() => {
-    active.crowdAudioBuffers.ambient = null;
-    active.crowdAudioBuffers.reaction = null;
-    active.crowdAudioUnavailable = true;
-    active.renderer.domElement.dataset.recordedCrowdAudio = "unavailable";
+  const loadBuffer = async (path: string, label: string) => {
+    const response = await fetch(path);
+    if (!response.ok) throw new Error(`${label} crowd audio ${response.status}`);
+    return context.decodeAudioData(await response.arrayBuffer());
+  };
+  active.crowdAudioLoading = Promise.allSettled([
+    loadBuffer(RECORDED_CROWD_AMBIENT_PATH, "ambient"),
+    loadBuffer(RECORDED_CROWD_SWELL_PATH, "swell"),
+    loadBuffer(RECORDED_CROWD_GOAL_PATH, "goal"),
+  ]).then(([ambientResult, swellResult, goalResult]) => {
+    active.crowdAudioBuffers.ambient = ambientResult.status === "fulfilled" ? ambientResult.value : null;
+    active.crowdAudioBuffers.swell = swellResult.status === "fulfilled" ? swellResult.value : null;
+    active.crowdAudioBuffers.goal = goalResult.status === "fulfilled" ? goalResult.value : null;
+    active.crowdAudioUnavailable = !active.crowdAudioBuffers.ambient;
+    const failedLabels = [
+      ambientResult.status === "rejected" ? "ambience" : null,
+      swellResult.status === "rejected" ? "swell" : null,
+      goalResult.status === "rejected" ? "goal" : null,
+    ].filter(Boolean);
+    active.renderer.domElement.dataset.recordedCrowdAudio = failedLabels.length === 0
+      ? "ready"
+      : active.crowdAudioUnavailable
+        ? "unavailable"
+        : "partial";
+    if (failedLabels.length > 0 && !active.crowdAudioWarningLogged) {
+      active.crowdAudioWarningLogged = true;
+      console.warn(`[Futbahl audio] Crowd recording unavailable: ${failedLabels.join(", ")}.`);
+    }
   }).finally(() => {
+    active.crowdAudioLoaded = true;
     active.crowdAudioLoading = null;
   });
   return active.crowdAudioLoading;
 }
 
+function ensureCrowdMix(active: MatchRuntime) {
+  if (!active.audio) return null;
+  if (active.crowdMasterGain) return active.crowdMasterGain;
+  const audio = active.audio;
+  const master = audio.createGain();
+  const limiter = audio.createDynamicsCompressor();
+  master.gain.setValueAtTime(activeOfflineSettings.crowdVolume * CROWD_MASTER_GAIN, audio.currentTime);
+  limiter.threshold.setValueAtTime(-10, audio.currentTime);
+  limiter.knee.setValueAtTime(10, audio.currentTime);
+  limiter.ratio.setValueAtTime(4, audio.currentTime);
+  limiter.attack.setValueAtTime(0.005, audio.currentTime);
+  limiter.release.setValueAtTime(0.24, audio.currentTime);
+  master.connect(limiter);
+  limiter.connect(audio.destination);
+  active.crowdMasterGain = master;
+  active.crowdLimiter = limiter;
+  return master;
+}
+
+function scheduleCrowdAmbienceLeg(active: MatchRuntime, session: number, startTime: number) {
+  const audio = active.audio;
+  const buffer = active.crowdAudioBuffers.ambient;
+  const master = ensureCrowdMix(active);
+  if (!audio || !buffer || !master || session !== active.crowdAmbienceSession || active.state !== "playing") return;
+  const shortenedLocalTest = typeof window !== "undefined"
+    && window.location.hostname === "localhost"
+    && new URLSearchParams(window.location.search).has("crowdAudioLoopTest");
+  const playbackDuration = shortenedLocalTest ? Math.min(12, buffer.duration) : buffer.duration;
+  const crossfade = Math.min(CROWD_AMBIENCE_CROSSFADE_SECONDS, Math.max(2, playbackDuration * 0.2));
+  const safeStart = Math.max(audio.currentTime + 0.025, startTime);
+  const endTime = safeStart + playbackDuration;
+  const source = audio.createBufferSource();
+  const gain = audio.createGain();
+  source.buffer = buffer;
+  gain.gain.setValueAtTime(0.0001, safeStart);
+  gain.gain.linearRampToValueAtTime(CROWD_AMBIENCE_LAYER_GAIN, safeStart + crossfade);
+  gain.gain.setValueAtTime(CROWD_AMBIENCE_LAYER_GAIN, endTime - crossfade);
+  gain.gain.linearRampToValueAtTime(0.0001, endTime);
+  source.connect(gain);
+  gain.connect(master);
+  active.crowdAmbienceSources.add(source);
+  active.crowdAmbienceGains.add(gain);
+  trackRuntimeAudioSource(active, source);
+  source.addEventListener("ended", () => {
+    active.crowdAmbienceSources.delete(source);
+    active.crowdAmbienceGains.delete(gain);
+    gain.disconnect();
+    active.renderer.domElement.dataset.crowdAmbienceSources = String(active.crowdAmbienceSources.size);
+  }, { once: true });
+  source.start(safeStart, 0, playbackDuration);
+  source.stop(endTime + 0.02);
+  active.renderer.domElement.dataset.crowdAmbienceSources = String(active.crowdAmbienceSources.size);
+  active.renderer.domElement.dataset.crowdCrossfadeSeconds = crossfade.toFixed(1);
+  active.renderer.domElement.dataset.crowdAmbienceDuration = playbackDuration.toFixed(3);
+  const nextStart = endTime - crossfade;
+  const scheduleDelay = Math.max(0, (nextStart - audio.currentTime - 1) * 1000);
+  if (active.crowdAmbienceTimer !== null) window.clearTimeout(active.crowdAmbienceTimer);
+  active.crowdAmbienceTimer = window.setTimeout(() => {
+    active.crowdAmbienceTimer = null;
+    if (session !== active.crowdAmbienceSession || active.state !== "playing") return;
+    scheduleCrowdAmbienceLeg(active, session, nextStart);
+  }, scheduleDelay);
+}
+
 function startCrowdAmbience(active: MatchRuntime) {
-  if (!active.audio || active.audio.state !== "running" || active.crowdAmbienceSource) return;
-  if (active.crowdAudioUnavailable) return;
-  if (!active.crowdAudioBuffers.ambient) {
+  if (!active.audio || active.audio.state !== "running" || active.crowdAmbienceSources.size > 0) return;
+  if (!active.crowdAudioLoaded) {
     void loadRecordedCrowdAudio(active).then(() => {
       if (active.state === "playing") startCrowdAmbience(active);
     });
     return;
   }
-  const audio = active.audio;
-  const source = audio.createBufferSource();
-  const gain = audio.createGain();
-  source.buffer = active.crowdAudioBuffers.ambient;
-  source.loop = true;
-  source.loopStart = Math.min(0.12, Math.max(0, source.buffer.duration - 0.25));
-  source.loopEnd = Math.max(source.loopStart + 0.1, source.buffer.duration - 0.12);
-  gain.gain.value = activeOfflineSettings.crowdVolume * 0.28;
-  source.connect(gain);
-  gain.connect(audio.destination);
-  active.crowdAmbienceSource = source;
-  active.crowdAmbienceGain = gain;
-  trackRuntimeAudioSource(active, source);
-  source.start();
+  if (active.crowdAudioUnavailable || !active.crowdAudioBuffers.ambient) return;
+  active.crowdAmbienceSession += 1;
+  const session = active.crowdAmbienceSession;
+  scheduleCrowdAmbienceLeg(active, session, active.audio.currentTime + 0.03);
+  active.renderer.domElement.dataset.crowdAmbience = "running";
 }
 
 function startMatchAudio(active: MatchRuntime) {
@@ -12407,29 +12513,48 @@ function startMatchAudio(active: MatchRuntime) {
   });
 }
 
-function playCrowdReaction(active: MatchRuntime, intensity = 0.5, duration = 0.72) {
+function playCrowdClip(
+  active: MatchRuntime,
+  buffer: AudioBuffer,
+  peakGain: number,
+  attackSeconds: number,
+  releaseSeconds: number,
+) {
   if (!active.audio || active.audio.state !== "running" || activeOfflineSettings.crowdVolume <= 0) return;
-  if (!active.crowdAudioBuffers.reaction) return;
+  const master = ensureCrowdMix(active);
+  if (!master) return;
   const audio = active.audio;
   const start = audio.currentTime;
   const source = audio.createBufferSource();
   const gain = audio.createGain();
-  source.buffer = active.crowdAudioBuffers.reaction;
-  source.playbackRate.value = 0.96 + Math.random() * 0.08;
-  const availableDuration = Math.max(0.2, source.buffer.duration);
-  const playbackDuration = Math.min(Math.max(0.32, duration), availableDuration);
-  const offset = Math.max(0, Math.min(availableDuration - playbackDuration, Math.random() * Math.max(0, availableDuration - playbackDuration)));
+  source.buffer = buffer;
+  const fadeOutStart = Math.max(attackSeconds, buffer.duration - releaseSeconds);
   gain.gain.setValueAtTime(0.0001, start);
-  gain.gain.exponentialRampToValueAtTime(
-    clamp(intensity, 0.08, 1) * activeOfflineSettings.crowdVolume * 0.62,
-    start + 0.06,
-  );
-  gain.gain.exponentialRampToValueAtTime(0.0001, start + playbackDuration);
+  gain.gain.linearRampToValueAtTime(peakGain, start + attackSeconds);
+  gain.gain.setValueAtTime(peakGain, start + fadeOutStart);
+  gain.gain.linearRampToValueAtTime(0.0001, start + buffer.duration);
   source.connect(gain);
-  gain.connect(audio.destination);
+  gain.connect(master);
   trackRuntimeAudioSource(active, source);
-  source.start(start, offset, playbackDuration);
-  source.stop(start + playbackDuration + 0.02);
+  source.addEventListener("ended", () => gain.disconnect(), { once: true });
+  source.start(start);
+  source.stop(start + buffer.duration + 0.02);
+}
+
+function playCrowdReaction(active: MatchRuntime, intensity = 0.5) {
+  const now = performance.now();
+  if (
+    !active.crowdAudioBuffers.swell
+    || now - active.lastCrowdSwellTime < CROWD_SWELL_COOLDOWN_MS
+  ) return;
+  active.lastCrowdSwellTime = now;
+  playCrowdClip(
+    active,
+    active.crowdAudioBuffers.swell,
+    clamp(intensity, 0.18, 0.72) * 0.86,
+    0.16,
+    0.62,
+  );
 }
 
 type CommentaryCue = "kickoff" | "buildup" | "shot" | "save" | "goal" | "corner" | "halftime" | "fulltime";
@@ -12536,39 +12661,11 @@ function playBallNetSound(active: MatchRuntime) {
 }
 
 function playCrowdCheer(active: MatchRuntime) {
-  if (!active.audio || active.audio.state !== "running") return;
-  if (active.crowdAudioBuffers.reaction) {
-    playCrowdReaction(active, 0.88, 2.2);
-    return;
-  }
-  const audio = active.audio;
-  const start = audio.currentTime;
-  const cheer = audio.createBufferSource();
-  const filter = audio.createBiquadFilter();
-  const gain = audio.createGain();
-  const samples = Math.floor(audio.sampleRate * 2.4);
-  const buffer = audio.createBuffer(1, samples, audio.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < samples; i += 1) {
-    const t = i / samples;
-    const swell = Math.sin(Math.min(1, t * 2.4) * Math.PI * 0.5) * Math.pow(1 - t * 0.18, 1.25);
-    const roar = (Math.random() * 2 - 1) * swell;
-    const chant = Math.sin(t * Math.PI * 36) * 0.08 * swell;
-    data[i] = roar * 0.58 + chant;
-  }
-  filter.type = "bandpass";
-  filter.frequency.setValueAtTime(760, start);
-  filter.Q.setValueAtTime(0.72, start);
-  gain.gain.setValueAtTime(0.0001, start);
-  gain.gain.exponentialRampToValueAtTime(0.38 * activeOfflineSettings.crowdVolume, start + 0.18);
-  gain.gain.exponentialRampToValueAtTime(0.055 * activeOfflineSettings.crowdVolume, start + 2.4);
-  cheer.buffer = buffer;
-  cheer.connect(filter);
-  filter.connect(gain);
-  gain.connect(audio.destination);
-  trackRuntimeAudioSource(active, cheer);
-  cheer.start(start);
-  cheer.stop(start + 2.45);
+  const now = performance.now();
+  const goalBuffer = active.crowdAudioBuffers.goal;
+  if (!goalBuffer || now - active.lastGoalCrowdTime < CROWD_GOAL_COOLDOWN_MS) return;
+  active.lastGoalCrowdTime = now;
+  playCrowdClip(active, goalBuffer, 2.25, 0.12, 0.78);
 }
 
 function playWhistleSequence(active: MatchRuntime, count: 2 | 3) {
@@ -17774,7 +17871,7 @@ function shoot(player: PlayerBody, active: MatchRuntime, style: "shot" | "driven
     active.renderer.domElement.dataset.acceptedAiShots = String(Number(active.renderer.domElement.dataset.acceptedAiShots ?? "0") + 1);
   }
   if (kicked) {
-    playCrowdReaction(active, 0.3, 0.52);
+    playCrowdReaction(active, 0.3);
     playCommentary(active, "shot");
   }
   return kicked;

@@ -1,7 +1,14 @@
 # Futbahl audio attribution
 
-The bundled stadium ambience and goal-reaction recordings are separately
-licensed CC0 assets. Full source, author, conversion, and license details live
-in `stadium-crowd.LICENSE.txt` beside the files.
+The bundled outdoor stadium ambience, crowd swell, and goal roar are derived
+from verified CC0 football-stadium field recordings hosted by Freesound:
 
-Browser `speechSynthesis` commentary and generated speech remain disabled.
+- `stadium-ambience.m4a`: habbis92, recorded at Viking Stadion.
+- `stadium-swell.m4a`: Sandermotions, recorded at Cambuur Stadion.
+- `stadium-goal-roar.m4a`: Sandermotions, recorded at Cambuur Stadion.
+
+Full source-page URLs, original filenames, license terms, download date, and
+editing/conversion details are recorded in `stadium-crowd.LICENSE.txt`.
+
+Browser `speechSynthesis`, generated crowd noise, and synthetic crowd fallback
+remain disabled.

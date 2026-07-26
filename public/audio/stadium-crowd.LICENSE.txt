@@ -1,26 +1,52 @@
 Futbahl stadium crowd audio
 ============================
 
-1. stadium-ambience.ogg
-   Title: Crowd Shouting/Speaking Ambience
-   Creator: StarNinjas
-   Source page: https://opengameart.org/content/crowd-shoutingspeaking-ambience
-   Original file: crowd_shouting_0.ogg
-   License: CC0 1.0 Universal
+1. stadium-ambience.m4a
+   Title: Norwegian football match/soccer game ambience.WAV
+   Creator: habbis92
+   Original source page: https://freesound.org/people/habbis92/sounds/206003/
+   Original filename: Norwegian football match/soccer game ambience.WAV
+   Imported official preview: 206003_878508-hq.mp3
+   Recording: Viking Stadion, Stavanger, Norway; Zoom H6 XY stereo capsule
+   Exact license: Creative Commons Zero 1.0 Universal (CC0 1.0)
    License URL: https://creativecommons.org/publicdomain/zero/1.0/
-   Downloaded: 2026-07-26
-   Modifications: Renamed only.
+   Download date: 2026-07-26
+   Modifications: The official Freesound HQ preview was transcoded without
+   trimming, pitch shifting, or time stretching to stereo AAC-LC/M4A,
+   48 kHz, approximately 128 kbps. Runtime playback overlaps complete
+   recordings with a four-second crossfade instead of using a hard loop.
 
-2. stadium-reaction.m4a
-   Title: Applause in a large hall or church
-   Creator: eXpl0it3r
-   Source page: https://opengameart.org/content/applause-in-a-large-hall-or-church
-   Original file: applause-clapping-church-crowd-immersive.wav
-   License: CC0 1.0 Universal
+2. stadium-swell.m4a
+   Title: Goal.wav
+   Creator: Sandermotions
+   Original source page: https://freesound.org/people/Sandermotions/sounds/494352/
+   Original filename: Goal.wav
+   Imported official preview: 494352_1402315-hq.mp3
+   Recording: Cambuur Stadion, Leeuwarden, Netherlands; Zoom H1
+   Exact license: Creative Commons Zero 1.0 Universal (CC0 1.0)
    License URL: https://creativecommons.org/publicdomain/zero/1.0/
-   Downloaded: 2026-07-26
-   Modifications: Transcoded from 16-bit WAV to AAC-LC/M4A at 128 kbps for
-   browser delivery. No speech or music was added.
+   Download date: 2026-07-26
+   Modifications: Selected 4.65s-7.65s from the verified stadium field
+   recording, reduced gain to 40%, added a 0.16s fade-in and 0.55s fade-out,
+   and transcoded to stereo AAC-LC/M4A, 48 kHz, approximately 128 kbps.
+   No pitch shifting, time stretching, speech, music, or generated audio.
 
-Both source pages explicitly identify the recordings as CC0. CC0 permits use,
-modification, redistribution, public repository hosting, and commercial use.
+3. stadium-goal-roar.m4a
+   Title: Goal.wav
+   Creator: Sandermotions
+   Original source page: https://freesound.org/people/Sandermotions/sounds/494352/
+   Original filename: Goal.wav
+   Imported official preview: 494352_1402315-hq.mp3
+   Recording: Cambuur Stadion, Leeuwarden, Netherlands; Zoom H1
+   Exact license: Creative Commons Zero 1.0 Universal (CC0 1.0)
+   License URL: https://creativecommons.org/publicdomain/zero/1.0/
+   Download date: 2026-07-26
+   Modifications: Selected 5.25s-10.00s from the verified stadium field
+   recording, reduced gain to 70%, added a 0.10s fade-in and 0.75s fade-out,
+   and transcoded to stereo AAC-LC/M4A, 48 kHz, approximately 128 kbps.
+   No pitch shifting, time stretching, speech, music, or generated audio.
+
+The Freesound source pages identify both recordings as CC0 and state that they
+may be copied, modified, distributed, and performed commercially without
+permission. CC0 therefore permits use in the game, modification, redistribution,
+public GitHub hosting, and commercial use.
