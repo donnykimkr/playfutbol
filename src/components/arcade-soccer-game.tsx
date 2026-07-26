@@ -486,7 +486,8 @@ const FIELD_W = 64 * FIELD_SCALE;
 const FIELD_L = 96 * FIELD_SCALE;
 const WORLD_UNITS_PER_METER = ((FIELD_L / 105) + (FIELD_W / 68)) / 2;
 const FORMATION_SCALE = 1.42;
-const GOAL_W = 16;
+const GOAL_W = 7.32 * WORLD_UNITS_PER_METER;
+const GOAL_H = 2.44 * WORLD_UNITS_PER_METER;
 const PLAYER_RADIUS = 1.08;
 const BALL_RADIUS = 0.11 * WORLD_UNITS_PER_METER;
 const BALL_MASS_KG = 0.43;
@@ -517,7 +518,7 @@ const PENALTY_AREA_DEPTH = 18;
 const OUT_OF_PLAY_DELAY = 1.75;
 const FIELD_PLAYER_BALL_RADIUS = 0.7;
 const GOAL_DEPTH = 4.8;
-const GOAL_POST_THICKNESS = 0.34;
+const GOAL_POST_THICKNESS = 0.18;
 const GOAL_POST_CENTER_X = GOAL_W / 2 + GOAL_POST_THICKNESS / 2;
 const GOAL_FRAME_OUTER_W = GOAL_W + GOAL_POST_THICKNESS * 2;
 const GOAL_FRONT_Z = FIELD_L / 2;
@@ -525,8 +526,8 @@ const GOAL_FRONT_Z = FIELD_L / 2;
 const GOAL_SCORE_Z = GOAL_FRONT_Z + BALL_RADIUS;
 const GOAL_BACK_Z = GOAL_FRONT_Z + GOAL_DEPTH;
 const GOAL_SIDE_POST_INSET = 0.26;
-const BROADCAST_CAMERA_X = -FIELD_W / 2 - 40;
-const BROADCAST_CAMERA_Y = 55.5;
+const BROADCAST_CAMERA_X = -FIELD_W / 2 - 36;
+const BROADCAST_CAMERA_Y = 49.5;
 const BROADCAST_CAMERA_Z = 8;
 const BROADCAST_CAMERA_Z_OFFSET = 10;
 const BROADCAST_LOOK_AT_X = 0;
@@ -548,6 +549,8 @@ const AD_BOARD_CORNER_RADIUS = 3.2;
 const AD_BOARD_CORNER_SEGMENTS = 20;
 const AD_BOARD_TEXTURE_REPEATS = 7;
 const AD_BOARD_SCROLL_SPEED = 0.075;
+const AD_BOARD_BRAND_DURATION = 30;
+const AD_BOARD_TRANSITION_DURATION = 1.2;
 const AD_BOARD_TEXTURE_WIDTH = 2048;
 const AD_BOARD_TEXTURE_HEIGHT = 64;
 const GRASS_DARK_COLOR = "#176b37";
@@ -562,7 +565,7 @@ const FIELD_MARKINGS_Y = 0.11;
 const LANDING_MARKER_Y = 0.135;
 const SHIRT_NUMBER_BACK_GAP = 0.025;
 const RECORDED_CROWD_AMBIENT_PATH = "/audio/stadium-ambience.ogg";
-const RECORDED_CROWD_REACTION_PATH = "/audio/stadium-reaction.ogg";
+const RECORDED_CROWD_REACTION_PATH = "/audio/stadium-reaction.m4a";
 const FLOOR_LAYER_NAMES = ["stadium-base-floor", "grass-surface", "field-markings"] as const;
 const HEAD_COLLIDER_RADIUS = 0.3;
 const LOCOMOTION_STRIDE_LENGTHS = {
@@ -1340,6 +1343,9 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
   canvas.dataset.ballRadius = BALL_RADIUS.toFixed(4);
   canvas.dataset.ballMassKg = BALL_MASS_KG.toFixed(2);
   canvas.dataset.worldUnitsPerMeter = WORLD_UNITS_PER_METER.toFixed(4);
+  canvas.dataset.pitchMeters = `${(FIELD_L / WORLD_UNITS_PER_METER).toFixed(1)}x${(FIELD_W / WORLD_UNITS_PER_METER).toFixed(1)}`;
+  canvas.dataset.goalMeters = `${(GOAL_W / WORLD_UNITS_PER_METER).toFixed(2)}x${(GOAL_H / WORLD_UNITS_PER_METER).toFixed(2)}`;
+  canvas.dataset.outfieldTopSpeedMps = (12.1 * 1.25 / WORLD_UNITS_PER_METER).toFixed(2);
   canvas.dataset.licensedBallLoaded = String(Boolean(active.ball.userData.licensedBallLoaded));
   canvas.dataset.engineId = String(active.engineId);
   canvas.dataset.restartCount = String(active.restartCount);
@@ -2489,8 +2495,8 @@ function addNetLines(scene: THREE.Scene, side: -1 | 1) {
   const material = new THREE.LineBasicMaterial({ color: "#f8fafc", transparent: true, opacity: 0.72, depthWrite: false });
   const points: THREE.Vector3[] = [];
   const bottom = 0.14;
-  const topFront = 3.12;
-  const topBack = 2.55;
+  const topFront = GOAL_H - 0.08;
+  const topBack = GOAL_H * 0.8;
   const widthSteps = 10;
   const heightSteps = 7;
   const depthSteps = 5;
@@ -2526,9 +2532,9 @@ function addGoal(scene: THREE.Scene, side: -1 | 1) {
     new THREE.BoxGeometry(GOAL_FRAME_OUTER_W, GOAL_POST_THICKNESS, GOAL_POST_THICKNESS),
     goalMat,
   );
-  crossbar.position.set(0, 3.2, z);
-  const postA = new THREE.Mesh(new THREE.BoxGeometry(GOAL_POST_THICKNESS, 3.2, GOAL_POST_THICKNESS), goalMat);
-  postA.position.set(-GOAL_POST_CENTER_X, 1.6, z);
+  crossbar.position.set(0, GOAL_H, z);
+  const postA = new THREE.Mesh(new THREE.BoxGeometry(GOAL_POST_THICKNESS, GOAL_H, GOAL_POST_THICKNESS), goalMat);
+  postA.position.set(-GOAL_POST_CENTER_X, GOAL_H / 2, z);
   const postB = postA.clone();
   postB.position.x = GOAL_POST_CENTER_X;
   scene.add(crossbar, postA, postB);
@@ -2540,7 +2546,7 @@ function resolveGoalFrameCollision(ball: THREE.Vector3, velocity: THREE.Vector3)
   [-1, 1].forEach((goalSide) => {
     const goalLineZ = goalSide * GOAL_FRONT_Z;
     [-1, 1].forEach((postSide) => {
-      if (ball.y > 3.2 + BALL_RADIUS) return;
+      if (ball.y > GOAL_H + BALL_RADIUS) return;
       const postCenter = new THREE.Vector2(postSide * GOAL_POST_CENTER_X, goalLineZ);
       const offset = new THREE.Vector2(ball.x - postCenter.x, ball.z - postCenter.y);
       const distance = offset.length();
@@ -2558,11 +2564,11 @@ function resolveGoalFrameCollision(ball: THREE.Vector3, velocity: THREE.Vector3)
     });
 
     if (Math.abs(ball.x) > GOAL_FRAME_OUTER_W / 2 + BALL_RADIUS) return;
-    const crossbarOffset = new THREE.Vector2(ball.y - 3.2, ball.z - goalLineZ);
+    const crossbarOffset = new THREE.Vector2(ball.y - GOAL_H, ball.z - goalLineZ);
     const crossbarDistance = crossbarOffset.length();
     if (crossbarDistance >= collisionRadius || crossbarDistance < 0.0001) return;
     const normal = crossbarOffset.multiplyScalar(1 / crossbarDistance);
-    ball.y = 3.2 + normal.x * collisionRadius;
+    ball.y = GOAL_H + normal.x * collisionRadius;
     ball.z = goalLineZ + normal.y * collisionRadius;
     const verticalVelocity = new THREE.Vector2(velocity.y, velocity.z);
     const towardFrame = verticalVelocity.dot(normal);
@@ -2630,18 +2636,12 @@ function advertisingBrandFontSize(context: CanvasRenderingContext2D, canvas: HTM
 function paintAdvertisingBrand(
   canvas: HTMLCanvasElement,
   brandIndex: number,
-  brandingImage?: HTMLImageElement,
 ) {
   const context = canvas.getContext("2d");
   if (!context) return null;
   const brand = ADVERTISING_BRANDS[brandIndex % ADVERTISING_BRANDS.length];
   context.fillStyle = brand.background;
   context.fillRect(0, 0, canvas.width, canvas.height);
-  if (brand.name === "FUTBAHL" && brandingImage?.complete && brandingImage.naturalWidth > 0) {
-    const size = canvas.height;
-    context.drawImage(brandingImage, canvas.width / 2 - size / 2, 0, size, size);
-    return canvas.height;
-  }
   context.textAlign = "center";
   context.textBaseline = "middle";
   const fontSize = advertisingBrandFontSize(context, canvas, brand.name);
@@ -2665,11 +2665,7 @@ function drawAdvertisingBrand(texture: THREE.CanvasTexture, brandIndex: number) 
     texture.userData.advertisingStagingCanvas = stagingCanvas;
   }
   texture.userData.advertisingBrandIndex = brandIndex;
-  const fontSize = paintAdvertisingBrand(
-    stagingCanvas,
-    brandIndex,
-    texture.userData.futbahlBrandingImage as HTMLImageElement | undefined,
-  );
+  const fontSize = paintAdvertisingBrand(stagingCanvas, brandIndex);
   if (fontSize === null) return;
   const context = canvas.getContext("2d");
   if (!context) return;
@@ -2678,6 +2674,46 @@ function drawAdvertisingBrand(texture: THREE.CanvasTexture, brandIndex: number) 
   context.drawImage(stagingCanvas, 0, 0);
   context.restore();
   texture.userData.advertisingFontSize = fontSize;
+  texture.needsUpdate = true;
+}
+
+function blendAdvertisingBrands(
+  texture: THREE.CanvasTexture,
+  currentBrandIndex: number,
+  nextBrandIndex: number,
+  progress: number,
+) {
+  const canvas = texture.image as HTMLCanvasElement;
+  let currentCanvas = texture.userData.advertisingTransitionCurrentCanvas as HTMLCanvasElement | undefined;
+  let nextCanvas = texture.userData.advertisingTransitionNextCanvas as HTMLCanvasElement | undefined;
+  if (!currentCanvas || !nextCanvas) {
+    currentCanvas = document.createElement("canvas");
+    nextCanvas = document.createElement("canvas");
+    currentCanvas.width = nextCanvas.width = canvas.width;
+    currentCanvas.height = nextCanvas.height = canvas.height;
+    texture.userData.advertisingTransitionCurrentCanvas = currentCanvas;
+    texture.userData.advertisingTransitionNextCanvas = nextCanvas;
+  }
+  if (
+    texture.userData.advertisingTransitionFrom !== currentBrandIndex
+    || texture.userData.advertisingTransitionTo !== nextBrandIndex
+  ) {
+    paintAdvertisingBrand(currentCanvas, currentBrandIndex);
+    paintAdvertisingBrand(nextCanvas, nextBrandIndex);
+    texture.userData.advertisingTransitionFrom = currentBrandIndex;
+    texture.userData.advertisingTransitionTo = nextBrandIndex;
+  }
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  const eased = THREE.MathUtils.smoothstep(clamp(progress, 0, 1), 0, 1);
+  context.save();
+  context.globalCompositeOperation = "copy";
+  context.globalAlpha = 1;
+  context.drawImage(currentCanvas, 0, 0);
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = eased;
+  context.drawImage(nextCanvas, 0, 0);
+  context.restore();
   texture.needsUpdate = true;
 }
 
@@ -2693,12 +2729,6 @@ function createAdvertisingBoardTexture() {
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
-  const brandingImage = new window.Image();
-  brandingImage.src = "/branding/futbahl-logo.png";
-  brandingImage.onload = () => {
-    texture.userData.futbahlBrandingImage = brandingImage;
-    drawAdvertisingBrand(texture, Number(texture.userData.advertisingBrandIndex ?? 0));
-  };
   drawAdvertisingBrand(texture, 0);
   const context = canvas.getContext("2d");
   texture.userData.advertisingFontSizes = context
@@ -3261,6 +3291,57 @@ function addLightweightStadium(scene: THREE.Scene) {
   stadiumSeats.receiveShadow = false;
   stadium.add(stadiumSeats);
 
+  // Distant supporters share two instanced meshes rather than thousands of
+  // skeletal characters. The bowl gains human scale for only two draw calls.
+  const crowdTarget = Math.min(1100, Math.floor(seatPlacements.length * 0.075));
+  const crowdPlacements = seatPlacements
+    .map((seat, index) => ({
+      seat,
+      rank: ((index * 1664525 + 1013904223) >>> 0),
+    }))
+    .sort((left, right) => left.rank - right.rank)
+    .slice(0, crowdTarget);
+  const crowdBody = new THREE.InstancedMesh(
+    new THREE.CapsuleGeometry(0.18, 0.48, 2, 5),
+    new THREE.MeshLambertMaterial({ color: "#ffffff" }),
+    crowdPlacements.length,
+  );
+  const crowdHead = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.16, 6, 4),
+    new THREE.MeshLambertMaterial({ color: "#ffffff" }),
+    crowdPlacements.length,
+  );
+  const crowdKitColors = ["#e11d48", "#0284c7", "#f8fafc", "#facc15", "#334155", "#16a34a"];
+  const crowdSkinColors = ["#f1c7a5", "#c98f65", "#8f5f43", "#f4d2b5"];
+  crowdPlacements.forEach(({ seat, rank }, index) => {
+    instanceQuaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), seat.rotationY);
+    instanceMatrix.compose(
+      seat.position.clone().add(new THREE.Vector3(0, 0.9, 0)),
+      instanceQuaternion,
+      instanceScale,
+    );
+    crowdBody.setMatrixAt(index, instanceMatrix);
+    crowdBody.setColorAt(index, instanceColor.set(crowdKitColors[rank % crowdKitColors.length]));
+    instanceMatrix.compose(
+      seat.position.clone().add(new THREE.Vector3(0, 1.45, 0)),
+      instanceQuaternion,
+      instanceScale,
+    );
+    crowdHead.setMatrixAt(index, instanceMatrix);
+    crowdHead.setColorAt(index, instanceColor.set(crowdSkinColors[(rank >>> 4) % crowdSkinColors.length]));
+  });
+  crowdBody.name = "stadium-distant-crowd-bodies";
+  crowdHead.name = "stadium-distant-crowd-heads";
+  crowdBody.instanceMatrix.needsUpdate = true;
+  crowdHead.instanceMatrix.needsUpdate = true;
+  if (crowdBody.instanceColor) crowdBody.instanceColor.needsUpdate = true;
+  if (crowdHead.instanceColor) crowdHead.instanceColor.needsUpdate = true;
+  crowdBody.castShadow = false;
+  crowdHead.castShadow = false;
+  crowdBody.receiveShadow = false;
+  crowdHead.receiveShadow = false;
+  stadium.add(crowdBody, crowdHead);
+
   const stairPlacements: Array<{ position: THREE.Vector3; scale: THREE.Vector3; rotationY: number }> = [];
   decks.forEach((deck) => {
     for (let row = 0; row < deck.rows; row += 1) {
@@ -3396,6 +3477,7 @@ function addLightweightStadium(scene: THREE.Scene) {
 
   stadium.userData.seatingRows = decks.reduce((sum, deck) => sum + deck.rows, 0);
   stadium.userData.seatCount = seatPlacements.length;
+  stadium.userData.distantCrowdCount = crowdPlacements.length;
   stadium.userData.stairAisles = sidelineAisles.length * 2 + endAisles.length * 2 + 4;
   stadium.userData.terraceTreadCount = treadPlacements.length;
   stadium.userData.terraceRiserCount = riserPlacements.length;
@@ -3411,6 +3493,7 @@ function addLightweightStadium(scene: THREE.Scene) {
   adTexture.userData.stadiumDiagnostics = {
     seatingRows: stadium.userData.seatingRows,
     seatCount: stadium.userData.seatCount,
+    distantCrowdCount: stadium.userData.distantCrowdCount,
     stairAisles: stadium.userData.stairAisles,
     terraceTreadCount: stadium.userData.terraceTreadCount,
     terraceRiserCount: stadium.userData.terraceRiserCount,
@@ -3430,14 +3513,32 @@ function addLightweightStadium(scene: THREE.Scene) {
 function updateAdvertisingBoards(active: MatchRuntime, dt: number) {
   active.adBrandTimer += dt;
   active.adBoardTexture.offset.x = (active.adBoardTexture.offset.x - dt * AD_BOARD_SCROLL_SPEED + 1) % 1;
-  if (active.adBrandTimer >= 30) {
-    active.adBrandTimer %= 30;
+  const transitionStart = AD_BOARD_BRAND_DURATION - AD_BOARD_TRANSITION_DURATION;
+  let transitionProgress = 0;
+  if (active.adBrandTimer >= transitionStart) {
+    transitionProgress = clamp(
+      (active.adBrandTimer - transitionStart) / AD_BOARD_TRANSITION_DURATION,
+      0,
+      1,
+    );
+    blendAdvertisingBrands(
+      active.adBoardTexture,
+      active.adBrandIndex,
+      (active.adBrandIndex + 1) % ADVERTISING_BRANDS.length,
+      transitionProgress,
+    );
+  }
+  if (active.adBrandTimer >= AD_BOARD_BRAND_DURATION) {
+    active.adBrandTimer %= AD_BOARD_BRAND_DURATION;
     active.adBrandIndex = (active.adBrandIndex + 1) % ADVERTISING_BRANDS.length;
     drawAdvertisingBrand(active.adBoardTexture, active.adBrandIndex);
+    active.adBoardTexture.userData.advertisingTransitionFrom = undefined;
+    active.adBoardTexture.userData.advertisingTransitionTo = undefined;
   }
   active.renderer.domElement.dataset.adBrand = ADVERTISING_BRANDS[active.adBrandIndex].name;
   active.renderer.domElement.dataset.adBrandIndex = String(active.adBrandIndex);
   active.renderer.domElement.dataset.adBrandSeconds = active.adBrandTimer.toFixed(2);
+  active.renderer.domElement.dataset.adBrandTransition = transitionProgress.toFixed(3);
   active.renderer.domElement.dataset.adBoardFaceOffset = AD_BOARD_FACE_OFFSET.toFixed(3);
   active.renderer.domElement.dataset.adBoardDisplayHeight = AD_BOARD_DISPLAY_HEIGHT.toFixed(3);
   active.renderer.domElement.dataset.adBoardDisplayY = AD_BOARD_DISPLAY_Y.toFixed(3);
@@ -7737,24 +7838,19 @@ export function ArcadeSoccerGame() {
           aria-label="Match scoreboard"
           className="futbahl-scoreboard"
         >
-          <Image
-            src="/branding/futbahl-logo.png"
-            width={28}
-            height={28}
-            className="hidden h-7 w-7 object-contain sm:block"
-            alt="Futbahl"
-          />
-          <span className="futbahl-scoreboard__time">{formatSoccerClock(gameClock)}</span>
-          <span className="futbahl-scoreboard__team futbahl-scoreboard__team--away">
-            <span className="hidden sm:inline">{offlineSettings.aiTeam.name.toUpperCase()}</span>
-            <span className="sm:hidden">{offlineSettings.aiTeam.name.slice(0, 3).toUpperCase()}</span>
-          </span>
-          <span className="futbahl-scoreboard__score futbahl-scoreboard__score--away">{score.away}</span>
-          <span className="futbahl-scoreboard__score futbahl-scoreboard__score--home">{score.home}</span>
+          <span className="futbahl-scoreboard__brand">F</span>
           <span className="futbahl-scoreboard__team futbahl-scoreboard__team--home">
             <span className="hidden sm:inline">{offlineSettings.userTeam.name.toUpperCase()}</span>
             <span className="sm:hidden">{offlineSettings.userTeam.name.slice(0, 3).toUpperCase()}</span>
           </span>
+          <span className="futbahl-scoreboard__score futbahl-scoreboard__score--home">{score.home}</span>
+          <span className="futbahl-scoreboard__separator">-</span>
+          <span className="futbahl-scoreboard__score futbahl-scoreboard__score--away">{score.away}</span>
+          <span className="futbahl-scoreboard__team futbahl-scoreboard__team--away">
+            <span className="hidden sm:inline">{offlineSettings.aiTeam.name.toUpperCase()}</span>
+            <span className="sm:hidden">{offlineSettings.aiTeam.name.slice(0, 3).toUpperCase()}</span>
+          </span>
+          <span className="futbahl-scoreboard__time">{formatSoccerClock(gameClock)}</span>
         </div>
       </section>
       )}
@@ -12441,6 +12537,10 @@ function playBallNetSound(active: MatchRuntime) {
 
 function playCrowdCheer(active: MatchRuntime) {
   if (!active.audio || active.audio.state !== "running") return;
+  if (active.crowdAudioBuffers.reaction) {
+    playCrowdReaction(active, 0.88, 2.2);
+    return;
+  }
   const audio = active.audio;
   const start = audio.currentTime;
   const cheer = audio.createBufferSource();
@@ -15763,7 +15863,7 @@ function updateKickTrajectoryPreview(
     active.renderer.domElement.dataset.previewGoalX = point.x.toFixed(3);
     active.renderer.domElement.dataset.previewGoalY = point.y.toFixed(3);
     active.renderer.domElement.dataset.previewGoalInside = String(
-      Math.abs(point.x) < GOAL_W / 2 - BALL_RADIUS && point.y < 3.2 - BALL_RADIUS,
+      Math.abs(point.x) < GOAL_W / 2 - BALL_RADIUS && point.y < GOAL_H - BALL_RADIUS,
     );
   }
 }

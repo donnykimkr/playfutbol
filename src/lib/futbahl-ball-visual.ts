@@ -30,8 +30,15 @@ export async function attachLicensedBallVisual(
     const size = bounds.getSize(new THREE.Vector3());
     const diameter = Math.max(size.x, size.y, size.z);
     if (!(diameter > 0)) throw new Error("Ball model has invalid bounds.");
+
+    // Center inside a scaled wrapper. An object's own position is not affected
+    // by its scale, so scaling and offsetting the source directly can leave an
+    // off-center asset displaced from the mathematical physics sphere.
     visual.position.copy(center).multiplyScalar(-1);
-    visual.scale.setScalar((radius * 2) / diameter);
+    const normalizedVisual = new THREE.Group();
+    normalizedVisual.name = "futbahl-licensed-soccer-ball-normalized";
+    normalizedVisual.scale.setScalar((radius * 2) / diameter);
+    normalizedVisual.add(visual);
     visual.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
       object.castShadow = true;
@@ -39,17 +46,23 @@ export async function attachLicensedBallVisual(
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       materials.forEach((material) => {
         if (material instanceof THREE.MeshStandardMaterial) {
-          material.roughness = 0.58;
+          material.roughness = 0.7;
           material.metalness = 0;
+          material.envMapIntensity = 0.45;
+          if (material.map) {
+            material.map.colorSpace = THREE.SRGBColorSpace;
+            material.map.anisotropy = 4;
+            material.map.needsUpdate = true;
+          }
         }
       });
     });
     host.children.forEach((child) => {
-      if (child !== visual) child.visible = false;
+      if (child !== normalizedVisual) child.visible = false;
     });
-    host.add(visual);
+    host.add(normalizedVisual);
     host.userData.licensedBallLoaded = true;
-    return visual;
+    return normalizedVisual;
   } catch (error) {
     if (!warned) {
       warned = true;

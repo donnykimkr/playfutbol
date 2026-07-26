@@ -53,8 +53,8 @@ canvas {
 
 .futbahl-scoreboard {
   display: grid;
-  grid-template-columns: 5.25rem minmax(6.5rem, 8.5rem) 3rem 3rem minmax(6.5rem, 8.5rem);
-  width: min(31rem, calc(100vw - 1rem));
+  grid-template-columns: 2.4rem minmax(5.5rem, 8rem) 2.8rem 1.3rem 2.8rem minmax(5.5rem, 8rem) 5rem;
+  width: min(37.5rem, calc(100vw - 1rem));
   min-height: 2.75rem;
   overflow: hidden;
   border-top: 2px solid #76f7c5;
@@ -74,13 +74,26 @@ canvas {
 }
 
 .futbahl-scoreboard__time {
-  border-right: 1px solid rgb(255 255 255 / 12%);
+  border-left: 1px solid rgb(255 255 255 / 12%);
   background: #17253a;
   color: #b6ffe4;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
   font-weight: 800;
+}
+
+.futbahl-scoreboard__brand {
+  background: #15962f;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 950;
+}
+
+.futbahl-scoreboard__separator {
+  background: #111f31;
+  color: #8fa2b8;
+  font-weight: 900;
 }
 
 .futbahl-scoreboard__team {
@@ -94,11 +107,11 @@ canvas {
 }
 
 .futbahl-scoreboard__team--away {
-  justify-items: end;
+  justify-items: start;
 }
 
 .futbahl-scoreboard__team--home {
-  justify-items: start;
+  justify-items: end;
 }
 
 .futbahl-scoreboard__score {
@@ -111,18 +124,22 @@ canvas {
 }
 
 .futbahl-scoreboard__score--away {
-  border-right: 1px solid rgb(8 24 33 / 26%);
+  background: #f4fff9;
 }
 
 .futbahl-scoreboard__score--home {
-  background: #f4fff9;
+  border-right: 1px solid rgb(8 24 33 / 26%);
 }
 
 @media (max-width: 520px) {
   .futbahl-scoreboard {
-    grid-template-columns: 4.4rem minmax(3.6rem, 1fr) 2.6rem 2.6rem minmax(3.6rem, 1fr);
-    width: min(22.5rem, calc(100vw - 0.75rem));
+    grid-template-columns: minmax(3.4rem, 1fr) 2.45rem 1rem 2.45rem minmax(3.4rem, 1fr) 4rem;
+    width: min(24rem, calc(100vw - 0.75rem));
     min-height: 2.4rem;
+  }
+
+  .futbahl-scoreboard__brand {
+    display: none !important;
   }
 
   .futbahl-scoreboard__time {

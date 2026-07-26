@@ -1,0 +1,26 @@
+Futbahl stadium crowd audio
+============================
+
+1. stadium-ambience.ogg
+   Title: Crowd Shouting/Speaking Ambience
+   Creator: StarNinjas
+   Source page: https://opengameart.org/content/crowd-shoutingspeaking-ambience
+   Original file: crowd_shouting_0.ogg
+   License: CC0 1.0 Universal
+   License URL: https://creativecommons.org/publicdomain/zero/1.0/
+   Downloaded: 2026-07-26
+   Modifications: Renamed only.
+
+2. stadium-reaction.m4a
+   Title: Applause in a large hall or church
+   Creator: eXpl0it3r
+   Source page: https://opengameart.org/content/applause-in-a-large-hall-or-church
+   Original file: applause-clapping-church-crowd-immersive.wav
+   License: CC0 1.0 Universal
+   License URL: https://creativecommons.org/publicdomain/zero/1.0/
+   Downloaded: 2026-07-26
+   Modifications: Transcoded from 16-bit WAV to AAC-LC/M4A at 128 kbps for
+   browser delivery. No speech or music was added.
+
+Both source pages explicitly identify the recordings as CC0. CC0 permits use,
+modification, redistribution, public repository hosting, and commercial use.

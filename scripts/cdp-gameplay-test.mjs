@@ -63,6 +63,16 @@ const readLifecycle = () => evaluate(`(() => {
     canvasBackingWidth: d.canvasBackingWidth,
     canvasBackingHeight: d.canvasBackingHeight,
     effectiveDpr: d.effectiveDpr,
+    recordedCrowdAudio: d.recordedCrowdAudio,
+    licensedBallLoaded: d.licensedBallLoaded,
+    worldUnitsPerMeter: d.worldUnitsPerMeter,
+    pitchMeters: d.pitchMeters,
+    goalMeters: d.goalMeters,
+    outfieldTopSpeedMps: d.outfieldTopSpeedMps,
+    adBrand: d.adBrand,
+    adBrandSeconds: d.adBrandSeconds,
+    adBrandTransition: d.adBrandTransition,
+    stadiumDiagnostics: d.stadiumDiagnostics,
     matchUpdatesThisFrame: d.matchUpdatesThisFrame,
     matchGeneration: d.matchGeneration,
     fullTimeHandled: d.fullTimeHandled,
@@ -94,6 +104,14 @@ const waitForButtonText = async (text, timeoutMs = 12000) => {
 
 await send("Runtime.enable");
 await send("Page.enable");
+if (mode === "mobile-presentation") {
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 2,
+    mobile: true,
+  });
+}
 await send("Page.bringToFront");
 await sleep(850);
 if (mode !== "start-screen" && mode !== "tutorial-smoke") {
@@ -260,6 +278,25 @@ if (mode === "fulltime-lifecycle") {
     if (!reachedPlaying) break;
   }
 }
+if (mode === "presentation") {
+  const transitionStartedAt = Date.now();
+  let transitionObserved = false;
+  while (Date.now() - transitionStartedAt < 35000) {
+    const sample = await readLifecycle();
+    const progress = Number(sample?.adBrandTransition ?? 0);
+    if (progress > 0) {
+      transitionObserved = true;
+      lifecycleSamples.push({ event: "ad-transition", ...sample });
+      if (progress >= 0.9) break;
+    }
+    await sleep(50);
+  }
+  lifecycleSamples.push({
+    event: "presentation-final",
+    transitionObserved,
+    ...(await readLifecycle()),
+  });
+}
 
 const manualSamples = [];
 if (mode === "central-dribble") {
@@ -336,6 +373,8 @@ const diagnostics = await evaluate(`(() => {
     'attackingPossessionTeam','attackingPossessionSeconds','primaryGoalSideProgress','primaryLaneOffset','primaryPositionGoalSideProgress','primaryPositionLaneOffset',
     'centralRouteProtected','attackingMidfieldersFinalThird','attackingFullbacksAdvanced','attackingCenterBackLineProgress',
     'rendererCount','canvasBackingWidth','canvasBackingHeight','effectiveDpr','matchUpdatesThisFrame','matchGeneration','fullTimeHandled','fullTimeTransitions',
+    'recordedCrowdAudio','licensedBallLoaded','worldUnitsPerMeter','pitchMeters','goalMeters','outfieldTopSpeedMps',
+    'adBrand','adBrandSeconds','adBrandTransition','stadiumDiagnostics',
     'goalKickTestsRequested','goalKickTestsRemaining','goalKickCount','goalKickState','goalKickReceiver','goalKickKeeperTeam','goalKickTargetTeam',
     'goalKickTargetSlot','goalKickTargetLine','goalKickSafetyScore','goalKickTargetDistance','goalKickLaneBlockers','goalKickReceiverPressure',
     'goalKickLandingPressure','goalKickShapeOptions','goalKickShapeLeft','goalKickShapeCenter','goalKickShapeRight','goalKickSameTeamTargets',
