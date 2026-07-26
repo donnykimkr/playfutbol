@@ -549,7 +549,9 @@ function attachLicensedHair(
   if (!head) return;
   root.updateMatrixWorld(true);
   source.updateMatrixWorld(true);
-  const inverseHead = head.matrixWorld.clone().invert();
+  const targetHeadInRoot = root.matrixWorld.clone().invert().multiply(head.matrixWorld);
+  const inverseTargetHeadInRoot = targetHeadInRoot.invert();
+  const inverseSourceRoot = source.matrixWorld.clone().invert();
   source.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
     const key = `${object.uuid}|${color}`;
@@ -574,7 +576,8 @@ function attachLicensedHair(
     const hairMesh = new THREE.Mesh(object.geometry, material);
     hairMesh.name = "futbahl-licensed-hair";
     hairMesh.castShadow = true;
-    const localMatrix = inverseHead.clone().multiply(object.matrixWorld);
+    const sourceObjectInRoot = inverseSourceRoot.clone().multiply(object.matrixWorld);
+    const localMatrix = inverseTargetHeadInRoot.clone().multiply(sourceObjectInRoot);
     localMatrix.decompose(hairMesh.position, hairMesh.quaternion, hairMesh.scale);
     head.add(hairMesh);
   });
