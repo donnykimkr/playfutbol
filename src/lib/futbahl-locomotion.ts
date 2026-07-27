@@ -1,6 +1,9 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { ANIMATION_LOD } from "@/game/config/player-movement";
+import { targetHeightForPreset } from "@/game/players/player-appearance";
+import type { BodyPresetId, PreferredFoot } from "@/lib/anonymous-team-setup";
 
 export type FutbahlLocomotionState =
   | "Idle"
@@ -19,6 +22,8 @@ export type FutbahlPlayerAppearance = {
   role: "field" | "keeper";
   number: number;
   index: number;
+  bodyPresetId: BodyPresetId;
+  preferredFoot: PreferredFoot;
   shirt: string;
   trim: string;
   shorts: string;
@@ -426,12 +431,12 @@ function createNumberAtlas() {
   context.lineWidth = 12;
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.font = "900 190px Arial, sans-serif";
-  for (let number = 1; number <= 11; number += 1) {
-    const column = (number - 1) % 4;
-    const row = Math.floor((number - 1) / 4);
-    const x = column * 256 + 128;
-    const y = row * 256 + 128;
+  context.font = "900 72px Arial, sans-serif";
+  for (let number = 1; number <= 99; number += 1) {
+    const column = (number - 1) % 10;
+    const row = Math.floor((number - 1) / 10);
+    const x = column * 102.4 + 51.2;
+    const y = row * 102.4 + 51.2;
     context.strokeText(String(number), x, y);
     context.fillText(String(number), x, y);
   }
@@ -444,16 +449,16 @@ function createNumberAtlas() {
 }
 
 function numberGeometry(number: number) {
-  const normalized = ((number - 1) % 11) + 1;
+  const normalized = Math.max(1, Math.min(99, Math.trunc(number)));
   const cached = numberGeometryCache.get(normalized);
   if (cached) return cached;
   const geometry = new THREE.PlaneGeometry(0.28, 0.36);
-  const column = (normalized - 1) % 4;
-  const row = Math.floor((normalized - 1) / 4);
-  const u0 = column / 4;
-  const u1 = (column + 1) / 4;
-  const v1 = 1 - row / 4;
-  const v0 = 1 - (row + 1) / 4;
+  const column = (normalized - 1) % 10;
+  const row = Math.floor((normalized - 1) / 10);
+  const u0 = column / 10;
+  const u1 = (column + 1) / 10;
+  const v1 = 1 - row / 10;
+  const v0 = 1 - (row + 1) / 10;
   geometry.setAttribute("uv", new THREE.Float32BufferAttribute([
     u0, v1, u1, v1, u0, v0, u1, v0,
   ], 2));
@@ -598,8 +603,15 @@ function chooseState(
   acceleration: number,
   angularVelocity: number,
   previousSpeed: number,
+  currentState: FutbahlLocomotionState,
 ): FutbahlLocomotionState {
-  if (speed < 0.14) {
+  const movingState = currentState === "Jog"
+    || currentState === "Sprint"
+    || currentState === "StrafeLeft"
+    || currentState === "StrafeRight"
+    || currentState === "Backpedal";
+  const idleThreshold = movingState ? 0.1 : 0.18;
+  if (speed < idleThreshold) {
     if (previousSpeed > 0.85 && acceleration < -1.6) return "Stop";
     if (angularVelocity > 0.42) return "TurnLeft";
     if (angularVelocity < -0.42) return "TurnRight";
@@ -609,7 +621,8 @@ function chooseState(
   if (Math.abs(localLateral) > 0.72 && Math.abs(localLateral) > Math.abs(localForward) * 1.08) {
     return localLateral < 0 ? "StrafeLeft" : "StrafeRight";
   }
-  return speed >= 7.35 ? "Sprint" : "Jog";
+  const sprintThreshold = currentState === "Sprint" ? 6.95 : 7.35;
+  return speed >= sprintThreshold ? "Sprint" : "Jog";
 }
 
 function actionPlaybackSpeed(state: FutbahlLocomotionState, speed: number) {
@@ -636,6 +649,7 @@ export class FutbahlLocomotionController {
   private readonly forward = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
   private readonly bones: Record<string, THREE.Object3D | null>;
+  private readonly preferredFoot: PreferredFoot;
   private state: FutbahlLocomotionState = "Idle";
   private currentAction: THREE.AnimationAction | null = null;
   private currentClip = "";
@@ -658,6 +672,7 @@ export class FutbahlLocomotionController {
     this.root = root;
     this.debugElement = debugElement;
     this.fallbackBody = host.getObjectByName("body-root") ?? null;
+    this.preferredFoot = appearance.preferredFoot;
     this.visualRoot = new THREE.Group();
     this.visualRoot.name = `futbahl-player-${appearance.playerId}`;
     this.visualRoot.add(root);
@@ -666,9 +681,28 @@ export class FutbahlLocomotionController {
     const seed = stableHash(`${appearance.team}:${appearance.number}:${appearance.index}`);
     const skinTones = ["#f3c7a6", "#d79b73", "#a86643", "#6f412d"];
     const skinTone = skinTones[seed % skinTones.length];
-    const height = 0.96 + ((seed >>> 5) % 9) * 0.01;
-    const width = 0.95 + ((seed >>> 9) % 7) * 0.012;
-    root.scale.set(1.39 * width, 1.39 * height, 1.39 * width);
+    root.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(root);
+    const sourceHeight = Math.max(0.01, sourceBounds.max.y - sourceBounds.min.y);
+    const targetHeight = targetHeightForPreset(appearance.bodyPresetId, appearance.playerId);
+    const widthVariation = 0.98 + ((seed >>> 9) % 5) * 0.008;
+    const presetWidth = appearance.bodyPresetId === "strong"
+      ? 1.07
+      : appearance.bodyPresetId === "compact"
+        ? 0.96
+        : appearance.bodyPresetId === "tall"
+          ? 0.985
+          : 1;
+    const uniformScale = targetHeight / sourceHeight;
+    root.scale.set(
+      uniformScale * presetWidth * widthVariation,
+      uniformScale,
+      uniformScale * presetWidth * widthVariation,
+    );
+    root.position.y = -sourceBounds.min.y * uniformScale;
+    root.userData.futbahlSourceHeight = sourceHeight;
+    root.userData.futbahlTargetHeight = targetHeight;
+    root.userData.futbahlBodyPreset = appearance.bodyPresetId;
     const hairColors = ["#1e1511", "#4a2d1f", "#151515", "#6a4330"];
     root.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
@@ -708,6 +742,10 @@ export class FutbahlLocomotionController {
       rightArm: root.getObjectByName("upperarm_r") ?? null,
       leftLeg: root.getObjectByName("thigh_l") ?? null,
       rightLeg: root.getObjectByName("thigh_r") ?? null,
+      leftFoot: root.getObjectByName("foot_l") ?? root.getObjectByName("ball_l") ?? null,
+      rightFoot: root.getObjectByName("foot_r") ?? root.getObjectByName("ball_r") ?? null,
+      leftHand: root.getObjectByName("hand_l") ?? null,
+      rightHand: root.getObjectByName("hand_r") ?? null,
       head: root.getObjectByName("Head") ?? null,
     };
     this.transitionTo("Idle", 0);
@@ -750,6 +788,7 @@ export class FutbahlLocomotionController {
       acceleration,
       angularVelocity,
       this.previousSpeed,
+      this.state,
     );
     if (nextState !== this.state) this.transitionTo(nextState, 0.18);
 
@@ -761,7 +800,12 @@ export class FutbahlLocomotionController {
     this.visualRoot.rotation.z = damp(this.visualRoot.rotation.z, lateralLean, 8.5, safeDt);
 
     this.mixerAccumulator += safeDt;
-    const updateInterval = (sample.distanceToCamera ?? 0) > 92 ? 1 / 30 : 0;
+    const distanceToCamera = sample.distanceToCamera ?? 0;
+    const updateInterval = distanceToCamera > ANIMATION_LOD.farDistance
+      ? ANIMATION_LOD.farInterval
+      : distanceToCamera > ANIMATION_LOD.mediumDistance
+        ? ANIMATION_LOD.mediumInterval
+        : 0;
     if (updateInterval === 0 || this.mixerAccumulator >= updateInterval) {
       this.mixer.update(this.mixerAccumulator);
       this.applyActionOverlay(sample);
@@ -800,14 +844,26 @@ export class FutbahlLocomotionController {
     if (this.fallbackBody) this.fallbackBody.visible = true;
   }
 
+  getWorldContactPoints() {
+    const worldPoint = (name: string) => this.bones[name]?.getWorldPosition(new THREE.Vector3()) ?? null;
+    return {
+      leftFoot: worldPoint("leftFoot"),
+      rightFoot: worldPoint("rightFoot"),
+      leftHand: worldPoint("leftHand"),
+      rightHand: worldPoint("rightHand"),
+      head: worldPoint("head"),
+    };
+  }
+
   private applyActionOverlay(sample: FutbahlMotionSample) {
     const kick = THREE.MathUtils.clamp((sample.kickTimer ?? 0) / 0.34, 0, 1);
     const header = THREE.MathUtils.clamp((sample.headerTimer ?? 0) / 0.55, 0, 1);
     const catchAmount = THREE.MathUtils.clamp((sample.catchTimer ?? 0) / 0.62, 0, 1);
     const celebrate = THREE.MathUtils.clamp((sample.celebrateTimer ?? 0) / 2.2, 0, 1);
     const request = sample.passRequestTimer ?? 0;
-    if (kick > 0 && this.bones.rightLeg) {
-      this.bones.rightLeg.rotation.x += Math.sin(kick * Math.PI) * 0.9;
+    const kickingLeg = this.preferredFoot === "left" ? this.bones.leftLeg : this.bones.rightLeg;
+    if (kick > 0 && kickingLeg) {
+      kickingLeg.rotation.x += Math.sin(kick * Math.PI) * 0.9;
       if (this.bones.spine) this.bones.spine.rotation.x -= Math.sin(kick * Math.PI) * 0.13;
     }
     if (header > 0 && this.bones.spine) {
@@ -828,7 +884,23 @@ export class FutbahlLocomotionController {
       this.visualRoot.position.y = 0;
     }
     if ((sample.diveTimer ?? 0) > 0) {
-      this.visualRoot.rotation.z += (sample.diveSide ?? 0) * 0.62;
+      const dive = THREE.MathUtils.clamp((sample.diveTimer ?? 0) / 0.58, 0, 1);
+      const diveWave = Math.sin(dive * Math.PI);
+      const diveSide = sample.diveSide ?? 0;
+      if (this.bones.spine) {
+        this.bones.spine.rotation.z += diveSide * diveWave * 0.24;
+        this.bones.spine.rotation.x -= diveWave * 0.16;
+      }
+      if (this.bones.leftArm) {
+        this.bones.leftArm.rotation.z += diveSide * diveWave * 0.34;
+        this.bones.leftArm.rotation.x -= diveWave * 0.45;
+      }
+      if (this.bones.rightArm) {
+        this.bones.rightArm.rotation.z += diveSide * diveWave * 0.34;
+        this.bones.rightArm.rotation.x -= diveWave * 0.45;
+      }
+      if (this.bones.leftLeg) this.bones.leftLeg.rotation.z -= diveSide * diveWave * 0.12;
+      if (this.bones.rightLeg) this.bones.rightLeg.rotation.z -= diveSide * diveWave * 0.12;
     }
   }
 
