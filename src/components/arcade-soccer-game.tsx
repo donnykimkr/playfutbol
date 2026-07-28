@@ -540,13 +540,79 @@ const GOAL_FRONT_Z = FIELD_L / 2;
 const GOAL_SCORE_Z = GOAL_FRONT_Z + BALL_RADIUS;
 const GOAL_BACK_Z = GOAL_FRONT_Z + GOAL_DEPTH;
 const GOAL_SIDE_POST_INSET = 0.26;
-const BROADCAST_CAMERA_X = -FIELD_W / 2 - 36;
-const BROADCAST_CAMERA_Y = 49.5;
+const ADAPTIVE_TOUCHLINE_CAMERA = {
+  normalCameraDistance: 28,
+  nearTouchlineMaximumOutwardDistance: 36,
+  normalCameraHeight: 44,
+  maximumAdditionalHeight: 5,
+  lookAtLateralFollowStrength: 0.64,
+  nearTouchlineActivationThreshold: 22,
+  nearTouchlineFullEffectDistance: 4,
+  nearTouchlineDeadZone: 2,
+  interpolationSpeed: -Math.log(0.0008),
+  viewportBottomSafeMargin: 0.28,
+} as const;
+const BROADCAST_CAMERA_X = -FIELD_W / 2 - ADAPTIVE_TOUCHLINE_CAMERA.normalCameraDistance;
+const BROADCAST_CAMERA_Y = ADAPTIVE_TOUCHLINE_CAMERA.normalCameraHeight;
 const BROADCAST_CAMERA_Z = 8;
-const BROADCAST_CAMERA_Z_OFFSET = 10;
+const BROADCAST_CAMERA_Z_OFFSET = 9;
 const BROADCAST_LOOK_AT_X = 0;
 const BROADCAST_LOOK_AT_Y = 1.05;
 const BROADCAST_LOOK_AT_Z = 0;
+
+function cameraSideTouchlineBlend(worldX: number) {
+  const distanceFromNearTouchline = Math.max(0, worldX + FIELD_W / 2);
+  const activationDistance = Math.max(
+    ADAPTIVE_TOUCHLINE_CAMERA.nearTouchlineFullEffectDistance + 0.01,
+    ADAPTIVE_TOUCHLINE_CAMERA.nearTouchlineActivationThreshold
+      - ADAPTIVE_TOUCHLINE_CAMERA.nearTouchlineDeadZone,
+  );
+  return 1 - THREE.MathUtils.smoothstep(
+    distanceFromNearTouchline,
+    ADAPTIVE_TOUCHLINE_CAMERA.nearTouchlineFullEffectDistance,
+    activationDistance,
+  );
+}
+
+function projectedViewportY(
+  worldX: number,
+  worldY: number,
+  worldZ: number,
+  cameraX: number,
+  cameraY: number,
+  cameraZ: number,
+  lookAtX: number,
+  lookAtY: number,
+  lookAtZ: number,
+  verticalFovDegrees: number,
+) {
+  const forwardLength = Math.hypot(
+    lookAtX - cameraX,
+    lookAtY - cameraY,
+    lookAtZ - cameraZ,
+  ) || 1;
+  const forwardX = (lookAtX - cameraX) / forwardLength;
+  const forwardY = (lookAtY - cameraY) / forwardLength;
+  const forwardZ = (lookAtZ - cameraZ) / forwardLength;
+  const rightLength = Math.hypot(forwardX, forwardZ) || 1;
+  const rightX = -forwardZ / rightLength;
+  const rightZ = forwardX / rightLength;
+  const cameraUpX = -rightZ * forwardY;
+  const cameraUpY = rightZ * forwardX - rightX * forwardZ;
+  const cameraUpZ = rightX * forwardY;
+  const relativeX = worldX - cameraX;
+  const relativeY = worldY - cameraY;
+  const relativeZ = worldZ - cameraZ;
+  const depth = relativeX * forwardX + relativeY * forwardY + relativeZ * forwardZ;
+  if (depth <= 0.01) return 0.5;
+  const halfHeightAtDepth = depth * Math.tan(THREE.MathUtils.degToRad(verticalFovDegrees) / 2);
+  const verticalPosition = relativeX * cameraUpX
+    + relativeY * cameraUpY
+    + relativeZ * cameraUpZ;
+  const ndcY = halfHeightAtDepth > 0.001 ? verticalPosition / halfHeightAtDepth : 0;
+  return (1 - ndcY) / 2;
+}
+
 const VISITOR_STORAGE_KEY = "futbahl_visitor_id";
 const SETTINGS_STORAGE_KEY = "futbahl_offline_settings";
 const AD_BOARD_INNER_X = FIELD_W / 2 + TOUCHLINE_RUNOFF;
@@ -7543,6 +7609,52 @@ export function ArcadeSoccerGame() {
         const blendedFocus = active.ballPos.clone().lerp(playerFocus, 0.22);
         const focusZ = clamp(blendedFocus.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
         const shouldFollowPlay = active.state === "playing" && active.phase !== "halftime";
+        const ballCarrier = active.ballOwnerId
+          ? active.players.find((player) => player.id === active.ballOwnerId)
+            ?? null
+          : null;
+        const touchlineFocus = ballCarrier?.pos ?? active.ballPos;
+        const touchlineFocusX = clamp(touchlineFocus.x, -FIELD_W / 2, FIELD_W / 2);
+        let touchlineBlend = shouldFollowPlay ? cameraSideTouchlineBlend(touchlineFocusX) : 0;
+        let adaptiveCameraX = -FIELD_W / 2 - THREE.MathUtils.lerp(
+          ADAPTIVE_TOUCHLINE_CAMERA.normalCameraDistance,
+          ADAPTIVE_TOUCHLINE_CAMERA.nearTouchlineMaximumOutwardDistance,
+          touchlineBlend,
+        );
+        let adaptiveCameraY = ADAPTIVE_TOUCHLINE_CAMERA.normalCameraHeight
+          + ADAPTIVE_TOUCHLINE_CAMERA.maximumAdditionalHeight * touchlineBlend;
+        let adaptiveLookAtX = touchlineFocusX
+          * ADAPTIVE_TOUCHLINE_CAMERA.lookAtLateralFollowStrength
+          * touchlineBlend;
+        if (shouldFollowPlay && touchlineBlend > 0) {
+          const viewportY = projectedViewportY(
+            touchlineFocus.x,
+            0,
+            touchlineFocus.z,
+            adaptiveCameraX,
+            adaptiveCameraY,
+            focusZ + BROADCAST_CAMERA_Z_OFFSET,
+            adaptiveLookAtX,
+            BROADCAST_LOOK_AT_Y,
+            focusZ,
+            active.camera.fov,
+          );
+          const maximumViewportY = 1 - ADAPTIVE_TOUCHLINE_CAMERA.viewportBottomSafeMargin;
+          if (viewportY > maximumViewportY) {
+            const safetyBoost = clamp((viewportY - maximumViewportY) / 0.12, 0, 1);
+            touchlineBlend = clamp(touchlineBlend + safetyBoost * (1 - touchlineBlend), 0, 1);
+            adaptiveCameraX = -FIELD_W / 2 - THREE.MathUtils.lerp(
+              ADAPTIVE_TOUCHLINE_CAMERA.normalCameraDistance,
+              ADAPTIVE_TOUCHLINE_CAMERA.nearTouchlineMaximumOutwardDistance,
+              touchlineBlend,
+            );
+            adaptiveCameraY = ADAPTIVE_TOUCHLINE_CAMERA.normalCameraHeight
+              + ADAPTIVE_TOUCHLINE_CAMERA.maximumAdditionalHeight * touchlineBlend;
+            adaptiveLookAtX = touchlineFocusX
+              * ADAPTIVE_TOUCHLINE_CAMERA.lookAtLateralFollowStrength
+              * touchlineBlend;
+          }
+        }
         const inspectPlayer = modelInspectView
           ? active.players.find((player) => player.role === "field")
             ?? null
@@ -7559,20 +7671,27 @@ export function ArcadeSoccerGame() {
           : active.phase === "goal"
           ? active.replayCameraPosition
           : shouldFollowPlay
-          ? new THREE.Vector3(BROADCAST_CAMERA_X, BROADCAST_CAMERA_Y, focusZ + BROADCAST_CAMERA_Z_OFFSET)
+          ? new THREE.Vector3(adaptiveCameraX, adaptiveCameraY, focusZ + BROADCAST_CAMERA_Z_OFFSET)
           : new THREE.Vector3(
             BROADCAST_CAMERA_X,
             BROADCAST_CAMERA_Y,
             BROADCAST_CAMERA_Z,
           );
         if (active.phase !== "goal") desired.z = clamp(desired.z, -FIELD_L / 2 - 10, FIELD_L / 2 + 10);
-        active.camera.position.lerp(desired, active.phase === "goal" ? 1 - Math.pow(0.00002, dt) : shouldFollowPlay ? 1 - Math.pow(0.0008, dt) : 1);
+        active.camera.position.lerp(
+          desired,
+          active.phase === "goal"
+            ? 1 - Math.pow(0.00002, dt)
+            : shouldFollowPlay
+              ? 1 - Math.exp(-ADAPTIVE_TOUCHLINE_CAMERA.interpolationSpeed * dt)
+              : 1,
+        );
         const desiredLookAt = inspectPlayer
           ? inspectPlayer.pos.clone().add(new THREE.Vector3(0, 1.35, 0))
           : active.phase === "goal"
           ? active.replayCameraLookAt
           : shouldFollowPlay
-          ? new THREE.Vector3(BROADCAST_LOOK_AT_X, BROADCAST_LOOK_AT_Y, focusZ)
+          ? new THREE.Vector3(adaptiveLookAtX, BROADCAST_LOOK_AT_Y, focusZ)
           : new THREE.Vector3(
             BROADCAST_LOOK_AT_X,
             BROADCAST_LOOK_AT_Y,
