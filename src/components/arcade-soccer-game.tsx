@@ -3280,57 +3280,6 @@ function addLightweightStadium(scene: THREE.Scene) {
   stadiumSeats.receiveShadow = false;
   stadium.add(stadiumSeats);
 
-  // Distant supporters share two instanced meshes rather than thousands of
-  // skeletal characters. The bowl gains human scale for only two draw calls.
-  const crowdTarget = Math.min(1100, Math.floor(seatPlacements.length * 0.075));
-  const crowdPlacements = seatPlacements
-    .map((seat, index) => ({
-      seat,
-      rank: ((index * 1664525 + 1013904223) >>> 0),
-    }))
-    .sort((left, right) => left.rank - right.rank)
-    .slice(0, crowdTarget);
-  const crowdBody = new THREE.InstancedMesh(
-    new THREE.CapsuleGeometry(0.18, 0.48, 2, 5),
-    new THREE.MeshLambertMaterial({ color: "#ffffff" }),
-    crowdPlacements.length,
-  );
-  const crowdHead = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(0.16, 6, 4),
-    new THREE.MeshLambertMaterial({ color: "#ffffff" }),
-    crowdPlacements.length,
-  );
-  const crowdKitColors = ["#e11d48", "#0284c7", "#f8fafc", "#facc15", "#334155", "#16a34a"];
-  const crowdSkinColors = ["#f1c7a5", "#c98f65", "#8f5f43", "#f4d2b5"];
-  crowdPlacements.forEach(({ seat, rank }, index) => {
-    instanceQuaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), seat.rotationY);
-    instanceMatrix.compose(
-      seat.position.clone().add(new THREE.Vector3(0, 0.9, 0)),
-      instanceQuaternion,
-      instanceScale,
-    );
-    crowdBody.setMatrixAt(index, instanceMatrix);
-    crowdBody.setColorAt(index, instanceColor.set(crowdKitColors[rank % crowdKitColors.length]));
-    instanceMatrix.compose(
-      seat.position.clone().add(new THREE.Vector3(0, 1.45, 0)),
-      instanceQuaternion,
-      instanceScale,
-    );
-    crowdHead.setMatrixAt(index, instanceMatrix);
-    crowdHead.setColorAt(index, instanceColor.set(crowdSkinColors[(rank >>> 4) % crowdSkinColors.length]));
-  });
-  crowdBody.name = "stadium-distant-crowd-bodies";
-  crowdHead.name = "stadium-distant-crowd-heads";
-  crowdBody.instanceMatrix.needsUpdate = true;
-  crowdHead.instanceMatrix.needsUpdate = true;
-  if (crowdBody.instanceColor) crowdBody.instanceColor.needsUpdate = true;
-  if (crowdHead.instanceColor) crowdHead.instanceColor.needsUpdate = true;
-  crowdBody.castShadow = false;
-  crowdHead.castShadow = false;
-  crowdBody.receiveShadow = false;
-  crowdHead.receiveShadow = false;
-  stadium.add(crowdBody, crowdHead);
-
   const stairPlacements: Array<{ position: THREE.Vector3; scale: THREE.Vector3; rotationY: number }> = [];
   decks.forEach((deck) => {
     for (let row = 0; row < deck.rows; row += 1) {
@@ -3466,7 +3415,7 @@ function addLightweightStadium(scene: THREE.Scene) {
 
   stadium.userData.seatingRows = decks.reduce((sum, deck) => sum + deck.rows, 0);
   stadium.userData.seatCount = seatPlacements.length;
-  stadium.userData.distantCrowdCount = crowdPlacements.length;
+  stadium.userData.distantCrowdCount = 0;
   stadium.userData.stairAisles = sidelineAisles.length * 2 + endAisles.length * 2 + 4;
   stadium.userData.terraceTreadCount = treadPlacements.length;
   stadium.userData.terraceRiserCount = riserPlacements.length;
