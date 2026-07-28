@@ -1,7 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
-import { createShirtNumberMesh } from "@/game/rendering/shirt-number-atlas";
 
 export type FutbahlLocomotionState =
   | "Idle"
@@ -142,7 +141,7 @@ const warned = new Set<string>();
 const bodyMaterialCache = new Map<string, THREE.Material>();
 const clothingMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
 const hairMaterialCache = new Map<string, THREE.Material | THREE.Material[]>();
-const numberMaterialCache = new Map<string, THREE.MeshBasicMaterial>();
+const uniformDecalMaterialCache = new Map<string, THREE.MeshBasicMaterial>();
 let sharedAssetsPromise: Promise<SharedCharacterAssets> | null = null;
 
 const KIT_GEOMETRY = {
@@ -372,15 +371,9 @@ function attachRootSpaceObject(
   bone.attach(object);
 }
 
-function addUniformBranding(root: THREE.Group, number: number, wordmark: THREE.Texture | null) {
-  const back = createShirtNumberMesh(number, 0.28, 0.36);
-  if (back) {
-    back.name = "futbahl-shirt-number";
-    back.position.set(0, 1.31, 0.154);
-    attachRootSpaceObject(root, "spine_02", back);
-  }
+function addUniformBranding(root: THREE.Group, wordmark: THREE.Texture | null) {
   if (wordmark) {
-    let logoMaterial = numberMaterialCache.get("wordmark");
+    let logoMaterial = uniformDecalMaterialCache.get("wordmark");
     if (!logoMaterial) {
       logoMaterial = new THREE.MeshBasicMaterial({
         map: wordmark,
@@ -388,7 +381,7 @@ function addUniformBranding(root: THREE.Group, number: number, wordmark: THREE.T
         depthWrite: false,
         toneMapped: false,
       });
-      numberMaterialCache.set("wordmark", logoMaterial);
+      uniformDecalMaterialCache.set("wordmark", logoMaterial);
     }
     const chest = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.078), logoMaterial);
     chest.name = "futbahl-uniform-wordmark";
@@ -417,7 +410,7 @@ function addOriginalFootballKit(
     foot.add(boot);
   }
 
-  addUniformBranding(root, appearance.number, wordmark);
+  addUniformBranding(root, wordmark);
 }
 
 function attachLicensedHair(

@@ -12,10 +12,6 @@ import {
 } from "@/lib/futbahl-locomotion";
 import { attachLicensedBallVisual } from "@/lib/futbahl-ball-visual";
 import {
-  createShirtNumberMesh,
-  disposeShirtNumberAtlas,
-} from "@/game/rendering/shirt-number-atlas";
-import {
   BODY_PRESETS as ANONYMOUS_BODY_PRESETS,
   DEFAULT_OFFLINE_SETTINGS as ANONYMOUS_DEFAULT_SETTINGS,
   FORMATION_OPTIONS as ANONYMOUS_FORMATIONS,
@@ -643,7 +639,6 @@ const PITCH_SURFACE_Y = 0;
 const BLOB_SHADOW_Y = 0.055;
 const FIELD_MARKINGS_Y = 0.11;
 const LANDING_MARKER_Y = 0.135;
-const SHIRT_NUMBER_BACK_GAP = 0.025;
 const RECORDED_CROWD_AMBIENT_PATH = "/audio/stadium-ambience.m4a";
 const RECORDED_CROWD_SWELL_PATH = "/audio/stadium-swell.m4a";
 const RECORDED_CROWD_GOAL_PATH = "/audio/stadium-goal-roar.m4a";
@@ -1268,15 +1263,6 @@ function sharedBasicMaterial(color: string) {
   return material;
 }
 
-function shirtNumberPanel(team: TeamId, kitColor: string, number: number) {
-  void team;
-  void kitColor;
-  const panel = createShirtNumberMesh(number, 0.62, 0.82) ?? new THREE.Object3D();
-  panel.name = "shirt-number";
-  panel.renderOrder = 3;
-  return panel;
-}
-
 function disposeObjectTree(object: THREE.Object3D) {
   object.traverse((child) => {
     const maybeMesh = child as THREE.Mesh | THREE.Sprite;
@@ -1298,7 +1284,6 @@ function disposeSharedResources() {
   sharedGeometryCache.clear();
   sharedMaterialCache.forEach((material) => material.dispose());
   sharedMaterialCache.clear();
-  disposeShirtNumberAtlas();
 }
 
 function scheduleRuntimeTimeout(active: MatchRuntime, callback: () => void, delay: number) {
@@ -1937,7 +1922,6 @@ function makeHumanFigure({
   skin = "#e8b88f",
   hair = "#3f2b1d",
   accent,
-  numberPanel,
   bodyPresetId = "balanced",
   receiverColor = "#60a5fa",
 }: {
@@ -1949,7 +1933,6 @@ function makeHumanFigure({
   skin?: string;
   hair?: string;
   accent?: string;
-  numberPanel?: THREE.Object3D;
   sponsor?: string;
   bodyPresetId?: BodyPresetId;
   receiverColor?: string;
@@ -2140,11 +2123,6 @@ function makeHumanFigure({
   chestRoot.add(collar, neckBase);
   spineUpper.add(chestRoot);
   spineLower.add(torso, shirtHem, spineUpper);
-  if (numberPanel) {
-    numberPanel.position.set(0, 0.48, -(0.23 + SHIRT_NUMBER_BACK_GAP));
-    numberPanel.rotation.y = Math.PI;
-    spineLower.add(numberPanel);
-  }
   pelvisRoot.add(hip, spineLower);
   bodyRoot.add(pelvisRoot);
   group.add(bodyRoot);
@@ -2219,7 +2197,7 @@ function makeHumanFigure({
   return group;
 }
 
-function makeKit(team: TeamId, role: PlayerRole, accent: string, number: number, bodyPresetId: BodyPresetId = "balanced") {
+function makeKit(team: TeamId, role: PlayerRole, accent: string, bodyPresetId: BodyPresetId = "balanced") {
   const isKeeper = role === "keeper";
   const home = HOME_KIT;
   const homeColor = activeOfflineSettings.homeColor || home.primary;
@@ -2238,7 +2216,6 @@ function makeKit(team: TeamId, role: PlayerRole, accent: string, number: number,
     skin: bodyPreset.skin,
     hair: bodyPreset.hair,
     accent: isKeeper ? "#f8fafc" : team === "home" ? home.accent : accent,
-    numberPanel: shirtNumberPanel(team, shirt, number),
     bodyPresetId,
     receiverColor: team === "home" ? "#60a5fa" : "#f87171",
   });
@@ -3720,7 +3697,7 @@ function createPlayer(id: string, team: TeamId, role: PlayerRole, line: PlayerLi
   const configuredPlayer = configuredTeam.playersBySlot[formationSlot];
   const bodyPresetId = configuredPlayer?.bodyPresetId ?? "balanced";
   const shirtNumber = configuredPlayer?.shirtNumber ?? number;
-  const mesh = makeKit(team, role, "#ffffff", shirtNumber, bodyPresetId);
+  const mesh = makeKit(team, role, "#ffffff", bodyPresetId);
   attachDevelopmentRigDebug(mesh);
   const shadow = createBlobShadow(role === "keeper" ? 1.45 : 1.08, role === "keeper" ? 0.22 : 0.18);
   shadow.name = "blob-shadow";
@@ -8148,7 +8125,7 @@ export function ArcadeSoccerGame() {
                   <Image src="/branding/futbahl-logo.png" width={42} height={42} className="h-10 w-10 object-contain" alt="Futbahl" />
                   <h2 className="text-2xl font-black">Formation & Match Settings</h2>
                 </div>
-                <p className="mt-1 text-sm text-white/60">Configure both anonymous numbered teams before kickoff.</p>
+                <p className="mt-1 text-sm text-white/60">Configure both anonymous teams before kickoff.</p>
               </div>
               <div className="flex gap-2">
                 <button

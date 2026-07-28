@@ -46,12 +46,6 @@ function FormationBoard({
   onSelect: (selection: Selection) => void;
 }) {
   const validation = validateTeamSetup(team);
-  const duplicateNumbers = new Set<number>();
-  const seenNumbers = new Set<number>();
-  Object.values(team.playersBySlot).forEach((player) => {
-    if (seenNumbers.has(player.shirtNumber)) duplicateNumbers.add(player.shirtNumber);
-    seenNumbers.add(player.shirtNumber);
-  });
 
   return (
     <div>
@@ -60,11 +54,9 @@ function FormationBoard({
         <div className="absolute left-1/2 top-[5%] h-[90%] w-px -translate-x-1/2 bg-white/15" />
         <div className="absolute left-1/2 top-1/2 h-14 w-14 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/15" />
         {FORMATION_OPTIONS[team.formationId].map((formationSlot) => {
-          const player = team.playersBySlot[formationSlot.slot];
           const left = Math.max(8, Math.min(92, 50 + (formationSlot.x / 28) * 42));
           const top = Math.max(8, Math.min(92, 50 + (formationSlot.z / 52) * 42));
           const active = selected?.side === side && selected.slotId === formationSlot.slot;
-          const duplicate = player ? duplicateNumbers.has(player.shirtNumber) : false;
           return (
             <button
               key={formationSlot.slot}
@@ -72,9 +64,7 @@ function FormationBoard({
               className={`absolute min-h-12 min-w-14 -translate-x-1/2 -translate-y-1/2 border px-2 py-1 text-center text-[10px] font-black uppercase text-white transition hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 ${
                 active
                   ? "border-cyan-100 bg-cyan-300 text-slate-950"
-                  : duplicate
-                    ? "border-rose-200 bg-rose-600"
-                    : formationSlot.line === "keeper"
+                  : formationSlot.line === "keeper"
                       ? "border-amber-100/80 bg-amber-500/90"
                       : side === "home"
                         ? "border-white/60 bg-sky-500/90"
@@ -85,7 +75,6 @@ function FormationBoard({
               aria-label={`Edit ${sideTitle(side)} ${formationSlot.label}`}
             >
               <span className="block">{formationSlot.label}</span>
-              <span className="mt-0.5 block text-sm leading-none">{player?.shirtNumber ?? "!"}</span>
             </button>
           );
         })}
@@ -170,7 +159,7 @@ export function TeamSetupPanel({ settings, onChange }: TeamSetupPanelProps) {
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-white/10 bg-white/[0.045] p-4">
         <div className="text-xs font-bold text-white/60">
-          {validation.home.valid && validation.away.valid ? "Both anonymous squads are valid: 11 players and unique numbers." : "Fix the highlighted team validation before kickoff."}
+          {validation.home.valid && validation.away.valid ? "Both anonymous squads are valid and ready." : "Fix the highlighted team validation before kickoff."}
         </div>
         <button
           type="button"
@@ -190,28 +179,15 @@ export function TeamSetupPanel({ settings, onChange }: TeamSetupPanelProps) {
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-xs font-black uppercase text-cyan-200/70">{sideTitle(selected.side)} · Anonymous player</div>
-              <h3 className="mt-1 text-xl font-black">{selectedFormationSlot.label} · #{selectedPlayer.shirtNumber}</h3>
+              <h3 className="mt-1 text-xl font-black">{selectedFormationSlot.label}</h3>
             </div>
             <button type="button" className="rounded border border-white/15 px-3 py-2 text-xs font-black" onClick={() => setSelected(null)}>Close</button>
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <label className="text-xs font-black uppercase text-white/55">
               Position
               <input value={selectedFormationSlot.label} readOnly className="mt-1 w-full rounded border border-white/10 bg-white/5 px-3 py-2 text-white/75" />
-            </label>
-            <label className="text-xs font-black uppercase text-white/55">
-              Shirt number
-              <input
-                type="number"
-                min="1"
-                max="99"
-                value={selectedPlayer.shirtNumber}
-                className="mt-1 w-full rounded border border-white/15 bg-black/25 px-3 py-2 text-white outline-none focus:border-cyan-200"
-                onChange={(event) => updateSide(selected.side, (current) => updatePlayerSetup(current, selected.slotId, {
-                  shirtNumber: Math.max(1, Math.min(99, Math.trunc(Number(event.target.value) || 1))),
-                }))}
-              />
             </label>
             <label className="text-xs font-black uppercase text-white/55">
               Body preset
