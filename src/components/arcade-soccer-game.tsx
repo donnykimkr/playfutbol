@@ -15226,7 +15226,9 @@ function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
   const centralForwards = attackers.filter((player) => (
     player.line === "forward" && Math.abs(player.pos.x) < GOAL_W * 2.4
   ));
-  const rawDeepestThreat = [...(centralForwards.length > 0 ? centralForwards : attackers)]
+  const deepestThreatPool = (centralForwards.length > 0 ? centralForwards : attackers)
+    .filter((attacker) => attacker.id !== carrier.id);
+  const rawDeepestThreat = [...(deepestThreatPool.length > 0 ? deepestThreatPool : [carrier])]
     .sort((a, b) => (
       a.pos.distanceTo(ownGoal) + Math.abs(a.pos.x) * 0.16
       - (b.pos.distanceTo(ownGoal) + Math.abs(b.pos.x) * 0.16)
@@ -15444,7 +15446,7 @@ function updateDefensiveTeamPlan(active: MatchRuntime, dt: number) {
 function enforceAntiSwarmInvariant(active: MatchRuntime, carrier: PlayerBody, plan: DefensiveTeamPlan) {
   const allowed = new Set([
     plan.primaryPresserId,
-    plan.deepestMarkerId ?? plan.secondaryCoverId,
+    plan.secondaryCoverId,
   ].filter((id): id is string => Boolean(id)));
   const nearby = active.players
     .filter((player) => (
@@ -15510,7 +15512,7 @@ function enforceDefensiveRuntimeGuard(active: MatchRuntime, dt: number) {
 
   const allowed = new Set([
     plan.primaryPresserId,
-    plan.deepestMarkerId ?? plan.secondaryCoverId,
+    plan.secondaryCoverId,
   ].filter((id): id is string => Boolean(id)));
   const extras = active.players.filter((player) => {
     if (
