@@ -14640,6 +14640,30 @@ function finalThirdSupportTarget(player: PlayerBody, owner: PlayerBody, active: 
   return null;
 }
 
+function carrierSupportAssignments(owner: PlayerBody, active: MatchRuntime) {
+  const teammates = active.players.filter((candidate) => (
+    candidate.team === owner.team
+    && candidate.id !== owner.id
+    && candidate.role !== "keeper"
+    && !candidate.sentOff
+  ));
+  const safe = [...teammates]
+    .sort((a, b) => {
+      const lineWeight = (candidate: PlayerBody) => candidate.line === "defender" ? 0 : candidate.line === "midfielder" ? 5 : 14;
+      return lineWeight(a) + a.pos.distanceTo(owner.pos) - (lineWeight(b) + b.pos.distanceTo(owner.pos));
+    })[0] ?? null;
+  const progressive = [...teammates]
+    .filter((candidate) => candidate.id !== safe?.id)
+    .sort((a, b) => {
+      const goalZ = attackingGoalZ(owner.team, active.half);
+      return Math.abs(a.pos.z - goalZ) - Math.abs(b.pos.z - goalZ);
+    })[0] ?? null;
+  const lateral = [...teammates]
+    .filter((candidate) => candidate.id !== safe?.id && candidate.id !== progressive?.id)
+    .sort((a, b) => Math.abs(b.home.x) - Math.abs(a.home.x))[0] ?? null;
+  return { safe, lateral, progressive };
+}
+
 function addPossessionSpacing(player: PlayerBody, target: THREE.Vector3, active: MatchRuntime, teamHasBall: boolean) {
   const owner = ballOwner(active);
   if (!teamHasBall || !owner || owner.id === player.id || player.role === "keeper") return;
@@ -14649,6 +14673,23 @@ function addPossessionSpacing(player: PlayerBody, target: THREE.Vector3, active:
   const laneSide = Math.sign(player.home.x || player.pos.x || (player.number % 2 === 0 ? 1 : -1));
   const passAngle = (player.number % 3) - 1;
   const supportTarget = player.home.clone();
+  const support = carrierSupportAssignments(owner, active);
+  const supportSide = Math.sign(player.home.x || player.pos.x || (player.number % 2 === 0 ? 1 : -1));
+  const explicitSupportTarget = player.id === support.safe?.id
+    ? ownerFlat.clone().add(new THREE.Vector3(supportSide * 9, 0, -attackSign * 13))
+    : player.id === support.lateral?.id
+      ? ownerFlat.clone().add(new THREE.Vector3(supportSide * 20, 0, attackSign * 2.5))
+      : player.id === support.progressive?.id
+        ? ownerFlat.clone().add(new THREE.Vector3(supportSide * 11, 0, attackSign * 23))
+        : null;
+  if (explicitSupportTarget) {
+    explicitSupportTarget.x = clamp(explicitSupportTarget.x, -FIELD_W / 2 + 7, FIELD_W / 2 - 7);
+    explicitSupportTarget.z = clamp(explicitSupportTarget.z, -FIELD_L / 2 + 8, FIELD_L / 2 - 8);
+    target.lerp(explicitSupportTarget, 0.34);
+    active.renderer.domElement.dataset.attackingSafeOption = support.safe?.id ?? "";
+    active.renderer.domElement.dataset.attackingLateralOption = support.lateral?.id ?? "";
+    active.renderer.domElement.dataset.attackingProgressiveOption = support.progressive?.id ?? "";
+  }
   if (player.line === "forward") {
     supportTarget.x = clamp(ownerFlat.x + laneSide * 20, -FIELD_W / 2 + 7, FIELD_W / 2 - 7);
     supportTarget.z = clamp(ownerFlat.z + attackSign * (20 + (player.number % 3) * 3.8), -FIELD_L / 2 + 8, FIELD_L / 2 - 8);
