@@ -2,6 +2,11 @@ import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { ANIMATION_LOD } from "@/game/config/player-movement";
+import {
+  FOOTBALL_ANIMATION_CLIP_IDS,
+  FOOTBALL_LOCOMOTION_CLIP_PRIORITY,
+} from "@/game/animation/football-animation-manifest";
+import { createShirtNumberMesh } from "@/game/rendering/shirt-number-atlas";
 import { targetHeightForPreset } from "@/game/players/player-appearance";
 import type { BodyPresetId, PreferredFoot } from "@/lib/anonymous-team-setup";
 
@@ -53,6 +58,7 @@ export type FutbahlMotionSample = {
   turnRate: number;
   dt: number;
   distanceToCamera?: number;
+  visibleToCamera?: boolean;
   kickTimer?: number;
   headerTimer?: number;
   catchTimer?: number;
@@ -94,6 +100,8 @@ export const FUTBAHL_CHARACTER_ASSETS = {
   source: "Quaternius Universal Base Characters and Universal Animation Library",
   license: "CC0 1.0",
 } as const;
+
+const footballAnimationUrl = process.env.NEXT_PUBLIC_FUTBAHL_FOOTBALL_ANIMATIONS_URL?.trim() || null;
 
 const FALLBACK_CLIPS: Record<FutbahlLocomotionState, string[]> = {
   Idle: ["Idle_Loop"],
@@ -148,17 +156,11 @@ type SharedCharacterAssets = {
 const loader = new GLTFLoader();
 const warned = new Set<string>();
 const bodyMaterialCache = new Map<string, THREE.Material>();
-const clothingMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
 const hairMaterialCache = new Map<string, THREE.Material | THREE.Material[]>();
-const numberGeometryCache = new Map<number, THREE.BufferGeometry>();
 const numberMaterialCache = new Map<string, THREE.MeshBasicMaterial>();
-let numberAtlas: THREE.CanvasTexture | null = null;
 let sharedAssetsPromise: Promise<SharedCharacterAssets> | null = null;
-
-const KIT_GEOMETRY = {
-  collar: new THREE.TorusGeometry(0.105, 0.018, 6, 12),
-  sleeve: new THREE.CylinderGeometry(0.092, 0.082, 1, 8, 1, false),
-} as const;
+const WORDMARK_GEOMETRY = new THREE.PlaneGeometry(0.34, 0.078);
+WORDMARK_GEOMETRY.userData.shared = true;
 
 function warnOnce(key: string, message: string, error?: unknown) {
   if (warned.has(key)) return;
@@ -185,32 +187,24 @@ const TARGET_BONE_BY_SOURCE = new Map(
   ]),
 );
 
-function makeRetargetedAsset(base: GLTF, animation: GLTF): SharedCharacterAsset {
-  const target = firstSkinnedMesh(base.scene);
-  const source = firstSkinnedMesh(animation.scene);
-  if (!target || !source) {
-    throw new Error("The licensed character or animation GLB does not contain a skinned mesh.");
-  }
-  const sourceHip = source.skeleton.getBoneByName("DEF-hips");
+function retargetClips(target: THREE.SkinnedMesh, animation: GLTF) {
+  const sourceHip = animation.scene.getObjectByName("DEF-hips")
+    ?? animation.scene.getObjectByName("pelvis");
   const targetHip = target.skeleton.getBoneByName("pelvis");
-  const clips = animation.animations.map((clip) => {
+  return animation.animations.map((clip) => {
     const tracks = clip.tracks.flatMap((track) => {
       const propertySeparator = track.name.lastIndexOf(".");
       if (propertySeparator < 0) return [];
       const sourceName = track.name.slice(0, propertySeparator);
       const propertyName = track.name.slice(propertySeparator + 1);
-      const targetName = TARGET_BONE_BY_SOURCE.get(normalizedBoneName(sourceName));
+      const targetName = TARGET_BONE_BY_SOURCE.get(normalizedBoneName(sourceName))
+        ?? (target.skeleton.getBoneByName(sourceName) ? sourceName : undefined);
       if (!targetName || targetName === "root" || propertyName === "scale") return [];
       if (propertyName === "position" && targetName !== "pelvis") return [];
 
       const remapped = track.clone();
       remapped.name = `${targetName}.${propertyName}`;
-      if (
-        propertyName === "position"
-        && targetName === "pelvis"
-        && sourceHip
-        && targetHip
-      ) {
+      if (propertyName === "position" && targetName === "pelvis" && sourceHip && targetHip) {
         const values = remapped.values as Float32Array;
         const heightOffset = targetHip.position.z - sourceHip.position.z;
         for (let index = 0; index < values.length; index += 3) {
@@ -223,10 +217,33 @@ function makeRetargetedAsset(base: GLTF, animation: GLTF): SharedCharacterAsset 
     });
     return new THREE.AnimationClip(clip.name, clip.duration, tracks).optimize();
   });
-  return { scene: base.scene as THREE.Group, clips };
+}
+
+function makeRetargetedAsset(base: GLTF, animation: GLTF, footballAnimation: GLTF | null): SharedCharacterAsset {
+  const target = firstSkinnedMesh(base.scene);
+  if (!target) {
+    throw new Error("The licensed character GLB does not contain a skinned mesh.");
+  }
+  const clipsByName = new Map(retargetClips(target, animation).map((clip) => [clip.name, clip]));
+  if (footballAnimation) {
+    retargetClips(target, footballAnimation)
+      .filter((clip) => FOOTBALL_ANIMATION_CLIP_IDS.has(clip.name))
+      .forEach((clip) => clipsByName.set(clip.name, clip));
+  }
+  return { scene: base.scene as THREE.Group, clips: [...clipsByName.values()] };
 }
 
 function loadSharedAssets() {
+  const footballAnimation = footballAnimationUrl
+    ? loader.loadAsync(footballAnimationUrl).catch((error) => {
+        warnOnce(
+          "football-animation",
+          "[Futbahl locomotion] Football-specific animation GLB failed to load; using the CC0 fallback.",
+          error,
+        );
+        return null;
+      })
+    : Promise.resolve(null);
   sharedAssetsPromise ??= Promise.all([
     loader.loadAsync(FUTBAHL_CHARACTER_ASSETS.animation),
     loader.loadAsync(FUTBAHL_CHARACTER_ASSETS.male),
@@ -241,7 +258,8 @@ function loadSharedAssets() {
         warnOnce(`hair:${path}`, `[Futbahl player] Licensed hairstyle "${path}" failed to load; using the base hairstyle.`, error);
         return null;
       }))),
-  ]).then(([animation, male, female, wordmark, hair]) => {
+    footballAnimation,
+  ]).then(([animation, male, female, wordmark, hair, football]) => {
     if (wordmark) {
       wordmark.colorSpace = THREE.SRGBColorSpace;
       wordmark.generateMipmaps = false;
@@ -249,8 +267,8 @@ function loadSharedAssets() {
       wordmark.magFilter = THREE.LinearFilter;
     }
     return {
-      male: makeRetargetedAsset(male, animation),
-      female: makeRetargetedAsset(female, animation),
+      male: makeRetargetedAsset(male, animation, football),
+      female: makeRetargetedAsset(female, animation, football),
       hair,
       wordmark,
     };
@@ -357,19 +375,6 @@ function makeBodyMaterial(
   return material;
 }
 
-function makeClothingMaterial(color: string, part: string) {
-  const key = `${part}|${color}`;
-  const cached = clothingMaterialCache.get(key);
-  if (cached) return cached;
-  const material = new THREE.MeshStandardMaterial({
-    color,
-    roughness: part === "boots" ? 0.62 : 0.88,
-    metalness: 0,
-  });
-  clothingMaterialCache.set(key, material);
-  return material;
-}
-
 function attachRootSpaceObject(
   root: THREE.Group,
   boneName: string,
@@ -385,102 +390,9 @@ function attachRootSpaceObject(
   bone.attach(object);
 }
 
-function addBoneSegment(
-  root: THREE.Group,
-  boneName: string,
-  childBoneName: string,
-  geometry: THREE.BufferGeometry,
-  material: THREE.Material,
-  startFraction: number,
-  endFraction: number,
-  radialScale = 1,
-) {
-  const bone = root.getObjectByName(boneName);
-  const child = root.getObjectByName(childBoneName);
-  if (!bone || !child) return;
-  root.updateMatrixWorld(true);
-  const start = root.worldToLocal(bone.getWorldPosition(new THREE.Vector3()));
-  const end = root.worldToLocal(child.getWorldPosition(new THREE.Vector3()));
-  const segmentStart = start.clone().lerp(end, startFraction);
-  const segmentEnd = start.clone().lerp(end, endFraction);
-  const direction = segmentEnd.clone().sub(segmentStart);
-  const length = direction.length();
-  if (length < 0.01) return;
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.copy(segmentStart).add(segmentEnd).multiplyScalar(0.5);
-  mesh.quaternion.setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    direction.normalize(),
-  );
-  mesh.scale.set(radialScale, length, radialScale);
-  mesh.castShadow = true;
-  mesh.receiveShadow = false;
-  attachRootSpaceObject(root, boneName, mesh);
-}
-
-function createNumberAtlas() {
-  if (numberAtlas) return numberAtlas;
-  const canvas = document.createElement("canvas");
-  canvas.width = 1024;
-  canvas.height = 1024;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = "#ffffff";
-  context.strokeStyle = "rgba(0,0,0,0.72)";
-  context.lineWidth = 12;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.font = "900 72px Arial, sans-serif";
-  for (let number = 1; number <= 99; number += 1) {
-    const column = (number - 1) % 10;
-    const row = Math.floor((number - 1) / 10);
-    const x = column * 102.4 + 51.2;
-    const y = row * 102.4 + 51.2;
-    context.strokeText(String(number), x, y);
-    context.fillText(String(number), x, y);
-  }
-  numberAtlas = new THREE.CanvasTexture(canvas);
-  numberAtlas.colorSpace = THREE.SRGBColorSpace;
-  numberAtlas.generateMipmaps = false;
-  numberAtlas.minFilter = THREE.LinearFilter;
-  numberAtlas.magFilter = THREE.LinearFilter;
-  return numberAtlas;
-}
-
-function numberGeometry(number: number) {
-  const normalized = Math.max(1, Math.min(99, Math.trunc(number)));
-  const cached = numberGeometryCache.get(normalized);
-  if (cached) return cached;
-  const geometry = new THREE.PlaneGeometry(0.28, 0.36);
-  const column = (normalized - 1) % 10;
-  const row = Math.floor((normalized - 1) / 10);
-  const u0 = column / 10;
-  const u1 = (column + 1) / 10;
-  const v1 = 1 - row / 10;
-  const v0 = 1 - (row + 1) / 10;
-  geometry.setAttribute("uv", new THREE.Float32BufferAttribute([
-    u0, v1, u1, v1, u0, v0, u1, v0,
-  ], 2));
-  numberGeometryCache.set(normalized, geometry);
-  return geometry;
-}
-
 function addUniformBranding(root: THREE.Group, number: number, wordmark: THREE.Texture | null) {
-  const atlas = createNumberAtlas();
-  if (atlas) {
-    let numberMaterial = numberMaterialCache.get("white");
-    if (!numberMaterial) {
-      numberMaterial = new THREE.MeshBasicMaterial({
-        map: atlas,
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        toneMapped: false,
-      });
-      numberMaterialCache.set("white", numberMaterial);
-    }
-    const back = new THREE.Mesh(numberGeometry(number), numberMaterial);
+  const back = createShirtNumberMesh(number, 0.28, 0.36);
+  if (back) {
     back.name = "futbahl-shirt-number";
     back.position.set(0, 1.31, 0.154);
     attachRootSpaceObject(root, "spine_02", back);
@@ -496,7 +408,7 @@ function addUniformBranding(root: THREE.Group, number: number, wordmark: THREE.T
       });
       numberMaterialCache.set("wordmark", logoMaterial);
     }
-    const chest = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.078), logoMaterial);
+    const chest = new THREE.Mesh(WORDMARK_GEOMETRY, logoMaterial);
     chest.name = "futbahl-uniform-wordmark";
     chest.position.set(0, 1.32, -0.154);
     chest.rotation.y = Math.PI;
@@ -509,38 +421,6 @@ function addOriginalFootballKit(
   appearance: FutbahlPlayerAppearance,
   wordmark: THREE.Texture | null,
 ) {
-  const shirtMaterial = makeClothingMaterial(appearance.shirt, "shirt");
-  const trimMaterial = makeClothingMaterial(appearance.trim, "trim");
-
-  const collar = new THREE.Mesh(KIT_GEOMETRY.collar, trimMaterial);
-  collar.name = "futbahl-shirt-collar";
-  collar.position.set(0, 1.55, -0.01);
-  collar.rotation.x = Math.PI / 2;
-  collar.castShadow = true;
-  attachRootSpaceObject(root, "spine_03", collar);
-
-  for (const side of ["l", "r"] as const) {
-    addBoneSegment(
-      root,
-      `upperarm_${side}`,
-      `lowerarm_${side}`,
-      KIT_GEOMETRY.sleeve,
-      shirtMaterial,
-      0.02,
-      0.46,
-    );
-    addBoneSegment(
-      root,
-      `upperarm_${side}`,
-      `lowerarm_${side}`,
-      KIT_GEOMETRY.sleeve,
-      trimMaterial,
-      0.42,
-      0.5,
-      1.035,
-    );
-  }
-
   addUniformBranding(root, appearance.number, wordmark);
 }
 
@@ -548,10 +428,13 @@ function attachLicensedHair(
   root: THREE.Group,
   source: THREE.Group | null,
   color: string,
-) {
-  if (!source) return;
+): THREE.Group | null {
+  if (!source) return null;
   const head = root.getObjectByName("Head");
-  if (!head) return;
+  if (!head) return null;
+  const hairRoot = new THREE.Group();
+  hairRoot.name = "futbahl-hair-root";
+  head.add(hairRoot);
   root.updateMatrixWorld(true);
   source.updateMatrixWorld(true);
   const targetHeadInRoot = root.matrixWorld.clone().invert().multiply(head.matrixWorld);
@@ -584,8 +467,9 @@ function attachLicensedHair(
     const sourceObjectInRoot = inverseSourceRoot.clone().multiply(object.matrixWorld);
     const localMatrix = inverseTargetHeadInRoot.clone().multiply(sourceObjectInRoot);
     localMatrix.decompose(hairMesh.position, hairMesh.quaternion, hairMesh.scale);
-    head.add(hairMesh);
+    hairRoot.add(hairMesh);
   });
+  return hairRoot;
 }
 
 function shortestAngleDelta(from: number, to: number) {
@@ -641,6 +525,7 @@ export class FutbahlLocomotionController {
   private readonly host: THREE.Group;
   private readonly visualRoot: THREE.Group;
   private readonly fallbackBody: THREE.Object3D | null;
+  private readonly fallbackParent: THREE.Object3D | null;
   private readonly mixerRoot: THREE.Object3D;
   private readonly mixer: THREE.AnimationMixer;
   private readonly actions = new Map<string, THREE.AnimationAction>();
@@ -650,6 +535,7 @@ export class FutbahlLocomotionController {
   private readonly right = new THREE.Vector3();
   private readonly bones: Record<string, THREE.Object3D | null>;
   private readonly preferredFoot: PreferredFoot;
+  private readonly hairRoot: THREE.Group | null;
   private state: FutbahlLocomotionState = "Idle";
   private currentAction: THREE.AnimationAction | null = null;
   private currentClip = "";
@@ -657,6 +543,8 @@ export class FutbahlLocomotionController {
   private previousHeading = 0;
   private debugTimer = 0;
   private mixerAccumulator = 0;
+  private wasOffscreen = false;
+  private lastDebugSnapshot: FutbahlLocomotionDebugSnapshot | null = null;
   private disposed = false;
 
   private constructor(
@@ -672,6 +560,7 @@ export class FutbahlLocomotionController {
     this.root = root;
     this.debugElement = debugElement;
     this.fallbackBody = host.getObjectByName("body-root") ?? null;
+    this.fallbackParent = this.fallbackBody?.parent ?? null;
     this.preferredFoot = appearance.preferredFoot;
     this.visualRoot = new THREE.Group();
     this.visualRoot.name = `futbahl-player-${appearance.playerId}`;
@@ -723,9 +612,14 @@ export class FutbahlLocomotionController {
       });
       object.material = Array.isArray(object.material) ? nextMaterials : nextMaterials[0];
     });
-    attachLicensedHair(root, hairSource, hairColors[(seed >>> 13) % hairColors.length]);
+    this.hairRoot = appearance.role === "keeper" || appearance.index % 3 === 0
+      ? attachLicensedHair(root, hairSource, hairColors[(seed >>> 13) % hairColors.length])
+      : null;
     addOriginalFootballKit(root, appearance, wordmark);
-    if (this.fallbackBody) this.fallbackBody.visible = false;
+    if (this.fallbackBody && this.fallbackParent) {
+      this.fallbackBody.visible = false;
+      this.fallbackParent.remove(this.fallbackBody);
+    }
 
     this.mixerRoot = firstSkinnedMesh(root) ?? root;
     this.mixer = new THREE.AnimationMixer(this.mixerRoot);
@@ -793,6 +687,21 @@ export class FutbahlLocomotionController {
     if (nextState !== this.state) this.transitionTo(nextState, 0.18);
 
     const playbackSpeed = actionPlaybackSpeed(this.state, speed);
+    this.lastDebugSnapshot = {
+      state: this.state,
+      clip: this.currentClip,
+      totalSpeed: speed,
+      localForwardSpeed: localForward,
+      localLateralSpeed: localLateral,
+      acceleration,
+      angularVelocity,
+      turnRate: sample.turnRate,
+      playbackSpeed,
+      playerIndex: sample.playerIndex ?? -1,
+      possessionState: sample.possessionState ?? "unknown",
+      distanceToBall: sample.distanceToBall ?? 0,
+      controlTargetDistance: sample.controlTargetDistance ?? 0,
+    };
     if (this.currentAction) this.currentAction.timeScale = playbackSpeed;
     const forwardLean = THREE.MathUtils.clamp(-acceleration * 0.0065, -0.13, 0.09);
     const lateralLean = THREE.MathUtils.clamp(-localLateral * 0.014, -0.1, 0.1);
@@ -801,15 +710,24 @@ export class FutbahlLocomotionController {
 
     this.mixerAccumulator += safeDt;
     const distanceToCamera = sample.distanceToCamera ?? 0;
+    if (this.hairRoot) this.hairRoot.visible = distanceToCamera <= ANIMATION_LOD.mediumDistance;
+    if (sample.visibleToCamera === false) {
+      this.wasOffscreen = true;
+      this.mixerAccumulator = 0;
+      this.previousSpeed = speed;
+      this.previousHeading = sample.heading;
+      return;
+    }
     const updateInterval = distanceToCamera > ANIMATION_LOD.farDistance
       ? ANIMATION_LOD.farInterval
       : distanceToCamera > ANIMATION_LOD.mediumDistance
         ? ANIMATION_LOD.mediumInterval
         : 0;
-    if (updateInterval === 0 || this.mixerAccumulator >= updateInterval) {
+    if (this.wasOffscreen || updateInterval === 0 || this.mixerAccumulator >= updateInterval) {
       this.mixer.update(this.mixerAccumulator);
       this.applyActionOverlay(sample);
       this.mixerAccumulator = 0;
+      this.wasOffscreen = false;
     }
 
     this.previousSpeed = speed;
@@ -817,21 +735,7 @@ export class FutbahlLocomotionController {
     this.debugTimer -= safeDt;
     if (this.debugElement && this.debugTimer <= 0) {
       this.debugTimer = 0.1;
-      this.renderDebug({
-        state: this.state,
-        clip: this.currentClip,
-        totalSpeed: speed,
-        localForwardSpeed: localForward,
-        localLateralSpeed: localLateral,
-        acceleration,
-        angularVelocity,
-        turnRate: sample.turnRate,
-        playbackSpeed,
-        playerIndex: sample.playerIndex ?? -1,
-        possessionState: sample.possessionState ?? "unknown",
-        distanceToBall: sample.distanceToBall ?? 0,
-        controlTargetDistance: sample.controlTargetDistance ?? 0,
-      });
+      this.renderDebug(this.lastDebugSnapshot);
     }
   }
 
@@ -841,7 +745,14 @@ export class FutbahlLocomotionController {
     this.mixer.stopAllAction();
     this.mixer.uncacheRoot(this.mixerRoot);
     this.host.remove(this.visualRoot);
-    if (this.fallbackBody) this.fallbackBody.visible = true;
+    if (this.fallbackBody && this.fallbackParent) {
+      this.fallbackBody.visible = true;
+      this.fallbackParent.add(this.fallbackBody);
+    }
+  }
+
+  getDebugSnapshot() {
+    return this.lastDebugSnapshot;
   }
 
   getWorldContactPoints() {
@@ -905,6 +816,9 @@ export class FutbahlLocomotionController {
   }
 
   private resolveClip(state: FutbahlLocomotionState) {
+    const footballClip = FOOTBALL_LOCOMOTION_CLIP_PRIORITY[state]
+      .find((clipName) => this.availableClips.has(clipName));
+    if (footballClip) return footballClip;
     const expected = LOCOMOTION_CLIPS[state];
     if (this.availableClips.has(expected)) return expected;
     return FALLBACK_CLIPS[state].find((clipName) => this.availableClips.has(clipName)) ?? "";

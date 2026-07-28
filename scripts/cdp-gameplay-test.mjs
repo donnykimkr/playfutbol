@@ -50,6 +50,9 @@ const readLifecycle = () => evaluate(`(() => {
     inputListenerSetCount: d.inputListenerSetCount,
     fullscreenListenerCount: d.fullscreenListenerCount,
     sceneNodes: d.sceneNodes,
+    sceneUniqueGeometries: d.sceneUniqueGeometries,
+    sceneUniqueMaterials: d.sceneUniqueMaterials,
+    sceneUniqueTextures: d.sceneUniqueTextures,
     colliderCount: d.colliderCount,
     timerCount: d.timerCount,
     audioSourceCount: d.audioSourceCount,
@@ -57,6 +60,7 @@ const readLifecycle = () => evaluate(`(() => {
     rendererTextures: d.rendererTextures,
     rendererCalls: d.rendererCalls,
     rendererTriangles: d.rendererTriangles,
+    mixerCount: d.mixerCount,
     rendererDpr: d.rendererDpr,
     rendererPixels: d.rendererPixels,
     rendererCount: d.rendererCount,
@@ -79,6 +83,8 @@ const readLifecycle = () => evaluate(`(() => {
     fullTimeTransitions: d.fullTimeTransitions,
     fps: d.fps,
     averageFrameMs: d.averageFrameMs,
+    frameP95Ms: d.frameP95Ms,
+    jsHeapBytes: performance.memory?.usedJSHeapSize ?? null,
     fullscreenActive: Boolean(document.fullscreenElement),
   };
 })()`);
@@ -199,7 +205,8 @@ if (mode === "tutorial-smoke") {
 if (mode === "lifecycle") {
   await dispatchKey("keyDown", "f", "KeyF");
   await dispatchKey("keyUp", "f", "KeyF");
-  await sleep(500);
+  await sleep(2500);
+  await send("HeapProfiler.collectGarbage");
   lifecycleSamples.push({ iteration: 0, ...(await readLifecycle()) });
   for (let iteration = 1; iteration <= 10; iteration += 1) {
     await evaluate(`(() => {
@@ -219,7 +226,8 @@ if (mode === "lifecycle") {
       kickoff?.click();
       return Boolean(kickoff);
     })()`);
-    await sleep(650);
+    await sleep(1800);
+    await send("HeapProfiler.collectGarbage");
     lifecycleSamples.push({ iteration, ...(await readLifecycle()) });
   }
 }

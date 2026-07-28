@@ -20,9 +20,15 @@ import {
 } from "@/game/config/football-dimensions";
 import { GAMEPLAY_TUNING } from "@/game/config/gameplay-tuning";
 import {
+  createShirtNumberMesh,
+  disposeShirtNumberAtlas,
+} from "@/game/rendering/shirt-number-atlas";
+import {
+  distanceAfterAcceleration,
   movementProfileFor,
   PLAYER_COLLISION,
   PLAYER_MOVEMENT,
+  timeToMovementSpeed,
 } from "@/game/config/player-movement";
 import {
   createBallStateMachine,
@@ -146,6 +152,11 @@ type PlayerBody = {
   locomotionState: LocomotionState;
   locomotionBlend: number;
   animationSpeed: number;
+  diagnosticAcceleration: number;
+  diagnosticDistanceTotal: number;
+  diagnosticDistance5s: number;
+  diagnosticDistanceSamples: Array<{ time: number; distance: number }>;
+  diagnosticPreviousSpeed: number;
   kickTimer: number;
   actionCooldown: number;
   tackleTimer: number;
@@ -512,6 +523,8 @@ type MatchRuntime = {
   contextualSkillsTriggered: number;
   locomotionDebugElement: HTMLDivElement | null;
   locomotionAttachGeneration: number;
+  locomotionLoadStartedAt: number;
+  locomotionLoadCompletedMs: number;
   rosterSignature: string;
   tutorial: TutorialRuntime;
 };
@@ -560,8 +573,8 @@ const GOAL_FRONT_Z = FIELD_L / 2;
 const GOAL_SCORE_Z = GOAL_FRONT_Z + BALL_RADIUS;
 const GOAL_BACK_Z = GOAL_FRONT_Z + GOAL_DEPTH;
 const GOAL_SIDE_POST_INSET = 0.26;
-const BROADCAST_CAMERA_X = -FIELD_W / 2 - 28;
-const BROADCAST_CAMERA_Y = 38;
+const BROADCAST_CAMERA_X = -FIELD_W / 2 - 23;
+const BROADCAST_CAMERA_Y = 34;
 const BROADCAST_CAMERA_Z = 8;
 const BROADCAST_CAMERA_Z_OFFSET = 10;
 const BROADCAST_LOOK_AT_X = 0;
@@ -1179,8 +1192,6 @@ function noteP1Activity(active: MatchRuntime) {
 
 const sharedGeometryCache = new Map<string, THREE.BufferGeometry>();
 const sharedMaterialCache = new Map<string, THREE.Material>();
-const shirtNumberTextureCache = new Map<string, THREE.CanvasTexture>();
-const shirtNumberMaterialCache = new Map<string, THREE.MeshBasicMaterial>();
 let nextEngineId = 1;
 const runtimeLifecycleCounters = {
   engines: 0,
@@ -1225,47 +1236,9 @@ function sharedBasicMaterial(color: string) {
 }
 
 function shirtNumberPanel(team: TeamId, kitColor: string, number: number) {
-  const key = `${team}:${kitColor}:${number}`;
-  let texture = shirtNumberTextureCache.get(key);
-  let material = shirtNumberMaterialCache.get(key);
-  if (!texture || !material) {
-    const canvas = document.createElement("canvas");
-    canvas.width = 192;
-    canvas.height = 256;
-    const context = canvas.getContext("2d");
-    if (context) {
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.font = "900 184px Arial, sans-serif";
-      context.lineJoin = "round";
-      context.lineWidth = 18;
-      context.strokeStyle = "rgba(5,10,18,0.92)";
-      context.strokeText(String(number), canvas.width / 2, canvas.height / 2 + 5);
-      context.fillStyle = "#ffffff";
-      context.fillText(String(number), canvas.width / 2, canvas.height / 2 + 5);
-    }
-    texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.generateMipmaps = false;
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    material = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-    });
-    material.userData.shared = true;
-    shirtNumberTextureCache.set(key, texture);
-    shirtNumberMaterialCache.set(key, material);
-  }
-  const panel = new THREE.Mesh(
-    sharedGeometry("shirt-number-panel", () => new THREE.PlaneGeometry(0.62, 0.82)),
-    material,
-  );
+  void team;
+  void kitColor;
+  const panel = createShirtNumberMesh(number, 0.62, 0.82) ?? new THREE.Object3D();
   panel.name = "shirt-number";
   panel.renderOrder = 3;
   return panel;
@@ -1292,10 +1265,7 @@ function disposeSharedResources() {
   sharedGeometryCache.clear();
   sharedMaterialCache.forEach((material) => material.dispose());
   sharedMaterialCache.clear();
-  shirtNumberMaterialCache.forEach((material) => material.dispose());
-  shirtNumberMaterialCache.clear();
-  shirtNumberTextureCache.forEach((texture) => texture.dispose());
-  shirtNumberTextureCache.clear();
+  disposeShirtNumberAtlas();
 }
 
 function scheduleRuntimeTimeout(active: MatchRuntime, callback: () => void, delay: number) {
@@ -1355,8 +1325,20 @@ function clearRuntimeAudioSources(active: MatchRuntime) {
 
 function syncRuntimeDiagnostics(active: MatchRuntime) {
   let sceneNodeCount = 0;
-  active.scene.traverse(() => {
+  const uniqueGeometries = new Set<string>();
+  const uniqueMaterials = new Set<string>();
+  const uniqueTextures = new Set<string>();
+  active.scene.traverse((object) => {
     sceneNodeCount += 1;
+    if (!(object instanceof THREE.Mesh)) return;
+    if (object.geometry) uniqueGeometries.add(object.geometry.uuid);
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    materials.forEach((material) => {
+      uniqueMaterials.add(material.uuid);
+      Object.values(material).forEach((value) => {
+        if (value instanceof THREE.Texture) uniqueTextures.add(value.uuid);
+      });
+    });
   });
   active.scene.updateMatrixWorld(true);
   const floorLayerCounts = Object.fromEntries(FLOOR_LAYER_NAMES.map((name) => [name, 0])) as Record<string, number>;
@@ -1402,6 +1384,23 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
   canvas.dataset.pitchMeters = `${FIELD_L.toFixed(2)}x${FIELD_W.toFixed(2)}`;
   canvas.dataset.goalMeters = `${(GOAL_W / WORLD_UNITS_PER_METER).toFixed(2)}x${(GOAL_H / WORLD_UNITS_PER_METER).toFixed(2)}`;
   canvas.dataset.outfieldTopSpeedMps = PLAYER_MOVEMENT.controlled.sprint.toFixed(2);
+  canvas.dataset.outfieldBurstSpeedMps = PLAYER_MOVEMENT.controlled.burstSprint.toFixed(2);
+  canvas.dataset.dribbleSprintSpeedMps = (
+    PLAYER_MOVEMENT.controlled.sprint * PLAYER_MOVEMENT.controlled.dribbleSprintMultiplier
+  ).toFixed(2);
+  canvas.dataset.timeToRunSpeedSeconds = timeToMovementSpeed(
+    PLAYER_MOVEMENT.controlled.run,
+    PLAYER_MOVEMENT.controlled.acceleration,
+  ).toFixed(3);
+  canvas.dataset.timeToSprintSpeedSeconds = timeToMovementSpeed(
+    PLAYER_MOVEMENT.controlled.sprint,
+    PLAYER_MOVEMENT.controlled.acceleration,
+  ).toFixed(3);
+  canvas.dataset.theoreticalFiveSecondDistanceMeters = distanceAfterAcceleration(
+    5,
+    PLAYER_MOVEMENT.controlled.sprint,
+    PLAYER_MOVEMENT.controlled.acceleration,
+  ).toFixed(2);
   canvas.dataset.pitchHalfLength = HALF_PITCH_LENGTH.toFixed(2);
   canvas.dataset.pitchHalfWidth = HALF_PITCH_WIDTH.toFixed(2);
   canvas.dataset.licensedBallLoaded = String(Boolean(active.ball.userData.licensedBallLoaded));
@@ -1416,6 +1415,9 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
   canvas.dataset.fullscreenListenerCount = String(runtimeLifecycleCounters.fullscreenListeners);
   canvas.dataset.p1Autopilot = String(active.p1Autopilot);
   canvas.dataset.sceneNodes = String(sceneNodeCount);
+  canvas.dataset.sceneUniqueGeometries = String(uniqueGeometries.size);
+  canvas.dataset.sceneUniqueMaterials = String(uniqueMaterials.size);
+  canvas.dataset.sceneUniqueTextures = String(uniqueTextures.size);
   canvas.dataset.floorLayerCounts = JSON.stringify(floorLayerCounts);
   canvas.dataset.floorLayerDiagnostics = JSON.stringify(floorLayerDiagnostics);
   canvas.dataset.floorLayerMinimumSeparation = minimumFloorSeparation.toFixed(3);
@@ -1464,6 +1466,16 @@ function syncRuntimeDiagnostics(active: MatchRuntime) {
   canvas.dataset.attackingPossessionSeconds = active.attackingPossessionTimer.toFixed(2);
   canvas.dataset.aiDecisionCadence = "cached-70-510ms";
   canvas.dataset.mixerCount = String(active.players.filter((player) => player.locomotionController).length);
+  canvas.dataset.locomotionLoadMs = active.locomotionLoadCompletedMs.toFixed(1);
+  const diagnosticPlayer = active.players.find((player) => player.controlledBy === "p1") ?? null;
+  const locomotionSnapshot = diagnosticPlayer?.locomotionController?.getDebugSnapshot() ?? null;
+  canvas.dataset.controlledPlayerSpeedMps = diagnosticPlayer
+    ? Math.hypot(diagnosticPlayer.vel.x, diagnosticPlayer.vel.z).toFixed(3)
+    : "0.000";
+  canvas.dataset.controlledPlayerAccelerationMps2 = diagnosticPlayer?.diagnosticAcceleration.toFixed(3) ?? "0.000";
+  canvas.dataset.controlledPlayerDistance5sMeters = diagnosticPlayer?.diagnosticDistance5s.toFixed(3) ?? "0.000";
+  canvas.dataset.controlledAnimationPlaybackSpeed = locomotionSnapshot?.playbackSpeed.toFixed(3) ?? "0.000";
+  canvas.dataset.controlledLocomotionState = locomotionSnapshot?.state ?? "fallback";
   canvas.dataset.observerCount = "0";
   canvas.dataset.receptionLockPlayer = active.receptionLockPlayerId ?? "";
   canvas.dataset.receptionLockTimer = active.receptionLockTimer.toFixed(3);
@@ -3799,6 +3811,11 @@ function createPlayer(id: string, team: TeamId, role: PlayerRole, line: PlayerLi
     locomotionState: "idle",
     locomotionBlend: 0,
     animationSpeed: 0,
+    diagnosticAcceleration: 0,
+    diagnosticDistanceTotal: 0,
+    diagnosticDistance5s: 0,
+    diagnosticDistanceSamples: [],
+    diagnosticPreviousSpeed: 0,
     kickTimer: 0,
     actionCooldown: 0,
     tackleTimer: 0,
@@ -3933,6 +3950,7 @@ function currentRosterSignature() {
 
 async function attachAllPlayerLocomotion(active: MatchRuntime) {
   const generation = ++active.locomotionAttachGeneration;
+  active.locomotionLoadStartedAt = performance.now();
   const results = await Promise.allSettled(active.players.map(async (player, index) => {
     const controller = await FutbahlLocomotionController.create(
       player.mesh,
@@ -3969,6 +3987,8 @@ async function attachAllPlayerLocomotion(active: MatchRuntime) {
   });
   active.renderer.domElement.dataset.locomotionPlayerCount = String(attached);
   active.renderer.domElement.dataset.locomotionMissingClips = [...missing].join(",");
+  active.locomotionLoadCompletedMs = performance.now() - active.locomotionLoadStartedAt;
+  active.renderer.domElement.dataset.locomotionLoadMs = active.locomotionLoadCompletedMs.toFixed(1);
   delete active.renderer.domElement.dataset.locomotionLoadError;
   if (attached !== active.players.length) {
     active.renderer.domElement.dataset.locomotionLoadError = `${active.players.length - attached} player fallback(s) active`;
@@ -5330,6 +5350,8 @@ export function ArcadeSoccerGame() {
       contextualSkillsTriggered: 0,
       locomotionDebugElement,
       locomotionAttachGeneration: 0,
+      locomotionLoadStartedAt: performance.now(),
+      locomotionLoadCompletedMs: 0,
       rosterSignature: currentRosterSignature(),
       tutorial: {
         active: false,
@@ -8696,7 +8718,14 @@ function updateMatch(
       manualControlled,
       defensivePlanRole === "press" || defensivePlanRole === "cover",
     )];
-    const maxSpeed = (sprint ? movementProfile.sprint : movementProfile.run) * speedScale;
+    const carryingBall = active.ballOwnerId === player.id;
+    const shortBurst = sprint
+      && !carryingBall
+      && player.stamina > 0.72
+      && player.vel.length() > movementProfile.sprint * 0.82;
+    const openPlayTopSpeed = shortBurst ? movementProfile.burstSprint : movementProfile.sprint;
+    const possessionSpeedScale = carryingBall ? movementProfile.dribbleSprintMultiplier : 1;
+    const maxSpeed = (sprint ? openPlayTopSpeed : movementProfile.run) * speedScale * possessionSpeedScale;
     player.stamina = clamp(player.stamina + (sprint ? -0.42 : 0.24) * dt, 0, 1);
     player.kickTimer = Math.max(0, player.kickTimer - dt);
     player.actionCooldown = Math.max(0, player.actionCooldown - dt);
@@ -8759,6 +8788,29 @@ function updateMatch(
       clampPlayer(player);
     }
     const displacementSpeed = dt > 0 ? player.pos.distanceTo(positionBeforeMove) / dt : 0;
+    const horizontalSpeed = Math.hypot(player.vel.x, player.vel.z);
+    player.diagnosticAcceleration = dt > 0
+      ? (horizontalSpeed - player.diagnosticPreviousSpeed) / dt
+      : 0;
+    player.diagnosticPreviousSpeed = horizontalSpeed;
+    player.diagnosticDistanceTotal += player.pos.distanceTo(positionBeforeMove);
+    if (player.controlledBy === "p1") {
+      const diagnosticNow = performance.now() / 1000;
+      player.diagnosticDistanceSamples.push({
+        time: diagnosticNow,
+        distance: player.diagnosticDistanceTotal,
+      });
+      while (
+        player.diagnosticDistanceSamples.length > 2
+        && player.diagnosticDistanceSamples[1].time < diagnosticNow - 5
+      ) {
+        player.diagnosticDistanceSamples.shift();
+      }
+      const oldestSample = player.diagnosticDistanceSamples[0];
+      player.diagnosticDistance5s = oldestSample
+        ? player.diagnosticDistanceTotal - oldestSample.distance
+        : 0;
+    }
     const intentAnimationSpeed = hasMoveIntent
       ? Math.min(moveSpeed, forcedMoveActive ? (sprint ? 7.8 : 5.2) : 3.2)
       : 0;
@@ -12008,6 +12060,7 @@ function updateStuckState(player: PlayerBody, intent: THREE.Vector3, active: Mat
 
 const jointAnimationEuler = new THREE.Euler(0, 0, 0, "YXZ");
 const jointAnimationQuaternion = new THREE.Quaternion();
+const locomotionProjection = new THREE.Vector3();
 
 function setJointDelta(joint: THREE.Object3D | null, x = 0, y = 0, z = 0) {
   if (!joint) return;
@@ -12085,12 +12138,21 @@ function animatePlayer(player: PlayerBody, dt: number, camera?: THREE.Camera, ac
     const controlTargetDistance = active?.ballOwnerId === player.id
       ? active.ballPos.distanceTo(controlledBallPoint(player))
       : 0;
+    let visibleToCamera = true;
+    if (camera) {
+      locomotionProjection.copy(player.pos).setY(1.1).project(camera);
+      visibleToCamera = locomotionProjection.z >= -1
+        && locomotionProjection.z <= 1
+        && Math.abs(locomotionProjection.x) <= 1.16
+        && Math.abs(locomotionProjection.y) <= 1.2;
+    }
     player.locomotionController.update({
       velocity: player.vel,
       heading: player.heading,
       turnRate: player.turnRate,
       dt,
       distanceToCamera: camera ? player.pos.distanceTo(camera.position) : 0,
+      visibleToCamera,
       kickTimer: player.kickTimer,
       headerTimer: player.headerTimer,
       catchTimer: player.catchTimer,
@@ -12100,7 +12162,9 @@ function animatePlayer(player: PlayerBody, dt: number, camera?: THREE.Camera, ac
       celebrateTimer: player.celebrateTimer,
       playerIndex: active?.players.indexOf(player) ?? -1,
       possessionState: active?.ballOwnerId === player.id ? "owner" : active?.ballState ?? "unknown",
-      distanceToBall: active ? player.pos.distanceTo(active.ballPos.clone().setY(0)) : 0,
+      distanceToBall: active
+        ? Math.hypot(player.pos.x - active.ballPos.x, player.pos.z - active.ballPos.z)
+        : 0,
       controlTargetDistance,
     });
     return;
