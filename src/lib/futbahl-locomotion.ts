@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { createShirtNumberMesh } from "@/game/rendering/shirt-number-atlas";
 
 export type FutbahlLocomotionState =
   | "Idle"
@@ -145,9 +146,7 @@ const warned = new Set<string>();
 const bodyMaterialCache = new Map<string, THREE.Material>();
 const clothingMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
 const hairMaterialCache = new Map<string, THREE.Material | THREE.Material[]>();
-const numberGeometryCache = new Map<number, THREE.BufferGeometry>();
 const numberMaterialCache = new Map<string, THREE.MeshBasicMaterial>();
-let numberAtlas: THREE.CanvasTexture | null = null;
 let sharedAssetsPromise: Promise<SharedCharacterAssets> | null = null;
 
 const KIT_GEOMETRY = {
@@ -413,69 +412,9 @@ function addBoneSegment(
   attachRootSpaceObject(root, boneName, mesh);
 }
 
-function createNumberAtlas() {
-  if (numberAtlas) return numberAtlas;
-  const canvas = document.createElement("canvas");
-  canvas.width = 1024;
-  canvas.height = 1024;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = "#ffffff";
-  context.strokeStyle = "rgba(0,0,0,0.72)";
-  context.lineWidth = 12;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.font = "900 190px Arial, sans-serif";
-  for (let number = 1; number <= 11; number += 1) {
-    const column = (number - 1) % 4;
-    const row = Math.floor((number - 1) / 4);
-    const x = column * 256 + 128;
-    const y = row * 256 + 128;
-    context.strokeText(String(number), x, y);
-    context.fillText(String(number), x, y);
-  }
-  numberAtlas = new THREE.CanvasTexture(canvas);
-  numberAtlas.colorSpace = THREE.SRGBColorSpace;
-  numberAtlas.generateMipmaps = false;
-  numberAtlas.minFilter = THREE.LinearFilter;
-  numberAtlas.magFilter = THREE.LinearFilter;
-  return numberAtlas;
-}
-
-function numberGeometry(number: number) {
-  const normalized = ((number - 1) % 11) + 1;
-  const cached = numberGeometryCache.get(normalized);
-  if (cached) return cached;
-  const geometry = new THREE.PlaneGeometry(0.28, 0.36);
-  const column = (normalized - 1) % 4;
-  const row = Math.floor((normalized - 1) / 4);
-  const u0 = column / 4;
-  const u1 = (column + 1) / 4;
-  const v1 = 1 - row / 4;
-  const v0 = 1 - (row + 1) / 4;
-  geometry.setAttribute("uv", new THREE.Float32BufferAttribute([
-    u0, v1, u1, v1, u0, v0, u1, v0,
-  ], 2));
-  numberGeometryCache.set(normalized, geometry);
-  return geometry;
-}
-
 function addUniformBranding(root: THREE.Group, number: number, wordmark: THREE.Texture | null) {
-  const atlas = createNumberAtlas();
-  if (atlas) {
-    let numberMaterial = numberMaterialCache.get("white");
-    if (!numberMaterial) {
-      numberMaterial = new THREE.MeshBasicMaterial({
-        map: atlas,
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        toneMapped: false,
-      });
-      numberMaterialCache.set("white", numberMaterial);
-    }
-    const back = new THREE.Mesh(numberGeometry(number), numberMaterial);
+  const back = createShirtNumberMesh(number, 0.28, 0.36);
+  if (back) {
     back.name = "futbahl-shirt-number";
     back.position.set(0, 1.31, 0.154);
     attachRootSpaceObject(root, "spine_02", back);

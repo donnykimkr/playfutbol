@@ -12,6 +12,10 @@ import {
 } from "@/lib/futbahl-locomotion";
 import { attachLicensedBallVisual } from "@/lib/futbahl-ball-visual";
 import {
+  createShirtNumberMesh,
+  disposeShirtNumberAtlas,
+} from "@/game/rendering/shirt-number-atlas";
+import {
   BODY_PRESETS as ANONYMOUS_BODY_PRESETS,
   DEFAULT_OFFLINE_SETTINGS as ANONYMOUS_DEFAULT_SETTINGS,
   FORMATION_OPTIONS as ANONYMOUS_FORMATIONS,
@@ -1155,8 +1159,6 @@ function noteP1Activity(active: MatchRuntime) {
 
 const sharedGeometryCache = new Map<string, THREE.BufferGeometry>();
 const sharedMaterialCache = new Map<string, THREE.Material>();
-const shirtNumberTextureCache = new Map<string, THREE.CanvasTexture>();
-const shirtNumberMaterialCache = new Map<string, THREE.MeshBasicMaterial>();
 let nextEngineId = 1;
 const runtimeLifecycleCounters = {
   engines: 0,
@@ -1201,47 +1203,9 @@ function sharedBasicMaterial(color: string) {
 }
 
 function shirtNumberPanel(team: TeamId, kitColor: string, number: number) {
-  const key = `${team}:${kitColor}:${number}`;
-  let texture = shirtNumberTextureCache.get(key);
-  let material = shirtNumberMaterialCache.get(key);
-  if (!texture || !material) {
-    const canvas = document.createElement("canvas");
-    canvas.width = 192;
-    canvas.height = 256;
-    const context = canvas.getContext("2d");
-    if (context) {
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.font = "900 184px Arial, sans-serif";
-      context.lineJoin = "round";
-      context.lineWidth = 18;
-      context.strokeStyle = "rgba(5,10,18,0.92)";
-      context.strokeText(String(number), canvas.width / 2, canvas.height / 2 + 5);
-      context.fillStyle = "#ffffff";
-      context.fillText(String(number), canvas.width / 2, canvas.height / 2 + 5);
-    }
-    texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.generateMipmaps = false;
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    material = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-    });
-    material.userData.shared = true;
-    shirtNumberTextureCache.set(key, texture);
-    shirtNumberMaterialCache.set(key, material);
-  }
-  const panel = new THREE.Mesh(
-    sharedGeometry("shirt-number-panel", () => new THREE.PlaneGeometry(0.62, 0.82)),
-    material,
-  );
+  void team;
+  void kitColor;
+  const panel = createShirtNumberMesh(number, 0.62, 0.82) ?? new THREE.Object3D();
   panel.name = "shirt-number";
   panel.renderOrder = 3;
   return panel;
@@ -1268,10 +1232,7 @@ function disposeSharedResources() {
   sharedGeometryCache.clear();
   sharedMaterialCache.forEach((material) => material.dispose());
   sharedMaterialCache.clear();
-  shirtNumberMaterialCache.forEach((material) => material.dispose());
-  shirtNumberMaterialCache.clear();
-  shirtNumberTextureCache.forEach((texture) => texture.dispose());
-  shirtNumberTextureCache.clear();
+  disposeShirtNumberAtlas();
 }
 
 function scheduleRuntimeTimeout(active: MatchRuntime, callback: () => void, delay: number) {
