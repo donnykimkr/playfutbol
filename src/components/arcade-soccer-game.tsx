@@ -487,6 +487,7 @@ type MatchRuntime = {
   contextualSkillsTriggered: number;
   locomotionDebugElement: HTMLDivElement | null;
   locomotionAttachGeneration: number;
+  rosterSignature: string;
   tutorial: TutorialRuntime;
 };
 
@@ -3859,6 +3860,14 @@ function locomotionAppearance(player: PlayerBody, index: number): FutbahlPlayerA
   };
 }
 
+function currentRosterSignature() {
+  return JSON.stringify({
+    homeColor: activeOfflineSettings.homeColor,
+    userTeam: activeOfflineSettings.userTeam,
+    aiTeam: activeOfflineSettings.aiTeam,
+  });
+}
+
 async function attachAllPlayerLocomotion(active: MatchRuntime) {
   const generation = ++active.locomotionAttachGeneration;
   const results = await Promise.allSettled(active.players.map(async (player, index) => {
@@ -3913,6 +3922,7 @@ function replaceRuntimePlayers(active: MatchRuntime) {
   });
   active.players = formationPlayers(active.half);
   active.players.forEach((player) => active.scene.add(player.mesh));
+  active.rosterSignature = currentRosterSignature();
   void attachAllPlayerLocomotion(active);
 }
 
@@ -4685,9 +4695,11 @@ export function ArcadeSoccerGame() {
     active.fullTimeHandled = false;
     active.matchUpdatesThisFrame = 0;
     active.renderer.info.reset();
-      // Rebuild the roster from the saved team setups so formation changes made
-      // between matches replace the previous match's slot layout.
-      replaceRuntimePlayers(active);
+      // Keep settled character graphs across ordinary restarts. Rebuild only
+      // when a saved team setting changes the roster's visual or slot layout.
+      if (active.rosterSignature !== currentRosterSignature()) {
+        replaceRuntimePlayers(active);
+      }
       setFormationHomes(active.players, 1);
     keysRef.current.clear();
     scoreUiRef.current = { home: 0, away: 0 };
@@ -5252,6 +5264,7 @@ export function ArcadeSoccerGame() {
       contextualSkillsTriggered: 0,
       locomotionDebugElement,
       locomotionAttachGeneration: 0,
+      rosterSignature: currentRosterSignature(),
       tutorial: {
         active: false,
         lessonIndex: 0,
