@@ -16861,7 +16861,7 @@ function manualChargedShotPlan(player: PlayerBody, active: MatchRuntime, charge:
   const aimedAtGoal = aim.dot(goalDir) > 0.08;
   const finesseRequested = Boolean(keys?.has("KeyZ"));
   const wideFinish = Math.abs(player.pos.x) > GOAL_W * 0.58;
-  const style: KickStyle = finesseRequested || wideFinish || normalized >= 0.42 ? "finesse" : "shot";
+  const style: KickStyle = finesseRequested || wideFinish && goalDistance < 30 ? "finesse" : "shot";
   const targetDistance = clamp(20 + normalized * 68, 24, 88);
   const target = player.pos.clone().add(aim.clone().multiplyScalar(targetDistance)).setY(BALL_RADIUS);
   return { aim, aimedAtGoal, goalDistance, style, target };
@@ -18127,7 +18127,11 @@ function assistedManualShotPhysics(
   const launchDirection = launchTarget.sub(active.ballPos).setY(0).normalize();
   const desiredGoalHeight = style === "driven"
     ? 0.58
-    : clamp(0.72 + normalizedCharge * 1.32, 0.72, 2.18);
+    : style === "finesse"
+      ? clamp(0.68 + normalizedCharge * 0.76, 0.68, 1.44)
+      : distance < 19
+        ? clamp(0.62 + normalizedCharge * 0.82, 0.62, 1.44)
+        : clamp(0.76 + normalizedCharge * 1.18, 0.76, 1.94);
   const lift = clamp(
     (desiredGoalHeight - active.ballPos.y + 0.5 * BALL_GRAVITY * travelTime * travelTime) / travelTime,
     style === "driven" ? 0.42 : 2.4,
