@@ -11818,7 +11818,11 @@ function handleGoalkeeperActions(active: MatchRuntime) {
         keeper.vel.x += clamp(lateralGap * (sideBall ? 0.13 : 0.15), -0.34, 0.34);
         keeper.vel.z += clamp((stepZ - keeper.pos.z) * 0.09, -0.22, 0.22);
         capKeeperMotion(keeper);
-        const canDive = Math.abs(lateralGap) < 4.2 && Math.abs(active.ballPos.z - ownZ) < 16.8 && shotSpeed > 8.4;
+        const canDive = pathTime > 0.04
+          && pathTime < 0.68
+          && Math.abs(lateralGap) < 4.2
+          && Math.abs(active.ballPos.z - ownZ) < 16.8
+          && shotSpeed > 8.4;
         const wellPositioned = Math.abs(lateralGap) < 2.08 && Math.abs(active.ballPos.z - ownZ) < 14.8;
         if (canDive && keeper.diveTimer <= 0.05) {
           keeper.diveSide = saveSide;
@@ -11827,11 +11831,18 @@ function handleGoalkeeperActions(active: MatchRuntime) {
           keeper.vel.x += keeper.diveSide * clamp(Math.abs(lateralGap) * 0.075, 0.08, 0.24);
           capKeeperMotion(keeper);
         }
-        const handReach = keeperHandPoint(keeper).setY(clamp(active.ballPos.y, 1.48, 2.54));
-        const handContact = mayUseHands && active.ballPos.distanceTo(handReach) < (active.ballPos.y > 1.45 ? 2.25 : 1.7);
-        const bodyContact = keeper.pos.distanceTo(flatBall) < 2.08 && active.ballPos.y < 2.42;
-        const divingContact = keeper.diveTimer > 0 && Math.abs(active.ballPos.x - keeper.pos.x) < 2.08 && Math.abs(active.ballPos.z - keeper.pos.z) < 1.62 && active.ballPos.y < 3.04;
+        const visibleContact = keeperVisibleSaveContact(keeper, active.ballPos);
+        const handContact = mayUseHands && visibleContact.hand;
+        const bodyContact = visibleContact.body;
+        const divingContact = keeper.diveTimer > 0 && visibleContact.dive;
         if (!handContact && !bodyContact && !divingContact) return;
+        active.renderer.domElement.dataset.lastKeeperSaveContact = handContact
+          ? "visible-hand"
+          : divingContact
+            ? "visible-dive"
+            : "visible-body";
+        active.renderer.domElement.dataset.lastKeeperHandDistance = visibleContact.handDistance.toFixed(3);
+        active.renderer.domElement.dataset.lastKeeperBodyDistance = visibleContact.bodyDistance.toFixed(3);
         keeper.diveSide = saveSide;
         keeper.catchTimer = mayUseHands ? 0.46 : 0;
         keeper.recoveryTimer = Math.max(keeper.recoveryTimer, 0.36);
@@ -11905,6 +11916,28 @@ function keeperHandPoint(keeper: PlayerBody) {
   return keeper.pos.clone()
     .add(facingDirection(keeper).multiplyScalar(0.44))
     .setY(1.62);
+}
+
+function keeperVisibleSaveContact(keeper: PlayerBody, ballPosition: THREE.Vector3) {
+  keeper.mesh.updateWorldMatrix(true, true);
+  const handPositions = [keeper.parts.leftHand, keeper.parts.rightHand]
+    .filter((hand): hand is THREE.Object3D => Boolean(hand))
+    .map((hand) => hand.getWorldPosition(new THREE.Vector3()));
+  const handDistance = handPositions.length > 0
+    ? Math.min(...handPositions.map((hand) => hand.distanceTo(ballPosition)))
+    : keeperHandPoint(keeper).distanceTo(ballPosition);
+  const chestPosition = keeper.parts.chest?.getWorldPosition(new THREE.Vector3())
+    ?? keeper.pos.clone().setY(1.42);
+  const bodyDistance = chestPosition.distanceTo(ballPosition);
+  const handRadius = keeper.diveTimer > 0 ? 0.86 : keeper.catchTimer > 0 ? 0.74 : 0.66;
+  const bodyRadius = keeper.diveTimer > 0 ? 0.94 : 0.72;
+  return {
+    hand: handDistance <= handRadius,
+    body: bodyDistance <= bodyRadius,
+    dive: handDistance <= 0.92 || bodyDistance <= 0.98,
+    handDistance,
+    bodyDistance,
+  };
 }
 
 function keeperSquareHeading(keeper: PlayerBody, active: MatchRuntime) {
