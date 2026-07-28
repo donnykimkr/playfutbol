@@ -692,10 +692,10 @@ const TUTORIAL_LESSONS: TutorialLessonDefinition[] = [
   { title: "Receive", instruction: "Move toward the incoming pass and bring it under control.", key: "Arrow Keys" },
   { title: "Shoot", instruction: "Aim with the arrows, hold D for power, then score.", key: "Hold D" },
   { title: "Lofted Pass", instruction: "Face a teammate, hold A, and release to lift the ball over a blocked lane.", key: "Hold A" },
-  { title: "Player Switch", instruction: "Press W to switch to the best same-team defender or receiver.", key: "W" },
+  { title: "Player Switch", instruction: "Press E to switch to the best same-team defender or receiver.", key: "E" },
   { title: "Defend", instruction: "Stay between the attacker and your goal for two seconds.", key: "Arrow Keys" },
-  { title: "Tackle & Intercept", instruction: "Approach from the front or side and make clean contact with the ball.", key: "Arrow Keys" },
-  { title: "Through Pass", instruction: "Aim ahead of the runner and release S into the highlighted space.", key: "S + Arrow" },
+  { title: "Tackle & Intercept", instruction: "Approach from the front or side and press Space to challenge for the ball.", key: "Space" },
+  { title: "Through Pass", instruction: "Aim ahead of the runner and press W into the highlighted space.", key: "W" },
 ];
 let activeOfflineSettings: OfflineSettings = normalizeAnonymousSettings(ANONYMOUS_DEFAULT_SETTINGS);
 
@@ -1210,6 +1210,8 @@ const P1_ACTIVITY_KEYS = new Set([
   "KeyA",
   "KeyS",
   "KeyW",
+  "KeyE",
+  "Space",
   "KeyZ",
   "KeyU",
 ]);
@@ -7886,13 +7888,29 @@ export function ArcadeSoccerGame() {
           event.preventDefault();
           return;
         }
-        if (event.code === "KeyW") {
+        if (event.code === "KeyE") {
           switchToBestManualPlayer(active, "p1");
-          active.renderer.domElement.dataset.lastManualSwitchKey = "KeyW";
+          active.renderer.domElement.dataset.lastManualSwitchKey = "KeyE";
           event.preventDefault();
           return;
         }
         const p1 = active.players.find((player) => player.controlledBy === "p1");
+        if (event.code === "KeyW" && p1) {
+          const executed = active.ballOwnerId === p1.id
+            && active.possession === "home"
+            && performPass(p1, active, "through");
+          active.renderer.domElement.dataset.lastThroughPassKey = "KeyW";
+          active.renderer.domElement.dataset.lastThroughPassStatus = executed ? "executed" : "rejected";
+          event.preventDefault();
+          return;
+        }
+        if (event.code === "Space" && p1) {
+          const executed = attemptTackle(p1, active);
+          active.renderer.domElement.dataset.lastTackleKey = "Space";
+          active.renderer.domElement.dataset.lastTackleStatus = executed ? "executed" : "attempted";
+          event.preventDefault();
+          return;
+        }
         if (event.code === "KeyS") {
           active.passInputAttempts += 1;
           active.passInputDownAt = performance.now();
@@ -7919,7 +7937,7 @@ export function ArcadeSoccerGame() {
           return;
         }
       }
-      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyA", "KeyD", "KeyF", "KeyS", "KeyU", "KeyW", "KeyZ"].includes(event.code)) event.preventDefault();
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyA", "KeyD", "KeyE", "KeyF", "KeyS", "KeyU", "KeyW", "KeyZ", "Space"].includes(event.code)) event.preventDefault();
     };
     const up = (event: KeyboardEvent) => {
       if (settingsOpenRef.current) {
@@ -8048,11 +8066,14 @@ export function ArcadeSoccerGame() {
             >
               {[
                 ["Arrow Keys", "Move"],
+                ["Shift", "Sprint"],
                 ["S", "Pass"],
+                ["W", "Through Pass"],
                 ["A", "Loft / Cross"],
-                ["W", "Switch"],
                 ["D", "Shoot / Kick"],
                 ["Z + D", "Finesse"],
+                ["Space", "Tackle"],
+                ["E", "Switch"],
                 ["U", "AI Mode"],
                 ...(isAppleMobile ? [] : [["F", "Fullscreen"]]),
               ].map(([key, label]) => (
