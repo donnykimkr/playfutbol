@@ -2676,6 +2676,24 @@ function stadiumRingGeometry(
   return geometry;
 }
 
+function stadiumApronGeometry(
+  innerWidth: number,
+  innerLength: number,
+  outerWidth: number,
+  outerLength: number,
+  innerRadius: number,
+  outerRadius: number,
+) {
+  const shape = new THREE.Shape();
+  addRoundedRectContour(shape, outerWidth, outerLength, outerRadius);
+  const hole = new THREE.Path();
+  addRoundedRectContour(hole, innerWidth, innerLength, innerRadius);
+  shape.holes.push(hole);
+  const geometry = new THREE.ShapeGeometry(shape, 12);
+  geometry.rotateX(-Math.PI / 2);
+  return geometry;
+}
+
 function advertisingBrandFontSize(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement, brandName: string) {
   const horizontalPadding = canvas.width * 0.04;
   const maximumTextWidth = canvas.width - horizontalPadding * 2;
@@ -3069,6 +3087,33 @@ function addLightweightStadium(scene: THREE.Scene) {
   adTexture.userData.perimeterLength = innerRibbonGeometry.userData.perimeterLength;
   adTexture.userData.perimeterSampleCount = innerRibbonGeometry.userData.sampleCount;
   stadium.add(innerRibbon, outerRibbon);
+
+  const apronInnerWidth = runoffWidth + AD_BOARD_THICKNESS * 2 + 0.04;
+  const apronInnerLength = runoffLength + AD_BOARD_THICKNESS * 2 + 0.04;
+  const apronOuterWidth = runoffWidth + 3.72;
+  const apronOuterLength = runoffLength + 3.72;
+  const pitchSideApron = new THREE.Mesh(
+    stadiumApronGeometry(
+      apronInnerWidth,
+      apronInnerLength,
+      apronOuterWidth,
+      apronOuterLength,
+      AD_BOARD_CORNER_RADIUS + AD_BOARD_THICKNESS + 0.04,
+      7.24,
+    ),
+    new THREE.MeshLambertMaterial({
+      color: "#0d3f29",
+      side: THREE.FrontSide,
+    }),
+  );
+  pitchSideApron.name = "continuous-pitch-side-apron";
+  pitchSideApron.position.y = STADIUM_BASE_TOP_Y + 0.008;
+  pitchSideApron.receiveShadow = true;
+  pitchSideApron.userData.innerWidth = apronInnerWidth;
+  pitchSideApron.userData.innerLength = apronInnerLength;
+  pitchSideApron.userData.outerWidth = apronOuterWidth;
+  pitchSideApron.userData.outerLength = apronOuterLength;
+  stadium.add(pitchSideApron);
 
   const concrete = new THREE.MeshLambertMaterial({ color: "#344553" });
   const upperConcrete = new THREE.MeshLambertMaterial({ color: "#263641" });
