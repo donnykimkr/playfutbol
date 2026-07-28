@@ -9832,15 +9832,17 @@ function arrangeSetPieceShape(active: MatchRuntime, phase: PlayPhase, team: Team
   const dangerousRestart = phase === "corner" || (phase === "throw-in" && setPieceNearBox);
   const deliverySide = Math.sign(spot.x || 1);
   const attackingSlots = [
-    new THREE.Vector3(deliverySide * (GOAL_W / 2 - 2.1), 0, attackingGoal - goalSide * 6.6),
-    new THREE.Vector3(0, 0, attackingGoal - goalSide * 9.8),
-    new THREE.Vector3(-deliverySide * (GOAL_W / 2 - 1.9), 0, attackingGoal - goalSide * 7.8),
-    new THREE.Vector3(deliverySide * 2.8, 0, attackingGoal - goalSide * 13.2),
-    new THREE.Vector3(-deliverySide * 7.8, 0, attackingGoal - goalSide * 15.8),
-    new THREE.Vector3(0, 0, attackingGoal - goalSide * 21.5),
-    new THREE.Vector3(deliverySide * 13.2, 0, attackingGoal - goalSide * 22.5),
-    new THREE.Vector3(-14, 0, attackingGoal - goalSide * 34),
-    new THREE.Vector3(14, 0, attackingGoal - goalSide * 34),
+    // Near, central, and far-post runners occupy distinct lanes rather than one goalmouth pile.
+    new THREE.Vector3(deliverySide * (GOAL_W / 2 - 1.15), 0, attackingGoal - goalSide * 7.2),
+    new THREE.Vector3(0, 0, attackingGoal - goalSide * 11.6),
+    new THREE.Vector3(-deliverySide * (GOAL_W / 2 + 1.4), 0, attackingGoal - goalSide * 8.8),
+    new THREE.Vector3(deliverySide * 4.8, 0, attackingGoal - goalSide * 15.4),
+    new THREE.Vector3(-deliverySide * 8.8, 0, attackingGoal - goalSide * 17.8),
+    // Edge and safety players remain outside the crowded six-yard area.
+    new THREE.Vector3(0, 0, attackingGoal - goalSide * 23.8),
+    new THREE.Vector3(deliverySide * 14.8, 0, attackingGoal - goalSide * 26.4),
+    new THREE.Vector3(-14.5, 0, attackingGoal - goalSide * 35.5),
+    new THREE.Vector3(14.5, 0, attackingGoal - goalSide * 35.5),
   ];
   const supportSlots = [
     new THREE.Vector3(spot.x + Math.sign(-spot.x || 1) * 7, 0, spot.z - attackSign * 6),
@@ -9869,21 +9871,22 @@ function arrangeSetPieceShape(active: MatchRuntime, phase: PlayPhase, team: Team
     attackingOutfield.forEach((player, index) => {
       attackingAssignments.set(player.id, attackingSlots[Math.min(index, attackingSlots.length - 1)].clone());
     });
-    const markedAttackers = attackingOutfield.slice(0, Math.min(6, attackingOutfield.length));
+    const markedAttackers = attackingOutfield.slice(0, Math.min(5, attackingOutfield.length));
     const zonalCover = [
-      new THREE.Vector3(deliverySide * 2.2, 0, attackingGoal - goalSide * 4.7),
-      new THREE.Vector3(-deliverySide * 4.8, 0, attackingGoal - goalSide * 7.2),
-      new THREE.Vector3(0, 0, attackingGoal - goalSide * 16.8),
-      new THREE.Vector3(-deliverySide * 10.5, 0, attackingGoal - goalSide * 20.5),
+      new THREE.Vector3(deliverySide * 7.4, 0, attackingGoal - goalSide * 11.2),
+      new THREE.Vector3(-deliverySide * 8.2, 0, attackingGoal - goalSide * 13.8),
+      new THREE.Vector3(0, 0, attackingGoal - goalSide * 19.4),
+      new THREE.Vector3(-deliverySide * 12.5, 0, attackingGoal - goalSide * 23.2),
+      new THREE.Vector3(deliverySide * 15.5, 0, attackingGoal - goalSide * 29.5),
     ];
     defendingOutfield.forEach((player, index) => {
       const markedPlayer = markedAttackers[index] ?? null;
       const markedSlot = markedPlayer ? attackingAssignments.get(markedPlayer.id) ?? null : null;
       if (markedSlot) {
-        const lateralSeparation = Math.sign(markedSlot.x || (index % 2 === 0 ? 1 : -1)) * 0.62;
+        const lateralSeparation = Math.sign(markedSlot.x || (index % 2 === 0 ? 1 : -1)) * 1.15;
         defendingAssignments.set(
           player.id,
-          markedSlot.clone().add(new THREE.Vector3(lateralSeparation, 0, goalSide * 1.35)),
+          markedSlot.clone().add(new THREE.Vector3(lateralSeparation, 0, goalSide * 1.75)),
         );
       } else {
         defendingAssignments.set(player.id, zonalCover[(index - markedAttackers.length) % zonalCover.length].clone());
@@ -9928,6 +9931,36 @@ function arrangeSetPieceShape(active: MatchRuntime, phase: PlayPhase, team: Team
     player.mesh.position.copy(player.pos);
     player.lastPos.copy(player.pos);
   });
+
+  if (phase === "corner") {
+    const attackers = active.players.filter((player) => (
+      player.team === team && player.role !== "keeper" && player.id !== active.restartActorId && !player.sentOff
+    ));
+    const defenders = active.players.filter((player) => (
+      player.team !== team && player.role !== "keeper" && !player.sentOff
+    ));
+    const defendingKeeper = active.players.find((player) => player.team !== team && player.role === "keeper") ?? null;
+    const minimumPairGap = (players: PlayerBody[]) => {
+      let minimum = Number.POSITIVE_INFINITY;
+      for (let first = 0; first < players.length; first += 1) {
+        for (let second = first + 1; second < players.length; second += 1) {
+          minimum = Math.min(minimum, players[first].pos.distanceTo(players[second].pos));
+        }
+      }
+      return Number.isFinite(minimum) ? minimum : 0;
+    };
+    const outsideBoxDepth = 20.15;
+    const outsideBoxCount = attackers.filter((player) => (
+      Math.abs(attackingGoal - player.pos.z) >= outsideBoxDepth
+    )).length;
+    const keeperClearance = defendingKeeper
+      ? Math.min(...attackers.map((player) => player.pos.distanceTo(defendingKeeper.pos)))
+      : 0;
+    active.renderer.domElement.dataset.cornerAttackerMinimumGap = minimumPairGap(attackers).toFixed(2);
+    active.renderer.domElement.dataset.cornerDefenderMinimumGap = minimumPairGap(defenders).toFixed(2);
+    active.renderer.domElement.dataset.cornerAttackersOutsideBox = String(outsideBoxCount);
+    active.renderer.domElement.dataset.cornerKeeperClearance = keeperClearance.toFixed(2);
+  }
 }
 
 function chooseGoalKickPlan(active: MatchRuntime, keeper: PlayerBody | null, direction: THREE.Vector3) {
