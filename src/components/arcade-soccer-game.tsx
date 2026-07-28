@@ -9215,7 +9215,7 @@ function updateMatch(
 }
 
 function clearStaleBoundaryLocks(active: MatchRuntime) {
-  clearPassIntent(active, "abandoned");
+  clearPassIntent(active, "abandoned", "ball-went-out");
   active.manualPassReceiverId = null;
   active.receptionLockPlayerId = null;
   active.receptionLockTimer = 0;
@@ -10777,11 +10777,36 @@ function hidePassIntentVisuals(active: MatchRuntime) {
   active.passTargetMarker.visible = false;
 }
 
-function clearPassIntent(active: MatchRuntime, result: "resolved" | "abandoned" | "reset" = "abandoned") {
+type PassAbandonReason =
+  | "lane-blocked-before-release"
+  | "unsafe-arrival"
+  | "no-valid-alternative"
+  | "kick-action-failed"
+  | "intercepted"
+  | "unintended-teammate-received"
+  | "receiver-missed-control"
+  | "possession-changed-before-release"
+  | "ball-went-out"
+  | "restart-interrupted";
+
+function clearPassIntent(
+  active: MatchRuntime,
+  result: "resolved" | "abandoned" | "reset" = "abandoned",
+  reason?: PassAbandonReason,
+) {
   const clearedReceiverId = active.passIntent?.receiverId ?? null;
   if (active.passIntent) {
     if (result === "resolved") active.passIntentsResolved += 1;
-    if (result === "abandoned") active.passIntentsAbandoned += 1;
+    if (result === "abandoned") {
+      active.passIntentsAbandoned += 1;
+      const resolvedReason = reason ?? "possession-changed-before-release";
+      active.renderer.domElement.dataset.lastPassAbandonReason = resolvedReason;
+      const counts = active.renderer.domElement.dataset.passAbandonReasons
+        ? JSON.parse(active.renderer.domElement.dataset.passAbandonReasons) as Record<string, number>
+        : {};
+      counts[resolvedReason] = (counts[resolvedReason] ?? 0) + 1;
+      active.renderer.domElement.dataset.passAbandonReasons = JSON.stringify(counts);
+    }
   }
   if (
     result !== "resolved"
@@ -11014,17 +11039,26 @@ function updatePassIntent(active: MatchRuntime, dt: number) {
     return;
   }
   if (active.phase !== "open" || active.ballState !== "kicked" || active.ballOwnerId) {
-    clearPassIntent(active, active.ballOwnerId === intent.receiverId ? "resolved" : "abandoned");
+    clearPassIntent(
+      active,
+      active.ballOwnerId === intent.receiverId ? "resolved" : "abandoned",
+      active.phase !== "open" ? "restart-interrupted" : "possession-changed-before-release",
+    );
     return;
   }
   const passer = active.players.find((player) => player.id === intent.passerId) ?? null;
   const receiver = active.players.find((player) => player.id === intent.receiverId) ?? null;
   if (!passer || !receiver || receiver.sentOff || receiver.team !== intent.receiverTeamId) {
-    clearPassIntent(active, "abandoned");
+    clearPassIntent(active, "abandoned", "no-valid-alternative");
     return;
   }
   if (active.lastTouchPlayerId && active.lastTouchPlayerId !== intent.passerId && intent.elapsed > 0.06) {
-    clearPassIntent(active, "abandoned");
+    const touchingPlayer = active.players.find((player) => player.id === active.lastTouchPlayerId) ?? null;
+    clearPassIntent(
+      active,
+      "abandoned",
+      touchingPlayer?.team === intent.receiverTeamId ? "unintended-teammate-received" : "intercepted",
+    );
     return;
   }
 
@@ -11038,7 +11072,7 @@ function updatePassIntent(active: MatchRuntime, dt: number) {
     && currentGroundVelocity.length() < Math.max(5.8, intent.initialPower * 0.26);
   if (deflected || underhit) {
     active.renderer.domElement.dataset.lastPassIntentRelease = deflected ? "deflected" : "underhit";
-    clearPassIntent(active, "abandoned");
+    clearPassIntent(active, "abandoned", deflected ? "intercepted" : "receiver-missed-control");
     return;
   }
   if (receiver) {
@@ -15720,7 +15754,7 @@ function releasePossession(active: MatchRuntime, ballState: BallState) {
   active.receptionLockPlayerId = null;
   active.receptionLockTimer = 0;
   if (ballState !== "kicked") {
-    clearPassIntent(active, "abandoned");
+    clearPassIntent(active, "abandoned", "possession-changed-before-release");
     active.manualPassReceiverId = null;
   }
   if (active.p1Autopilot && ballState === "loose" && previousOwner?.team === "home") {
@@ -16933,7 +16967,15 @@ function takePossession(player: PlayerBody, active: MatchRuntime, verifiedFirstT
     Number(active.renderer.domElement.dataset.maxControlDistance ?? "0"),
     contactDistance,
   ).toFixed(4);
-  clearPassIntent(active, completedPassIntent ? "resolved" : "abandoned");
+  const interruptedIntent = active.passIntent;
+  const abandonReason: PassAbandonReason | undefined = completedPassIntent
+    ? undefined
+    : interruptedIntent
+      ? player.team === interruptedIntent.receiverTeamId
+        ? "unintended-teammate-received"
+        : "intercepted"
+      : undefined;
+  clearPassIntent(active, completedPassIntent ? "resolved" : "abandoned", abandonReason);
   active.possession = player.team;
   const controlBodyPart: BallTouchBodyPart = verifiedFirstTouch?.type === "thigh"
     ? "knee"
@@ -17084,6 +17126,13 @@ function kickTowardPoint(
 ) {
   const rejectKick = (reason: string) => {
     active.renderer.domElement.dataset.lastKickRejected = reason;
+    if (isPassKickStyle(style)) {
+      active.renderer.domElement.dataset.lastPassAttemptFailure = reason === "final-pass-lane-blocked"
+        ? "lane-blocked-before-release"
+        : reason === "invalid-pass-receiver" || reason === "direct-pass-missing-receiver"
+          ? "no-valid-alternative"
+          : "kick-action-failed";
+    }
     return false;
   };
   if (active.cooldown > 0.05) return rejectKick(`global-cooldown:${active.cooldown.toFixed(3)}`);
@@ -17575,7 +17624,11 @@ function performLoftedPassTo(player: PlayerBody, active: MatchRuntime, teammate:
 
 function performPass(player: PlayerBody, active: MatchRuntime, style: "short" | "long" | "through" | "low-through", oneTwo = false) {
   const teammate = choosePassTarget(player, active, style);
-  return teammate ? performPassTo(player, active, teammate, style, oneTwo) : false;
+  if (!teammate) {
+    active.renderer.domElement.dataset.lastPassAttemptFailure = "no-valid-alternative";
+    return false;
+  }
+  return performPassTo(player, active, teammate, style, oneTwo);
 }
 
 function chooseDefensiveBuildupTarget(player: PlayerBody, active: MatchRuntime) {
