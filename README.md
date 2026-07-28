@@ -103,6 +103,12 @@ The single-player skeletal locomotion prototype uses the Quaternius Universal An
 
 No proprietary EA FC, FIFA, eFootball, or other commercial-game character assets are included. The remaining low-poly footballers and their hairstyles are original project geometry.
 
+Football-specific motion files are deliberately not bundled. The selected clip contract lives in
+`src/game/animation/football-animation-manifest.ts`; the corresponding private FBX manifest and
+Blender conversion workflow are documented in `tools/football-animation/README.md`. When no
+approved animation-only GLB URL is configured, the Quaternius CC0 locomotion remains the runtime
+fallback.
+
 ## Connect Supabase To Vercel
 
 1. Create or open a Supabase project.

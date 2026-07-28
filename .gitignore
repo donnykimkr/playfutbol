@@ -5,3 +5,6 @@ dist
 .env.local
 .DS_Store
 .vercel
+tools/football-animation/incoming/
+tools/football-animation/build/
+public/models/football/football-actions.glb
