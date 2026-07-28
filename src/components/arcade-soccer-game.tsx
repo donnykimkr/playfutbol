@@ -3858,7 +3858,7 @@ async function attachAllPlayerLocomotion(active: MatchRuntime) {
     results.forEach((result) => {
       if (result.status === "fulfilled") result.value.controller.dispose();
     });
-    return;
+    return 0;
   }
   let attached = 0;
   const missing = new Set<string>();
@@ -3886,6 +3886,7 @@ async function attachAllPlayerLocomotion(active: MatchRuntime) {
   if (attached !== active.players.length) {
     active.renderer.domElement.dataset.locomotionLoadError = `${active.players.length - attached} player fallback(s) active`;
   }
+  return attached;
 }
 
 function replaceRuntimePlayers(active: MatchRuntime) {
@@ -4170,12 +4171,14 @@ export function ArcadeSoccerGame() {
   const pendingLaunchRef = useRef<"match" | "tutorial" | null>(null);
   const startMatchRef = useRef<(() => void) | null>(null);
   const startTutorialRef = useRef<(() => void) | null>(null);
+  const playerVisualsReadyRef = useRef(false);
 
   const [offlineSettings, setOfflineSettings] = useState<OfflineSettings>(() => normalizeAnonymousSettings(ANONYMOUS_DEFAULT_SETTINGS));
   const [draftSettings, setDraftSettings] = useState<OfflineSettings>(() => normalizeAnonymousSettings(ANONYMOUS_DEFAULT_SETTINGS));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [matchState, setMatchState] = useState<MatchState>("menu");
-  const [engineRequested, setEngineRequested] = useState(false);
+  const [engineRequested, setEngineRequested] = useState(true);
+  const [matchPreparing, setMatchPreparing] = useState(true);
   const [score, setScore] = useState({ home: 0, away: 0 });
   const [gameClock, setGameClock] = useState(0);
   const [, setPossessionPercent] = useState({ home: 50, away: 50 });
@@ -4621,8 +4624,9 @@ export function ArcadeSoccerGame() {
 
   const startMatch = useCallback(() => {
     const active = sceneRef.current;
-    if (!active) {
+    if (!active || !playerVisualsReadyRef.current) {
       pendingLaunchRef.current = "match";
+      setMatchPreparing(true);
       setEngineRequested(true);
       return;
     }
@@ -4719,8 +4723,9 @@ export function ArcadeSoccerGame() {
       return;
     }
     const active = sceneRef.current;
-    if (!active) {
+    if (!active || !playerVisualsReadyRef.current) {
       pendingLaunchRef.current = "tutorial";
+      setMatchPreparing(true);
       setEngineRequested(true);
       return;
     }
@@ -5272,15 +5277,44 @@ export function ArcadeSoccerGame() {
     }
     nextEngineId += 1;
     sceneRef.current = runtime;
-    void attachAllPlayerLocomotion(runtime);
-    const pendingLaunch = pendingLaunchRef.current;
-    if (pendingLaunch) {
-      pendingLaunchRef.current = null;
-      window.queueMicrotask(() => {
-        if (pendingLaunch === "tutorial") startTutorialRef.current?.();
-        else startMatchRef.current?.();
-      });
-    }
+    playerVisualsReadyRef.current = false;
+    const visualPreparationStartedAt = performance.now();
+    const initialPlayerRootScales = runtime.players.map((player) => player.mesh.scale.toArray());
+    void attachAllPlayerLocomotion(runtime).then(async (attached) => {
+      if (sceneRef.current !== runtime || runtimeVersionRef.current !== runtimeVersion) return;
+      if (attached !== runtime.players.length) {
+        runtime.renderer.domElement.dataset.playerVisualsReady = "false";
+        setMatchPreparing(false);
+        return;
+      }
+      await runtime.renderer.compileAsync(runtime.scene, runtime.camera);
+      if (sceneRef.current !== runtime || runtimeVersionRef.current !== runtimeVersion) return;
+      runtime.renderer.render(runtime.scene, runtime.camera);
+      runtime.renderer.domElement.dataset.playerVisualsReady = "true";
+      runtime.renderer.domElement.dataset.playerVisualPreparationMs = (
+        performance.now() - visualPreparationStartedAt
+      ).toFixed(1);
+      runtime.renderer.domElement.dataset.playerRootScalesBefore = JSON.stringify(initialPlayerRootScales);
+      runtime.renderer.domElement.dataset.playerRootScalesAfter = JSON.stringify(
+        runtime.players.map((player) => player.mesh.scale.toArray()),
+      );
+      runtime.renderer.domElement.dataset.playerFallbacksVisible = String(
+        runtime.players.filter((player) => player.mesh.getObjectByName("body-root")?.visible).length,
+      );
+      playerVisualsReadyRef.current = true;
+      setMatchPreparing(false);
+      const pendingLaunch = pendingLaunchRef.current;
+      if (pendingLaunch) {
+        pendingLaunchRef.current = null;
+        window.queueMicrotask(() => {
+          if (pendingLaunch === "tutorial") startTutorialRef.current?.();
+          else startMatchRef.current?.();
+        });
+      }
+    }).catch((error) => {
+      console.error("Futbahl player preparation failed", error);
+      if (sceneRef.current === runtime) setMatchPreparing(false);
+    });
     runtimeLifecycleCounters.engines += 1;
     runtimeLifecycleCounters.rafLoops += 1;
     const requestedAnonymousSetupTests = clamp(
@@ -7767,6 +7801,7 @@ export function ArcadeSoccerGame() {
         mount.removeChild(runtime.renderer.domElement);
       }
       if (sceneRef.current === runtime) sceneRef.current = null;
+      playerVisualsReadyRef.current = false;
       runtimeLifecycleCounters.engines = Math.max(0, runtimeLifecycleCounters.engines - 1);
       runtimeLifecycleCounters.rafLoops = Math.max(0, runtimeLifecycleCounters.rafLoops - 1);
     };
@@ -8219,12 +8254,13 @@ export function ArcadeSoccerGame() {
             <button
               className="mt-3 inline-flex w-full items-center justify-center gap-3 rounded-md bg-emerald-300 px-6 py-4 text-xl font-black text-slate-950 transition hover:bg-emerald-200 active:scale-[0.98]"
               onClick={() => startMatch()}
-              disabled={(engineRequested && !sceneRef.current)
+              disabled={matchPreparing
+                || (engineRequested && !sceneRef.current)
                 || !validateTeamSetup(offlineSettings.userTeam).valid
                 || !validateTeamSetup(offlineSettings.aiTeam).valid}
             >
               <Play size={24} />
-              {engineRequested && !sceneRef.current ? "Loading match..." : "Kickoff"}
+              {matchPreparing || (engineRequested && !sceneRef.current) ? "Preparing match..." : "Kickoff"}
             </button>
             <button
               className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-white/20 bg-white/5 px-6 py-3 text-sm font-black text-white transition hover:bg-white/10 active:scale-[0.98]"
