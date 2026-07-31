@@ -76,13 +76,10 @@ export const LOCOMOTION_CLIPS: Record<FutbahlLocomotionState, string> = {
 export const FUTBAHL_CHARACTER_ASSETS = {
   animation: "/models/futbahl-locomotion-prototype.glb",
   male: "/models/futbahl-base-male.glb",
-  female: "/models/futbahl-base-female.glb",
   wordmark: "/branding/futbahl-wordmark-white.png",
   hair: [
     "/models/quaternius-hair/Hair_Buzzed.glb",
     "/models/quaternius-hair/Hair_SimpleParted.glb",
-    "/models/quaternius-hair/Hair_Buns.glb",
-    "/models/quaternius-hair/Hair_Long.glb",
   ],
   characterLicense: "/models/futbahl-base-characters.LICENSE.txt",
   animationLicense: "/models/futbahl-locomotion-prototype.LICENSE.txt",
@@ -135,7 +132,6 @@ type SharedCharacterAsset = {
 
 type SharedCharacterAssets = {
   male: SharedCharacterAsset;
-  female: SharedCharacterAsset;
   hair: Array<THREE.Group | null>;
   wordmark: THREE.Texture | null;
 };
@@ -145,14 +141,11 @@ const warned = new Set<string>();
 const bodyMaterialCache = new Map<string, THREE.Material>();
 const clothingMaterialCache = new Map<string, THREE.MeshStandardMaterial>();
 const hairMaterialCache = new Map<string, THREE.Material | THREE.Material[]>();
-const numberGeometryCache = new Map<number, THREE.BufferGeometry>();
-const numberMaterialCache = new Map<string, THREE.MeshBasicMaterial>();
-let numberAtlas: THREE.CanvasTexture | null = null;
+const uniformDecalMaterialCache = new Map<string, THREE.MeshBasicMaterial>();
 let sharedAssetsPromise: Promise<SharedCharacterAssets> | null = null;
 
 const KIT_GEOMETRY = {
-  collar: new THREE.TorusGeometry(0.105, 0.018, 6, 12),
-  sleeve: new THREE.CylinderGeometry(0.092, 0.082, 1, 8, 1, false),
+  boot: new THREE.SphereGeometry(0.11, 8, 5),
 } as const;
 
 function warnOnce(key: string, message: string, error?: unknown) {
@@ -225,7 +218,6 @@ function loadSharedAssets() {
   sharedAssetsPromise ??= Promise.all([
     loader.loadAsync(FUTBAHL_CHARACTER_ASSETS.animation),
     loader.loadAsync(FUTBAHL_CHARACTER_ASSETS.male),
-    loader.loadAsync(FUTBAHL_CHARACTER_ASSETS.female),
     new THREE.TextureLoader().loadAsync(FUTBAHL_CHARACTER_ASSETS.wordmark).catch((error) => {
       warnOnce("wordmark", "[Futbahl player] Uniform wordmark failed to load; continuing without it.", error);
       return null;
@@ -236,7 +228,7 @@ function loadSharedAssets() {
         warnOnce(`hair:${path}`, `[Futbahl player] Licensed hairstyle "${path}" failed to load; using the base hairstyle.`, error);
         return null;
       }))),
-  ]).then(([animation, male, female, wordmark, hair]) => {
+  ]).then(([animation, male, wordmark, hair]) => {
     if (wordmark) {
       wordmark.colorSpace = THREE.SRGBColorSpace;
       wordmark.generateMipmaps = false;
@@ -245,7 +237,6 @@ function loadSharedAssets() {
     }
     return {
       male: makeRetargetedAsset(male, animation),
-      female: makeRetargetedAsset(female, animation),
       hair,
       wordmark,
     };
@@ -380,108 +371,9 @@ function attachRootSpaceObject(
   bone.attach(object);
 }
 
-function addBoneSegment(
-  root: THREE.Group,
-  boneName: string,
-  childBoneName: string,
-  geometry: THREE.BufferGeometry,
-  material: THREE.Material,
-  startFraction: number,
-  endFraction: number,
-  radialScale = 1,
-) {
-  const bone = root.getObjectByName(boneName);
-  const child = root.getObjectByName(childBoneName);
-  if (!bone || !child) return;
-  root.updateMatrixWorld(true);
-  const start = root.worldToLocal(bone.getWorldPosition(new THREE.Vector3()));
-  const end = root.worldToLocal(child.getWorldPosition(new THREE.Vector3()));
-  const segmentStart = start.clone().lerp(end, startFraction);
-  const segmentEnd = start.clone().lerp(end, endFraction);
-  const direction = segmentEnd.clone().sub(segmentStart);
-  const length = direction.length();
-  if (length < 0.01) return;
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.copy(segmentStart).add(segmentEnd).multiplyScalar(0.5);
-  mesh.quaternion.setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    direction.normalize(),
-  );
-  mesh.scale.set(radialScale, length, radialScale);
-  mesh.castShadow = true;
-  mesh.receiveShadow = false;
-  attachRootSpaceObject(root, boneName, mesh);
-}
-
-function createNumberAtlas() {
-  if (numberAtlas) return numberAtlas;
-  const canvas = document.createElement("canvas");
-  canvas.width = 1024;
-  canvas.height = 1024;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = "#ffffff";
-  context.strokeStyle = "rgba(0,0,0,0.72)";
-  context.lineWidth = 12;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.font = "900 190px Arial, sans-serif";
-  for (let number = 1; number <= 11; number += 1) {
-    const column = (number - 1) % 4;
-    const row = Math.floor((number - 1) / 4);
-    const x = column * 256 + 128;
-    const y = row * 256 + 128;
-    context.strokeText(String(number), x, y);
-    context.fillText(String(number), x, y);
-  }
-  numberAtlas = new THREE.CanvasTexture(canvas);
-  numberAtlas.colorSpace = THREE.SRGBColorSpace;
-  numberAtlas.generateMipmaps = false;
-  numberAtlas.minFilter = THREE.LinearFilter;
-  numberAtlas.magFilter = THREE.LinearFilter;
-  return numberAtlas;
-}
-
-function numberGeometry(number: number) {
-  const normalized = ((number - 1) % 11) + 1;
-  const cached = numberGeometryCache.get(normalized);
-  if (cached) return cached;
-  const geometry = new THREE.PlaneGeometry(0.28, 0.36);
-  const column = (normalized - 1) % 4;
-  const row = Math.floor((normalized - 1) / 4);
-  const u0 = column / 4;
-  const u1 = (column + 1) / 4;
-  const v1 = 1 - row / 4;
-  const v0 = 1 - (row + 1) / 4;
-  geometry.setAttribute("uv", new THREE.Float32BufferAttribute([
-    u0, v1, u1, v1, u0, v0, u1, v0,
-  ], 2));
-  numberGeometryCache.set(normalized, geometry);
-  return geometry;
-}
-
-function addUniformBranding(root: THREE.Group, number: number, wordmark: THREE.Texture | null) {
-  const atlas = createNumberAtlas();
-  if (atlas) {
-    let numberMaterial = numberMaterialCache.get("white");
-    if (!numberMaterial) {
-      numberMaterial = new THREE.MeshBasicMaterial({
-        map: atlas,
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        toneMapped: false,
-      });
-      numberMaterialCache.set("white", numberMaterial);
-    }
-    const back = new THREE.Mesh(numberGeometry(number), numberMaterial);
-    back.name = "futbahl-shirt-number";
-    back.position.set(0, 1.31, 0.154);
-    attachRootSpaceObject(root, "spine_02", back);
-  }
+function addUniformBranding(root: THREE.Group, wordmark: THREE.Texture | null) {
   if (wordmark) {
-    let logoMaterial = numberMaterialCache.get("wordmark");
+    let logoMaterial = uniformDecalMaterialCache.get("wordmark");
     if (!logoMaterial) {
       logoMaterial = new THREE.MeshBasicMaterial({
         map: wordmark,
@@ -489,7 +381,7 @@ function addUniformBranding(root: THREE.Group, number: number, wordmark: THREE.T
         depthWrite: false,
         toneMapped: false,
       });
-      numberMaterialCache.set("wordmark", logoMaterial);
+      uniformDecalMaterialCache.set("wordmark", logoMaterial);
     }
     const chest = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.078), logoMaterial);
     chest.name = "futbahl-uniform-wordmark";
@@ -504,39 +396,21 @@ function addOriginalFootballKit(
   appearance: FutbahlPlayerAppearance,
   wordmark: THREE.Texture | null,
 ) {
-  const shirtMaterial = makeClothingMaterial(appearance.shirt, "shirt");
-  const trimMaterial = makeClothingMaterial(appearance.trim, "trim");
-
-  const collar = new THREE.Mesh(KIT_GEOMETRY.collar, trimMaterial);
-  collar.name = "futbahl-shirt-collar";
-  collar.position.set(0, 1.55, -0.01);
-  collar.rotation.x = Math.PI / 2;
-  collar.castShadow = true;
-  attachRootSpaceObject(root, "spine_03", collar);
-
   for (const side of ["l", "r"] as const) {
-    addBoneSegment(
-      root,
-      `upperarm_${side}`,
-      `lowerarm_${side}`,
-      KIT_GEOMETRY.sleeve,
-      shirtMaterial,
-      0.02,
-      0.46,
+    const foot = root.getObjectByName(`foot_${side}`);
+    if (!foot) continue;
+    const boot = new THREE.Mesh(
+      KIT_GEOMETRY.boot,
+      makeClothingMaterial(appearance.boots, "boots"),
     );
-    addBoneSegment(
-      root,
-      `upperarm_${side}`,
-      `lowerarm_${side}`,
-      KIT_GEOMETRY.sleeve,
-      trimMaterial,
-      0.42,
-      0.5,
-      1.035,
-    );
+    boot.name = `futbahl-football-boot-${side}`;
+    boot.position.set(0, 0.055, 0.085);
+    boot.scale.set(0.82, 0.58, 1.55);
+    boot.castShadow = true;
+    foot.add(boot);
   }
 
-  addUniformBranding(root, appearance.number, wordmark);
+  addUniformBranding(root, wordmark);
 }
 
 function attachLicensedHair(
@@ -667,7 +541,7 @@ export class FutbahlLocomotionController {
     const skinTones = ["#f3c7a6", "#d79b73", "#a86643", "#6f412d"];
     const skinTone = skinTones[seed % skinTones.length];
     const height = 0.96 + ((seed >>> 5) % 9) * 0.01;
-    const width = 0.95 + ((seed >>> 9) % 7) * 0.012;
+    const width = 0.88 + ((seed >>> 9) % 7) * 0.01;
     root.scale.set(1.39 * width, 1.39 * height, 1.39 * width);
     const hairColors = ["#1e1511", "#4a2d1f", "#151515", "#6a4330"];
     root.traverse((object) => {
@@ -719,13 +593,11 @@ export class FutbahlLocomotionController {
     appearance: FutbahlPlayerAppearance,
   ): Promise<FutbahlLocomotionController> {
     const assets = await loadSharedAssets();
-    const useFemale = stableHash(appearance.playerId) % 6 === 0 && appearance.role !== "keeper";
-    const asset = useFemale ? assets.female : assets.male;
-    const clonedRoot = cloneSkeleton(asset.scene) as THREE.Group;
+    const clonedRoot = cloneSkeleton(assets.male.scene) as THREE.Group;
     return new FutbahlLocomotionController(
       host,
       clonedRoot,
-      asset.clips,
+      assets.male.clips,
       appearance,
       assets.wordmark,
       assets.hair[stableHash(`${appearance.playerId}:hair`) % assets.hair.length],
@@ -757,8 +629,18 @@ export class FutbahlLocomotionController {
     if (this.currentAction) this.currentAction.timeScale = playbackSpeed;
     const forwardLean = THREE.MathUtils.clamp(-acceleration * 0.0065, -0.13, 0.09);
     const lateralLean = THREE.MathUtils.clamp(-localLateral * 0.014, -0.1, 0.1);
+    const diveTimer = sample.diveTimer ?? 0;
+    const divePose = diveTimer > 0
+      ? Math.sin((1 - THREE.MathUtils.clamp(diveTimer / 0.62, 0, 1)) * Math.PI)
+      : 0;
+    const diveLean = (sample.diveSide ?? 0) * 0.62 * divePose;
     this.visualRoot.rotation.x = damp(this.visualRoot.rotation.x, forwardLean, 8.5, safeDt);
-    this.visualRoot.rotation.z = damp(this.visualRoot.rotation.z, lateralLean, 8.5, safeDt);
+    this.visualRoot.rotation.z = damp(
+      this.visualRoot.rotation.z,
+      lateralLean + diveLean,
+      diveTimer > 0 ? 13 : 7.5,
+      safeDt,
+    );
 
     this.mixerAccumulator += safeDt;
     const updateInterval = (sample.distanceToCamera ?? 0) > 92 ? 1 / 30 : 0;
@@ -800,6 +682,13 @@ export class FutbahlLocomotionController {
     if (this.fallbackBody) this.fallbackBody.visible = true;
   }
 
+  resetActionPose() {
+    if (this.disposed) return;
+    this.visualRoot.position.set(0, 0, 0);
+    this.visualRoot.rotation.set(0, 0, 0);
+    this.previousSpeed = 0;
+  }
+
   private applyActionOverlay(sample: FutbahlMotionSample) {
     const kick = THREE.MathUtils.clamp((sample.kickTimer ?? 0) / 0.34, 0, 1);
     const header = THREE.MathUtils.clamp((sample.headerTimer ?? 0) / 0.55, 0, 1);
@@ -826,9 +715,6 @@ export class FutbahlLocomotionController {
       this.visualRoot.position.y = Math.max(0, Math.sin(celebrate * Math.PI * 5)) * 0.08;
     } else {
       this.visualRoot.position.y = 0;
-    }
-    if ((sample.diveTimer ?? 0) > 0) {
-      this.visualRoot.rotation.z += (sample.diveSide ?? 0) * 0.62;
     }
   }
 

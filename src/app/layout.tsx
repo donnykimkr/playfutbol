@@ -9,14 +9,14 @@ export const metadata: Metadata = {
   title: "Futbahl",
   description: "Futbahl is a 3D arcade football game with responsive controls and AI teammates.",
   icons: {
-    icon: "/branding/futbahl-logo.png",
-    shortcut: "/branding/futbahl-logo.png",
-    apple: "/branding/futbahl-logo.png",
+    icon: "/favicon.svg",
+    shortcut: "/favicon.svg",
+    apple: "/branding/futbahl-app-icon.svg",
   },
   openGraph: {
     title: "Futbahl",
     description: "A browser-based 3D football match.",
-    images: ["/branding/futbahl-logo.png"],
+    images: ["/branding/futbahl-app-icon.svg"],
   },
 };
 

@@ -1,6 +1,6 @@
 # Futbahl Arcade Football
 
-Futbahl is an ad-free 3D browser football game. It focuses on fast local play with two independently configurable anonymous, numbered teams: one active player, AI teammates, AI opponents, ball physics, goal kicks, throw-ins, corners, and a side broadcast camera.
+Futbahl is an ad-free 3D browser football game. It focuses on fast local play with two independently configurable anonymous teams: one active player, AI teammates, AI opponents, ball physics, goal kicks, throw-ins, corners, and a side broadcast camera.
 
 Use Brave Browser as the primary browser for testing and playing. Brave is fast, Chromium-based, better for privacy by default, and suitable for modern WebGL game performance.
 
@@ -72,7 +72,7 @@ Mobile and iPad controls show a joystick plus action buttons for Switch, Kick, F
 
 ## Anonymous Team Setup
 
-The pre-match setup configures both teams independently. Each side has exactly 11 anonymous players identified only by formation slot, position, shirt number, neutral body preset, preferred foot, and tactical role. There are no player names or likeness-specific presets.
+The pre-match setup configures both teams independently. Each side has exactly 11 anonymous players identified only by formation slot, position, neutral body preset, preferred foot, and tactical role. There are no player names or likeness-specific presets.
 
 Available formations:
 

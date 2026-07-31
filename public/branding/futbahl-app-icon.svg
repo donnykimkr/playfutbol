@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Futbahl application icon</title>
+  <rect width="512" height="512" rx="112" fill="#16a34a"/>
+  <path fill="#fff" d="M136 96h272l-48 80H232v64h136l-48 80h-88v112h-96V96Z"/>
+  <path fill="#bbf7d0" d="M304 320h96l-48 80h-96l48-80Z"/>
+</svg>

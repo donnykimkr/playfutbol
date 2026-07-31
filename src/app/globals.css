@@ -35,6 +35,13 @@ button {
   touch-action: manipulation;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid #76f7c5;
+  outline-offset: 2px;
+}
+
 canvas {
   display: block;
   touch-action: none;

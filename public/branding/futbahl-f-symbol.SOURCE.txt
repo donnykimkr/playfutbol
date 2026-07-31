@@ -1,0 +1,15 @@
+Futbahl F symbol
+
+Original vector artwork created for this project.
+Copyright 2026 Futbahl contributors.
+
+The mark is built from the letter F with angular forward-motion cuts. It does
+not use third-party artwork, football clip art, club marks, league marks, or
+proprietary sports-game branding.
+
+Files:
+- futbahl-f-symbol.svg: primary green application mark
+- futbahl-f-symbol-light.svg: monochrome mark for dark backgrounds
+- futbahl-f-symbol-dark.svg: monochrome mark for light backgrounds
+- futbahl-app-icon.svg: large application-icon source
+- /favicon.svg: compact browser favicon
