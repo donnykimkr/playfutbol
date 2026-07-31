@@ -70,21 +70,9 @@ The app generates a `visitor_id` with `crypto.randomUUID()` on first visit and s
 
 Mobile and iPad controls show a joystick plus action buttons for Switch, Kick, Fullscreen, and AI ON/OFF.
 
-## Anonymous Team Setup
+## Anonymous Teams
 
-The pre-match setup configures both teams independently. Each side has exactly 11 anonymous players identified only by formation slot, position, neutral body preset, preferred foot, and tactical role. There are no player names or likeness-specific presets.
-
-Available formations:
-
-- `4-3-3`
-- `4-4-2`
-- `4-2-3-1`
-- `3-5-2`
-- `3-2-4-1`
-- `3-2-2-3`
-
-Shirt numbers must be unique within a team and remain in the `1-99` range. The formation cards and shirt backs show position/number only.
-Both team setups are stored locally in the browser and restored without player identity data.
+Each side uses 11 anonymous players in a fixed `4-3-3`. Formation slots, neutral body presets, preferred feet, and tactical roles remain internal match data; there is no user-facing formation editor, player-name system, or likeness-specific preset.
 
 ## Audio Sources And Licensing
 
@@ -100,6 +88,8 @@ Audio begins only after the player presses Kickoff. Active audio sources are sto
 ## Character Animation Asset
 
 The single-player skeletal locomotion prototype uses the Quaternius Universal Animation Library Standard Mannequin under CC0 1.0. The source and license are recorded in `public/models/futbahl-locomotion-prototype.LICENSE.txt`.
+
+The short instanced grass edge detail uses Quaternius `Grass2.obj` from the Simple Nature Pack under CC0 1.0. The unmodified source geometry and attribution are stored in `public/models/quaternius-grass/`.
 
 No proprietary EA FC, FIFA, eFootball, or other commercial-game character assets are included. The remaining low-poly footballers and their hairstyles are original project geometry.
 
@@ -132,7 +122,7 @@ Use Brave Browser for the primary test pass.
 6. Confirm `End game` returns to the menu.
 7. Confirm goal kicks choose short/medium/long options instead of always full power.
 8. Confirm there is no multiplayer UI.
-9. Configure different formations and names for both anonymous teams.
+9. Confirm the start screen does not expose formation controls.
 10. Open `http://localhost:3000/?anonymousSetupTest=100` and confirm 600 generated teams with zero failures.
 11. Open `http://localhost:3000/?perf=1` and confirm FPS/frame time.
 
