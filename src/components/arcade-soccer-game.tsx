@@ -9880,7 +9880,7 @@ function stopForRestart(active: MatchRuntime, phase: PlayPhase, team: TeamId, sp
   active.setPieceReleaseBlend = 0;
   active.players.forEach((player) => {
     player.setPieceTarget.copy(player.pos);
-    player.setPieceAssignmentActive = !player.sentOff;
+    player.setPieceAssignmentActive = !player.sentOff && player.id !== active.restartActorId;
   });
   active.eventText = `${label} · WAITING FOR KICK`;
   active.eventTimer = 0;
