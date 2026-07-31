@@ -17107,10 +17107,10 @@ function sharedKickForce(style: KickStyle, distance: number, charge: number, own
           : style === "chip"
             ? clamp(22 + distance * 0.34, 26, 43)
           : style === "driven"
-            ? clamp(basePower * 1.28, 26, 49)
+            ? clamp(basePower * 1.34, 27, 52)
             : style === "finesse"
-              ? clamp(basePower * 1.08, 23, 39)
-              : clamp(20 + distance * 0.5, 25, 50);
+              ? clamp(basePower * 1.14, 24, 43)
+              : clamp(23 + distance * 0.56, 29, 57);
   const chargeResponse = 1 - Math.pow(1 - normalized, 1.34);
   const chargeFactor = style === "short"
     ? 0.82 + chargeResponse * 0.5
@@ -17123,7 +17123,7 @@ function sharedKickForce(style: KickStyle, distance: number, charge: number, own
           : style === "chip"
             ? 0.82 + chargeResponse * 0.44
             : style === "shot"
-              ? 0.58 + chargeResponse * 1.12
+              ? 0.64 + chargeResponse * 1.08
               : 0.8 + chargeResponse * 0.66;
   const minPower = style === "short"
     ? 28
@@ -17154,8 +17154,8 @@ function sharedKickForce(style: KickStyle, distance: number, charge: number, own
   power = clamp(power * chargeFactor * possessionFactor, minPower, maxPower);
   let lift = ballLiftForKick(style, distance);
   if (style === "short") lift = Math.max(lift, distance > 24 ? 0.65 : 0.25);
-  if (style === "shot") lift = clamp(lift + chargeResponse * 6.2, 3.1, 13.2);
-  if (style === "finesse") lift = clamp(lift + chargeResponse * 2.8, 2.6, 7.8);
+  if (style === "shot") lift = clamp(lift + 0.7 + chargeResponse * 6.8, 3.8, 13.4);
+  if (style === "finesse") lift = clamp(lift + 0.35 + chargeResponse * 3.35, 2.9, 8.2);
   if (style === "driven") lift = Math.min(lift, 0.65);
   return { power, lift };
 }
