@@ -158,6 +158,8 @@ type PlayerBody = {
   forcedMoveTarget: THREE.Vector3;
   forcedMoveTimer: number;
   forcedMoveSprint: boolean;
+  setPieceTarget: THREE.Vector3;
+  setPieceAssignmentActive: boolean;
   ballContactCooldown: number;
   challengeCommitTimer: number;
   keeperAction: KeeperAction;
@@ -434,6 +436,10 @@ type MatchRuntime = {
   goalKickPendingReceiverId: string | null;
   manualGoalKickReceiverId: string | null;
   restartBoundaryGuardTimer: number;
+  setPieceReleaseActive: boolean;
+  setPieceReleaseOrigin: THREE.Vector3;
+  setPieceReleaseActorId: string | null;
+  setPieceReleaseBlend: number;
   pendingRestartPhase: BoundaryRestartPhase | null;
   pendingRestartTeam: TeamId;
   pendingRestartSpot: THREE.Vector3;
@@ -3782,6 +3788,8 @@ function createPlayer(id: string, team: TeamId, role: PlayerRole, line: PlayerLi
     forcedMoveTarget: new THREE.Vector3(x, 0, z),
     forcedMoveTimer: 0,
     forcedMoveSprint: false,
+    setPieceTarget: new THREE.Vector3(x, 0, z),
+    setPieceAssignmentActive: false,
     ballContactCooldown: 0,
     challengeCommitTimer: 0,
     keeperAction: "none",
@@ -4415,6 +4423,8 @@ export function ArcadeSoccerGame() {
       player.forcedMoveTarget.copy(player.home);
       player.forcedMoveTimer = 0;
       player.forcedMoveSprint = false;
+      player.setPieceTarget.copy(player.home);
+      player.setPieceAssignmentActive = false;
       player.ballContactCooldown = 0;
       player.challengeCommitTimer = 0;
       player.keeperAction = "none";
@@ -4501,6 +4511,10 @@ export function ArcadeSoccerGame() {
     active.goalKickPendingReceiverId = null;
     active.manualGoalKickReceiverId = null;
     active.restartBoundaryGuardTimer = 0;
+    active.setPieceReleaseActive = false;
+    active.setPieceReleaseOrigin.set(0, 0, 0);
+    active.setPieceReleaseActorId = null;
+    active.setPieceReleaseBlend = 0;
     active.pendingRestartPhase = null;
     active.pendingRestartTeam = servingTeam;
     active.pendingRestartSpot.set(0, BALL_RADIUS, 0);
@@ -5224,6 +5238,10 @@ export function ArcadeSoccerGame() {
       goalKickPendingReceiverId: null,
       manualGoalKickReceiverId: null,
       restartBoundaryGuardTimer: 0,
+      setPieceReleaseActive: false,
+      setPieceReleaseOrigin: new THREE.Vector3(),
+      setPieceReleaseActorId: null,
+      setPieceReleaseBlend: 0,
       pendingRestartPhase: null,
       pendingRestartTeam: "home",
       pendingRestartSpot: new THREE.Vector3(),
@@ -8588,6 +8606,7 @@ function updateMatch(
   }
   updatePassIntent(active, dt);
   updatePendingReceiveAction(active);
+  updateSetPieceRelease(active, dt);
   if (active.tutorial.active) {
     active.defensivePlan = null;
     active.defensivePlanTimer = 0;
@@ -8691,7 +8710,7 @@ function updateMatch(
       animatePlayer(player, dt, active.camera, active);
       return;
     }
-    const input: PlayerInputState = active.phase === "open" && !outOfPlayPending
+    let input: PlayerInputState = active.phase === "open" && !outOfPlayPending
       ? player.controlledBy === "p1"
         ? active.p1Autopilot
           ? cachedAiInput(player, active, dt)
@@ -8700,6 +8719,23 @@ function updateMatch(
       : active.phase === "goal" || active.phase === "halftime" || outOfPlayPending
         ? { dir: new THREE.Vector3(), sprint: false, speedScale: 1 }
         : restartShapeInput(player, active);
+    if (
+      active.phase === "open"
+      && active.setPieceReleaseActive
+      && player.setPieceAssignmentActive
+      && active.ballOwnerId !== player.id
+      && active.intendedReceiverId !== player.id
+    ) {
+      const assignmentDirection = player.setPieceTarget.clone().sub(player.pos).setY(0);
+      if (assignmentDirection.lengthSq() > 0.36) {
+        const assignmentInput = assignmentDirection.normalize();
+        input = {
+          dir: assignmentInput.lerp(input.dir, active.setPieceReleaseBlend).normalize(),
+          sprint: active.setPieceReleaseBlend > 0.55 && input.sprint,
+          speedScale: THREE.MathUtils.lerp(0.74, input.speedScale ?? 1, active.setPieceReleaseBlend),
+        };
+      }
+    }
     const manualControlled = player.controlledBy === "p1" && !active.p1Autopilot;
     const committedReception = active.ballState === "kicked" && active.intendedReceiverId === player.id;
     const committedLooseBallRecovery = isLooseBallCollector(player, active);
@@ -9839,6 +9875,13 @@ function stopForRestart(active: MatchRuntime, phase: PlayPhase, team: TeamId, sp
     prepareGoalKickSetup(active, team);
     active.phaseTimer = Math.max(active.phaseTimer, 2.25);
   }
+  active.setPieceReleaseActive = false;
+  active.setPieceReleaseActorId = null;
+  active.setPieceReleaseBlend = 0;
+  active.players.forEach((player) => {
+    player.setPieceTarget.copy(player.pos);
+    player.setPieceAssignmentActive = !player.sentOff;
+  });
   active.eventText = `${label} · WAITING FOR KICK`;
   active.eventTimer = 0;
   if (phase !== "goal-kick") active.ballPos.copy(active.restartSpot);
@@ -9849,6 +9892,36 @@ function stopForRestart(active: MatchRuntime, phase: PlayPhase, team: TeamId, sp
   if (team === "home" && !active.p1Autopilot && (phase === "goal-kick" || phase === "corner")) {
     ensureManualRestartSelection(active);
   }
+}
+
+function beginSetPieceRelease(active: MatchRuntime, origin: THREE.Vector3, actorId: string | null) {
+  active.setPieceReleaseActive = true;
+  active.setPieceReleaseOrigin.copy(origin);
+  active.setPieceReleaseActorId = actorId;
+  active.setPieceReleaseBlend = 0;
+  active.players.forEach((player) => {
+    if (player.id === actorId || player.id === active.intendedReceiverId) {
+      player.setPieceAssignmentActive = false;
+    }
+  });
+}
+
+function updateSetPieceRelease(active: MatchRuntime, dt: number) {
+  if (!active.setPieceReleaseActive) return;
+  const travelled = active.ballPos.distanceTo(active.setPieceReleaseOrigin);
+  const subsequentTouch = Boolean(
+    active.lastTouchPlayerId
+    && active.lastTouchPlayerId !== active.setPieceReleaseActorId,
+  );
+  const openPlayEstablished = travelled >= 8 || subsequentTouch || active.possession !== null;
+  if (!openPlayEstablished) return;
+  active.setPieceReleaseBlend = Math.min(1, active.setPieceReleaseBlend + dt * 1.35);
+  if (active.setPieceReleaseBlend < 1) return;
+  active.setPieceReleaseActive = false;
+  active.setPieceReleaseActorId = null;
+  active.players.forEach((player) => {
+    player.setPieceAssignmentActive = false;
+  });
 }
 
 function arrangeSetPieceShape(active: MatchRuntime, phase: PlayPhase, team: TeamId, spot: THREE.Vector3) {
@@ -10292,6 +10365,7 @@ function executeManualCorner(active: MatchRuntime, actor: PlayerBody, option: Ma
   active.lastTouchPlayerId = actor.id;
   active.ballIgnorePlayerId = actor.id;
   active.ballIgnoreTimer = 0.42;
+  beginSetPieceRelease(active, releasePoint, actor.id);
   active.restartActorId = null;
   active.manualRestartTargetId = null;
   active.manualRestartTargetZone = null;
@@ -10358,6 +10432,7 @@ function releasePreparedGoalKick(active: MatchRuntime) {
   active.ballIgnoreTimer = 1.25;
   active.lastTouchTeam = active.restartTeam;
   active.lastTouchPlayerId = keeper?.id ?? null;
+  beginSetPieceRelease(active, active.ballPos, keeper?.id ?? null);
   if (keeper) recordBallTouch(active, keeper, "foot", "pass", true, active.intendedReceiverId ?? undefined);
   playKickSound(active, 1.25);
 }
@@ -10464,6 +10539,7 @@ function resumeRestart(active: MatchRuntime) {
     active.lastTouchPlayerId = active.restartActorId;
     active.lastTouchRecord = null;
   }
+  beginSetPieceRelease(active, releasePoint, actor?.id ?? active.restartActorId);
   active.restartActorId = null;
   active.ballState = "kicked";
   active.ballOwnerId = null;
@@ -10492,6 +10568,14 @@ function resumeRestart(active: MatchRuntime) {
 }
 
 function restartShapeInput(player: PlayerBody, active: MatchRuntime) {
+  if (player.setPieceAssignmentActive) {
+    const assignmentDirection = player.setPieceTarget.clone().sub(player.pos).setY(0);
+    return {
+      dir: assignmentDirection.lengthSq() > 0.36 ? assignmentDirection.normalize() : assignmentDirection.set(0, 0, 0),
+      sprint: false,
+      speedScale: 0.78,
+    };
+  }
   if (active.phase === "goal-kick") {
     const target = player.id === active.restartActorId
       ? goalKickKeeperSpot(active.restartTeam, active.half)
@@ -10560,6 +10644,9 @@ function startDirectKickoff(active: MatchRuntime, team: TeamId) {
 }
 
 function resetKickoffShape(active: MatchRuntime) {
+  active.setPieceReleaseActive = false;
+  active.setPieceReleaseActorId = null;
+  active.setPieceReleaseBlend = 0;
   active.players.forEach((player) => {
     player.pos.copy(player.home);
     player.vel.set(0, 0, 0);
@@ -10575,6 +10662,8 @@ function resetKickoffShape(active: MatchRuntime) {
     player.stuckTimer = 0;
     player.fallbackTimer = 0;
     player.lastPos.copy(player.pos);
+    player.setPieceTarget.copy(player.pos);
+    player.setPieceAssignmentActive = false;
     if (player.role === "keeper") neutralizeGoalkeeperPose(player);
   });
 }
