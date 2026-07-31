@@ -17160,6 +17160,19 @@ function sharedKickForce(style: KickStyle, distance: number, charge: number, own
   return { power, lift };
 }
 
+function loftedPassForce(distance: number, charge: number, base: { power: number; lift: number }) {
+  const normalizedCharge = clamp(charge, 0.08, 1);
+  const distanceBlend = clamp((distance - 16) / 58, 0, 1);
+  return {
+    power: clamp(base.power * THREE.MathUtils.lerp(1.07, 1.12, distanceBlend), 32, 68),
+    lift: clamp(
+      6.7 + distance * 0.105 + normalizedCharge * THREE.MathUtils.lerp(1.15, 1.8, distanceBlend),
+      8.4,
+      13.8,
+    ),
+  };
+}
+
 function safeGroundPassSpeed(player: PlayerBody, target: THREE.Vector3, active: MatchRuntime, distance: number) {
   const attackSign = Math.sign(attackingGoalZ(player.team, active.half));
   const backward = (target.z - player.pos.z) * attackSign < -1.8;
@@ -17486,9 +17499,14 @@ function kickTowardPoint(
   const assistedShot = manualAim && shotStyle
     ? assistedManualShotPhysics(player, active, target, style, kickCharge)
     : null;
-  const force = assistedShot
+  let force = assistedShot
     ? { power: assistedShot.power, lift: assistedShot.lift }
     : sharedKickForce(style, distance, kickCharge, ownsBall);
+  const fieldLoftedPass = style === "long"
+    && Boolean(intendedReceiver)
+    && player.role !== "keeper"
+    && untargetedKick === "none";
+  if (fieldLoftedPass) force = loftedPassForce(distance, kickCharge, force);
   if (isPassKickStyle(style) && intendedReceiver && !manualAim) {
     const laneWidth = style === "short" ? 3.15 : style === "low-through" ? 3.65 : 4.4;
     const blockers = opponentsBetween(player, resolvedTarget, active.players, laneWidth);
@@ -17519,6 +17537,9 @@ function kickTowardPoint(
   active.renderer.domElement.dataset.lastKickX = kickDirection.x.toFixed(4);
   active.renderer.domElement.dataset.lastKickZ = kickDirection.z.toFixed(4);
   active.renderer.domElement.dataset.lastKickStyle = style;
+  active.renderer.domElement.dataset.lastKickPower = kickPower.toFixed(3);
+  active.renderer.domElement.dataset.lastKickLift = force.lift.toFixed(3);
+  active.renderer.domElement.dataset.lastKickWasFieldLoft = fieldLoftedPass ? "true" : "false";
   active.renderer.domElement.dataset.lastKickReceiver = intendedReceiver?.id ?? "";
   active.ballVel.copy(kickDirection).multiplyScalar(kickPower).add(player.vel.clone().multiplyScalar(style === "driven" ? 0.06 : 0.12));
   active.ballVel.y = force.lift;
