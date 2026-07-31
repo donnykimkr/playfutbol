@@ -7996,7 +7996,9 @@ export function ArcadeSoccerGame() {
           aria-label="Match scoreboard"
           className="futbahl-scoreboard"
         >
-          <span className="futbahl-scoreboard__brand">F</span>
+          <span className="futbahl-scoreboard__brand">
+            <Image src="/branding/futbahl-f-symbol-light.svg" width={18} height={18} alt="" aria-hidden />
+          </span>
           <span className="futbahl-scoreboard__team futbahl-scoreboard__team--home">
             <span className="hidden sm:inline">{offlineSettings.userTeam.name.toUpperCase()}</span>
             <span className="sm:hidden">{offlineSettings.userTeam.name.slice(0, 3).toUpperCase()}</span>
@@ -8143,7 +8145,7 @@ export function ArcadeSoccerGame() {
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-3">
-                  <Image src="/branding/futbahl-logo.png" width={42} height={42} className="h-10 w-10 object-contain" alt="Futbahl" />
+                  <Image src="/branding/futbahl-f-symbol.svg" width={42} height={42} className="h-10 w-10 object-contain" alt="Futbahl" />
                   <h2 className="text-2xl font-black">Formation & Match Settings</h2>
                 </div>
                 <p className="mt-1 text-sm text-white/60">Configure both anonymous teams before kickoff.</p>
@@ -18361,7 +18363,7 @@ function SoccerBallLogo() {
   return (
     <div className="grid h-32 w-32 place-items-center overflow-hidden rounded-md border border-white/15 bg-white/5 shadow-2xl">
       <Image
-        src="/branding/futbahl-logo.png"
+        src="/branding/futbahl-f-symbol.svg"
         width={128}
         height={128}
         className="h-full w-full object-contain"
