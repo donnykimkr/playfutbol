@@ -4423,6 +4423,7 @@ export function ArcadeSoccerGame() {
       player.postWinState = "none";
       player.postWinTimer = 0;
       player.previousInputDir.set(0, 0, 0);
+      if (player.role === "keeper") neutralizeGoalkeeperPose(player);
       animatePlayer(player, 0);
     });
     active.ballPos.set(0, BALL_RADIUS, 0);
@@ -9529,6 +9530,16 @@ function limitHorizontalBallSpeed(ballVel: THREE.Vector3, maxSpeed: number) {
   ballVel.z = horizontal.z;
 }
 
+function neutralizeGoalkeeperPose(player: PlayerBody) {
+  if (player.role !== "keeper") return;
+  player.diveTimer = 0;
+  player.diveSide = 0;
+  player.keeperAction = "none";
+  player.keeperActionTimer = 0;
+  player.locomotionController?.resetActionPose();
+  if (player.parts.bodyRoot) setJointRestPosition(player.parts.bodyRoot);
+}
+
 function beginHalftime(active: MatchRuntime) {
   active.phase = "halftime";
   active.lastClockAdvanceTime = performance.now();
@@ -9567,10 +9578,12 @@ function beginHalftime(active: MatchRuntime) {
     player.tackleTimer = 0;
     player.recoveryTimer = 0;
     player.diveTimer = 0;
+    player.diveSide = 0;
     player.headerTimer = 0;
     player.firstTouchTimer = 0;
     player.firstTouchType = null;
     player.challengeCommitTimer = 0;
+    if (player.role === "keeper") neutralizeGoalkeeperPose(player);
   });
   playWhistleEvent(active, "halftime", `halftime-${active.matchGeneration}`);
   playCommentary(active, "halftime", true);
@@ -9782,6 +9795,9 @@ function stopForRestart(active: MatchRuntime, phase: PlayPhase, team: TeamId, sp
   active.loftCharge = 0;
   active.loftChargingPlayerId = null;
   active.restartBoundaryGuardTimer = 0;
+  active.players.forEach((player) => {
+    if (player.role === "keeper") neutralizeGoalkeeperPose(player);
+  });
   if (phase === "corner") {
     playCrowdReaction(active, 0.42);
     playCommentary(active, "corner");
@@ -10544,6 +10560,7 @@ function resetKickoffShape(active: MatchRuntime) {
     player.stuckTimer = 0;
     player.fallbackTimer = 0;
     player.lastPos.copy(player.pos);
+    if (player.role === "keeper") neutralizeGoalkeeperPose(player);
   });
 }
 

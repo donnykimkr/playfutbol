@@ -629,8 +629,18 @@ export class FutbahlLocomotionController {
     if (this.currentAction) this.currentAction.timeScale = playbackSpeed;
     const forwardLean = THREE.MathUtils.clamp(-acceleration * 0.0065, -0.13, 0.09);
     const lateralLean = THREE.MathUtils.clamp(-localLateral * 0.014, -0.1, 0.1);
+    const diveTimer = sample.diveTimer ?? 0;
+    const divePose = diveTimer > 0
+      ? Math.sin((1 - THREE.MathUtils.clamp(diveTimer / 0.62, 0, 1)) * Math.PI)
+      : 0;
+    const diveLean = (sample.diveSide ?? 0) * 0.62 * divePose;
     this.visualRoot.rotation.x = damp(this.visualRoot.rotation.x, forwardLean, 8.5, safeDt);
-    this.visualRoot.rotation.z = damp(this.visualRoot.rotation.z, lateralLean, 8.5, safeDt);
+    this.visualRoot.rotation.z = damp(
+      this.visualRoot.rotation.z,
+      lateralLean + diveLean,
+      diveTimer > 0 ? 13 : 7.5,
+      safeDt,
+    );
 
     this.mixerAccumulator += safeDt;
     const updateInterval = (sample.distanceToCamera ?? 0) > 92 ? 1 / 30 : 0;
@@ -672,6 +682,13 @@ export class FutbahlLocomotionController {
     if (this.fallbackBody) this.fallbackBody.visible = true;
   }
 
+  resetActionPose() {
+    if (this.disposed) return;
+    this.visualRoot.position.set(0, 0, 0);
+    this.visualRoot.rotation.set(0, 0, 0);
+    this.previousSpeed = 0;
+  }
+
   private applyActionOverlay(sample: FutbahlMotionSample) {
     const kick = THREE.MathUtils.clamp((sample.kickTimer ?? 0) / 0.34, 0, 1);
     const header = THREE.MathUtils.clamp((sample.headerTimer ?? 0) / 0.55, 0, 1);
@@ -698,9 +715,6 @@ export class FutbahlLocomotionController {
       this.visualRoot.position.y = Math.max(0, Math.sin(celebrate * Math.PI * 5)) * 0.08;
     } else {
       this.visualRoot.position.y = 0;
-    }
-    if ((sample.diveTimer ?? 0) > 0) {
-      this.visualRoot.rotation.z += (sample.diveSide ?? 0) * 0.62;
     }
   }
 
