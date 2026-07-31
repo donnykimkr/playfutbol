@@ -9935,7 +9935,18 @@ function arrangeSetPieceShape(active: MatchRuntime, phase: PlayPhase, team: Team
       return;
     }
     const base = player.home.clone();
-    if (dangerousRestart && player.role !== "keeper") {
+    if (dangerousRestart && player.role === "keeper" && player.team !== team) {
+      const ownGoalZ = teamGoalZ(player.team, active.half);
+      const ownGoalSide = Math.sign(ownGoalZ) || 1;
+      base.set(
+        clamp(deliverySide * 0.72, -GOAL_W * 0.24, GOAL_W * 0.24),
+        0,
+        ownGoalZ - ownGoalSide * 1.05,
+      );
+      neutralizeGoalkeeperPose(player);
+      const faceBall = spot.clone().sub(base).setY(0);
+      if (faceBall.lengthSq() > 0.1) player.heading = headingFromDirection(faceBall.normalize());
+    } else if (dangerousRestart && player.role !== "keeper") {
       const assignment = player.team === team
         ? attackingAssignments.get(player.id)
         : defendingAssignments.get(player.id);
@@ -9992,6 +10003,10 @@ function arrangeSetPieceShape(active: MatchRuntime, phase: PlayPhase, team: Team
     active.renderer.domElement.dataset.cornerDefenderMinimumGap = minimumPairGap(defenders).toFixed(2);
     active.renderer.domElement.dataset.cornerAttackersOutsideBox = String(outsideBoxCount);
     active.renderer.domElement.dataset.cornerKeeperClearance = keeperClearance.toFixed(2);
+    active.renderer.domElement.dataset.cornerKeeperGoalLineDepth = defendingKeeper
+      ? Math.abs(Math.abs(defendingKeeper.pos.z) - GOAL_FRONT_Z).toFixed(2)
+      : "";
+    active.renderer.domElement.dataset.cornerKeeperLateral = defendingKeeper?.pos.x.toFixed(2) ?? "";
   }
 }
 
