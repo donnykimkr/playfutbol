@@ -1,5 +1,14 @@
 # Futbahl audio attribution
 
+## Referee whistle
+
+- **Recording:** `Referee whistle blow, gymnasium.wav`
+- **Author:** SpliceSound
+- **Source:** https://freesound.org/people/SpliceSound/sounds/218318/
+- **License:** Creative Commons CC0 1.0 Universal
+- **Local derivative:** `referee-whistle.mp3` (Freesound high-quality preview;
+  trimmed at playback for event-specific whistle patterns)
+
 The bundled outdoor stadium ambience, crowd swell, and goal roar are derived
 from verified CC0 football-stadium field recordings hosted by Freesound:
 

@@ -276,6 +276,8 @@ type CrowdAudioBuffers = {
   goal: AudioBuffer | null;
 };
 
+type WhistleEvent = "kickoff-first" | "kickoff-second" | "halftime" | "fulltime" | "foul" | "penalty";
+
 
 type MatchRuntime = {
   engineId: number;
@@ -409,6 +411,11 @@ type MatchRuntime = {
   crowdAudioLoaded: boolean;
   crowdAudioUnavailable: boolean;
   crowdAudioWarningLogged: boolean;
+  whistleAudioBuffer: AudioBuffer | null;
+  whistleAudioLoading: Promise<void> | null;
+  whistleAudioUnavailable: boolean;
+  lastWhistleEventKey: string;
+  lastWhistleEventTime: number;
   lastCrowdSwellTime: number;
   lastGoalCrowdTime: number;
   lastCommentaryTime: number;
@@ -642,6 +649,7 @@ const LANDING_MARKER_Y = 0.135;
 const RECORDED_CROWD_AMBIENT_PATH = "/audio/stadium-ambience.m4a";
 const RECORDED_CROWD_SWELL_PATH = "/audio/stadium-swell.m4a";
 const RECORDED_CROWD_GOAL_PATH = "/audio/stadium-goal-roar.m4a";
+const RECORDED_REFEREE_WHISTLE_PATH = "/audio/referee-whistle.mp3";
 const CROWD_AMBIENCE_CROSSFADE_SECONDS = 4;
 const CROWD_AMBIENCE_LAYER_GAIN = 0.82;
 const CROWD_MASTER_GAIN = 0.24;
@@ -4719,8 +4727,9 @@ export function ArcadeSoccerGame() {
     resetPositions("home");
     tutorialUiRef.current = { active: false, lessonIndex: 0, status: "active" };
     setTutorialUi(tutorialUiRef.current);
-    startDirectKickoff(active, "home");
     startMatchAudio(active);
+    startDirectKickoff(active, "home");
+    playWhistleEvent(active, "kickoff-first", `kickoff-first-${active.matchGeneration}`);
     playCommentary(active, "kickoff", true);
     if (showTouchControls) {
       setP1AutopilotMode(active, true);
@@ -5191,6 +5200,11 @@ export function ArcadeSoccerGame() {
       crowdAudioLoaded: false,
       crowdAudioUnavailable: false,
       crowdAudioWarningLogged: false,
+      whistleAudioBuffer: null,
+      whistleAudioLoading: null,
+      whistleAudioUnavailable: false,
+      lastWhistleEventKey: "",
+      lastWhistleEventTime: 0,
       lastCrowdSwellTime: 0,
       lastGoalCrowdTime: 0,
       lastCommentaryTime: 0,
@@ -7574,7 +7588,7 @@ export function ArcadeSoccerGame() {
         active.pendingKickTarget = null;
         active.shotCharge = 0;
         active.passCharge = 0;
-        playWhistleSequence(active, 3);
+        playWhistleEvent(active, "fulltime", `fulltime-${active.matchGeneration}`);
         playCommentary(active, "fulltime", true);
         active.state = "ended";
         void finishAnalyticsSession(gameSessionRef.current, visitorIdRef.current, active.score);
@@ -9558,7 +9572,7 @@ function beginHalftime(active: MatchRuntime) {
     player.firstTouchType = null;
     player.challengeCommitTimer = 0;
   });
-  playWhistleSequence(active, 2);
+  playWhistleEvent(active, "halftime", `halftime-${active.matchGeneration}`);
   playCommentary(active, "halftime", true);
 }
 
@@ -10333,6 +10347,7 @@ function resumeRestart(active: MatchRuntime) {
       player.mesh.position.copy(player.pos);
     });
     startDirectKickoff(active, "away");
+    playWhistleEvent(active, "kickoff-second", `kickoff-second-${active.matchGeneration}`);
     active.eventText = "SECOND HALF";
     active.eventTimer = 1.4;
     return;
@@ -12643,6 +12658,32 @@ async function loadRecordedCrowdAudio(active: MatchRuntime) {
   return active.crowdAudioLoading;
 }
 
+async function loadRecordedWhistleAudio(active: MatchRuntime) {
+  if (!active.audio || active.whistleAudioBuffer || active.whistleAudioLoading || active.whistleAudioUnavailable) {
+    return active.whistleAudioLoading;
+  }
+  const context = active.audio;
+  active.whistleAudioLoading = fetch(RECORDED_REFEREE_WHISTLE_PATH)
+    .then((response) => {
+      if (!response.ok) throw new Error(`referee whistle audio ${response.status}`);
+      return response.arrayBuffer();
+    })
+    .then((buffer) => context.decodeAudioData(buffer))
+    .then((buffer) => {
+      active.whistleAudioBuffer = buffer;
+      active.renderer.domElement.dataset.recordedWhistleAudio = "ready";
+    })
+    .catch((error: unknown) => {
+      active.whistleAudioUnavailable = true;
+      active.renderer.domElement.dataset.recordedWhistleAudio = "unavailable";
+      console.warn("[Futbahl audio] Recorded referee whistle unavailable.", error);
+    })
+    .finally(() => {
+      active.whistleAudioLoading = null;
+    });
+  return active.whistleAudioLoading;
+}
+
 function ensureCrowdMix(active: MatchRuntime) {
   if (!active.audio) return null;
   if (active.crowdMasterGain) return active.crowdMasterGain;
@@ -12725,6 +12766,7 @@ function startCrowdAmbience(active: MatchRuntime) {
 function startMatchAudio(active: MatchRuntime) {
   ensureAudio(active);
   if (!active.audio) return;
+  void loadRecordedWhistleAudio(active);
   const start = () => {
     if (active.state !== "playing") return;
     startCrowdAmbience(active);
@@ -12891,12 +12933,54 @@ function playCrowdCheer(active: MatchRuntime) {
   playCrowdClip(active, goalBuffer, 2.25, 0.12, 0.78);
 }
 
-function playWhistleSequence(active: MatchRuntime, count: 2 | 3) {
-  for (let i = 0; i < count; i += 1) {
-    scheduleRuntimeTimeout(active, () => {
-      playTone(active, 1760, 0.18, 0.09, "sine");
-      scheduleRuntimeTimeout(active, () => playTone(active, 1320, 0.08, 0.035, "sine"), 32);
-    }, i * 360);
+function playRecordedWhistleBlast(active: MatchRuntime, duration: number, delayMs: number) {
+  scheduleRuntimeTimeout(active, () => {
+    const audio = active.audio;
+    const buffer = active.whistleAudioBuffer;
+    if (!audio || audio.state !== "running" || !buffer) return;
+    const start = audio.currentTime;
+    const playbackDuration = Math.min(duration, buffer.duration);
+    const source = audio.createBufferSource();
+    const gain = audio.createGain();
+    source.buffer = buffer;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.linearRampToValueAtTime(0.52, start + 0.012);
+    gain.gain.setValueAtTime(0.52, Math.max(start + 0.014, start + playbackDuration - 0.045));
+    gain.gain.linearRampToValueAtTime(0.0001, start + playbackDuration);
+    source.connect(gain);
+    gain.connect(audio.destination);
+    trackRuntimeAudioSource(active, source);
+    source.addEventListener("ended", () => gain.disconnect(), { once: true });
+    source.start(start, 0, playbackDuration);
+    source.stop(start + playbackDuration + 0.02);
+  }, delayMs);
+}
+
+function playWhistleEvent(active: MatchRuntime, event: WhistleEvent, eventKey: string) {
+  const now = performance.now();
+  if (
+    active.lastWhistleEventKey === eventKey
+    || now - active.lastWhistleEventTime < 240
+  ) return;
+  active.lastWhistleEventKey = eventKey;
+  active.lastWhistleEventTime = now;
+  const play = () => {
+    if (!active.whistleAudioBuffer || active.state === "menu") return;
+    const pattern = event === "halftime"
+      ? [0.24, 0.24]
+      : event === "fulltime"
+        ? [0.24, 0.24, 0.46]
+        : [0.26];
+    pattern.forEach((duration, index) => {
+      playRecordedWhistleBlast(active, duration, index * 430);
+    });
+    active.renderer.domElement.dataset.lastWhistleEvent = event;
+    active.renderer.domElement.dataset.lastWhistleCount = String(pattern.length);
+  };
+  if (active.whistleAudioBuffer) {
+    play();
+  } else {
+    void loadRecordedWhistleAudio(active)?.then(play);
   }
 }
 
