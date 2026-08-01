@@ -91,15 +91,29 @@ const waitForMatchState = async (state, timeoutMs = 12000) => {
   }
   return false;
 };
-const waitForButtonText = async (text, timeoutMs = 12000) => {
-  const normalizedText = text.trim().toLowerCase();
+const waitForButtonText = async (text, timeoutMs = 30000) => {
+  const normalizedText = text.replace(/\s+/g, "").toLowerCase();
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const found = await evaluate(`(() => [...document.querySelectorAll('button')].some((button) => button.textContent?.trim().toLowerCase() === ${JSON.stringify(normalizedText)}))()`);
+    const found = await evaluate(`(() => [...document.querySelectorAll('button')].some((button) => !button.disabled && button.textContent?.replace(/\\s+/g, '').toLowerCase() === ${JSON.stringify(normalizedText)}))()`);
     if (found) return true;
     await sleep(100);
   }
   return false;
+};
+const clickButtonText = async (text) => {
+  const normalizedText = text.replace(/\s+/g, "").toLowerCase();
+  const point = await evaluate(`(() => {
+    const button = [...document.querySelectorAll('button')].find((candidate) => !candidate.disabled && candidate.textContent?.replace(/\\s+/g, '').toLowerCase() === ${JSON.stringify(normalizedText)});
+    if (!button) return null;
+    const rect = button.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`);
+  if (!point) return false;
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
+  return true;
 };
 
 await send("Runtime.enable");
@@ -117,16 +131,8 @@ await sleep(850);
 if (mode !== "start-screen" && mode !== "tutorial-smoke") {
   const kickoffReady = await waitForButtonText("kickoff");
   if (kickoffReady) {
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < 12000) {
-      const matchState = await evaluate(`(() => {
-        const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().toLowerCase() === 'kickoff');
-        kickoff?.click();
-        return document.querySelector('main')?.dataset.matchState ?? null;
-      })()`);
-      if (matchState && matchState !== "menu") break;
-      await sleep(100);
-    }
+    await clickButtonText("kickoff");
+    await waitForMatchState("playing");
   }
 }
 await sleep(1800);
@@ -188,7 +194,7 @@ if (mode === "tutorial-smoke") {
     await sleep(350);
     lifecycleSamples.push({ event: "tutorial-exit", ...(await readLifecycle()) });
     await evaluate(`(() => {
-      const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim().toLowerCase() === 'kickoff');
+      const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.replace(/\\s+/g, '').toLowerCase() === 'kickoff');
       button?.click();
       return Boolean(button);
     })()`);
@@ -215,7 +221,7 @@ if (mode === "lifecycle") {
     })()`);
     await sleep(180);
     await evaluate(`(() => {
-      const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().toLowerCase() === 'kickoff');
+      const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.replace(/\\s+/g, '').toLowerCase() === 'kickoff');
       kickoff?.click();
       return Boolean(kickoff);
     })()`);
@@ -252,7 +258,7 @@ if (mode === "lifecycle-events") {
   await send("Page.reload", { ignoreCache: true });
   await sleep(1900);
   await evaluate(`(() => {
-    const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().toLowerCase() === 'kickoff');
+    const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.replace(/\\s+/g, '').toLowerCase() === 'kickoff');
     kickoff?.click();
     return Boolean(kickoff);
   })()`);
@@ -268,7 +274,7 @@ if (mode === "fulltime-lifecycle") {
     lifecycleSamples.push({ iteration, event: "full-time", reachedFullTime, ...(await readLifecycle()) });
     if (!reachedFullTime) break;
     const restarted = await evaluate(`(() => {
-      const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim().toLowerCase() === 'kickoff');
+      const kickoff = [...document.querySelectorAll('button')].find((button) => button.textContent?.replace(/\\s+/g, '').toLowerCase() === 'kickoff');
       kickoff?.click();
       return Boolean(kickoff);
     })()`);
@@ -343,7 +349,7 @@ const diagnostics = await evaluate(`(() => {
   const canvas = document.querySelector('canvas');
   if (!canvas) return { error: 'no canvas' };
   const keys = [
-    'phase','ballState','ballOwner','ballX','ballY','ballZ','fps','averageFrameMs','rafLoops','sceneNodes','playerCount','colliderCount',
+    'phase','ballState','ballOwner','ballX','ballY','ballZ','fps','averageFrameMs','frameP95Ms','frameP99Ms','frameMaxMs','rafLoops','sceneNodes','playerCount','colliderCount',
     'aerialReceptionTestsRequested','aerialReceptionTestsRemaining','aerialReceptionTestsPassed','aerialReceptionTestsFailed',
     'aerialFirstTouches','lastAerialFirstTouchType','lastAerialFirstTouchDistance','lastFirstTouchProbeType','lastFirstTouchProbeDistance','lastFirstTouchProbeRadius','aerialReceiverId','aerialReceiverX','aerialReceiverZ','aerialArrivalTime','aerialTouchPlan','aerialLandingX','aerialLandingZ',
     'defensiveDangerPhase','defendersInsideTwelve','outfieldInsideTwentyEight','nearCarrierDefenders','closeCarrierDefenders',
@@ -383,7 +389,7 @@ const diagnostics = await evaluate(`(() => {
   const result = Object.fromEntries(keys.map((key) => [key, canvas.dataset[key] ?? null]));
   result.visibleButtons = [...document.querySelectorAll('button')]
     .filter((button) => button.offsetParent !== null)
-    .map((button) => button.textContent?.replace(/\s+/g, ' ').trim())
+    .map((button) => button.textContent?.replace(/\\s+/g, ' ').trim())
     .filter(Boolean);
   return result;
 })()`);

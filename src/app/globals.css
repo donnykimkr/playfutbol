@@ -58,107 +58,167 @@ canvas {
   }
 }
 
+@keyframes futbahl-goal-wipe {
+  0% {
+    opacity: 0;
+    transform: translateX(-0.9rem);
+  }
+  18%,
+  82% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(0.7rem);
+  }
+}
+
 .futbahl-scoreboard {
   display: grid;
-  grid-template-columns: 2.4rem minmax(5.5rem, 8rem) 2.8rem 1.3rem 2.8rem minmax(5.5rem, 8rem) 5rem;
-  width: min(37.5rem, calc(100vw - 1rem));
-  min-height: 2.75rem;
-  overflow: hidden;
-  border-top: 2px solid #76f7c5;
-  background: #0c1728;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 38%);
-  clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 9px 100%, 0 calc(100% - 9px));
+  grid-template-columns: minmax(6rem, 9.5rem) 4.8rem minmax(6rem, 9.5rem);
+  grid-template-rows: 2.7rem 1.35rem;
+  width: min(24rem, calc(100vw - 1rem));
+  filter: drop-shadow(0 7px 14px rgb(0 0 0 / 38%));
   color: #fff;
   font-family: Arial, Helvetica, sans-serif;
   letter-spacing: 0;
   animation: futbahl-scoreboard-enter 240ms ease-out both;
 }
 
-.futbahl-scoreboard > span {
-  display: grid;
-  min-width: 0;
-  place-items: center;
-}
-
 .futbahl-scoreboard__time {
-  border-left: 1px solid rgb(255 255 255 / 12%);
-  background: #17253a;
-  color: #b6ffe4;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 800;
-}
-
-.futbahl-scoreboard__brand {
-  background: #15962f;
+  grid-column: 2;
+  grid-row: 2;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  border-radius: 0 0 0.55rem 0.55rem;
+  background: #26123f;
   color: #fff;
-  font-size: 1rem;
-  font-weight: 950;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
 }
 
 .futbahl-scoreboard__separator {
-  background: #111f31;
-  color: #8fa2b8;
+  color: rgb(255 255 255 / 42%);
+  font-size: 0.95rem;
   font-weight: 900;
 }
 
 .futbahl-scoreboard__team {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
   overflow: hidden;
-  padding: 0 0.8rem;
-  color: #f8fbff;
-  font-size: 0.72rem;
-  font-weight: 800;
+  padding: 0 1rem;
+  color: #fff;
+  font-size: 0.73rem;
+  font-weight: 900;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 42%);
+  transition: transform 220ms ease, filter 220ms ease;
+}
+
+.futbahl-scoreboard__team--away {
+  justify-content: flex-start;
+  clip-path: polygon(0 0, calc(100% - 0.65rem) 0, 100% 50%, calc(100% - 0.65rem) 100%, 0 100%);
+}
+
+.futbahl-scoreboard__team--home {
+  justify-content: flex-end;
+  clip-path: polygon(0.65rem 0, 100% 0, 100% 100%, 0.65rem 100%, 0 50%);
+}
+
+.futbahl-scoreboard__team-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.futbahl-scoreboard__team--away {
-  justify-items: start;
-}
-
-.futbahl-scoreboard__team--home {
-  justify-items: end;
-}
-
 .futbahl-scoreboard__score {
-  background: #76f7c5;
-  color: #081821;
-  font-size: 1.45rem;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr 0.8rem 1fr;
+  place-items: center;
+  background: #f8fafc;
+  color: #151020;
+  font-size: 1.42rem;
   font-variant-numeric: tabular-nums;
   font-weight: 950;
   line-height: 1;
 }
 
-.futbahl-scoreboard__score--away {
-  background: #f4fff9;
+.futbahl-scoreboard__goal-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: inherit;
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+  opacity: 0;
+  transform: translateX(-0.9rem);
 }
 
-.futbahl-scoreboard__score--home {
-  border-right: 1px solid rgb(8 24 33 / 26%);
+.futbahl-scoreboard__team.is-scoring {
+  z-index: 2;
+  filter: brightness(1.13) saturate(1.12);
+  transform: scaleX(1.08);
+}
+
+.futbahl-scoreboard__team.is-scoring .futbahl-scoreboard__team-name {
+  opacity: 0;
+}
+
+.futbahl-scoreboard__team.is-scoring .futbahl-scoreboard__goal-label {
+  animation: futbahl-goal-wipe 2.6s ease both;
+}
+
+.futbahl-kickoff-button {
+  clip-path: polygon(0.9rem 0, 100% 0, calc(100% - 0.9rem) 100%, 0 100%);
+  border: 1px solid rgb(110 231 183 / 58%);
+  background: linear-gradient(112deg, #10271d 0 13%, #15962f 13% 88%, #10271d 88% 100%);
+  box-shadow: 0 9px 22px rgb(0 0 0 / 28%), inset 0 1px 0 rgb(255 255 255 / 16%);
+}
+
+.futbahl-kickoff-button:hover:not(:disabled) {
+  background: linear-gradient(112deg, #163426 0 13%, #19aa38 13% 88%, #163426 88% 100%);
+  transform: translateY(-2px);
+}
+
+.futbahl-kickoff-button:active:not(:disabled) {
+  background: linear-gradient(112deg, #0c1d16 0 13%, #128329 13% 88%, #0c1d16 88% 100%);
+  box-shadow: 0 4px 10px rgb(0 0 0 / 28%), inset 0 2px 5px rgb(0 0 0 / 26%);
+  transform: translateY(1px);
+}
+
+.futbahl-kickoff-button:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.72);
+  opacity: 0.55;
 }
 
 @media (max-width: 520px) {
   .futbahl-scoreboard {
-    grid-template-columns: minmax(3.4rem, 1fr) 2.45rem 1rem 2.45rem minmax(3.4rem, 1fr) 4rem;
-    width: min(24rem, calc(100vw - 0.75rem));
-    min-height: 2.4rem;
-  }
-
-  .futbahl-scoreboard__brand {
-    display: none !important;
+    grid-template-columns: minmax(4.7rem, 7rem) 4rem minmax(4.7rem, 7rem);
+    grid-template-rows: 2.35rem 1.15rem;
+    width: min(18rem, calc(100vw - 0.75rem));
   }
 
   .futbahl-scoreboard__time {
-    font-size: 0.68rem;
+    font-size: 0.62rem;
   }
 
   .futbahl-scoreboard__team {
-    padding: 0 0.45rem;
-    font-size: 0.64rem;
+    padding: 0 0.75rem;
+    font-size: 0.6rem;
   }
 
   .futbahl-scoreboard__score {
-    font-size: 1.25rem;
+    font-size: 1.2rem;
   }
 }
