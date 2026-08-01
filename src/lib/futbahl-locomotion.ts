@@ -4,14 +4,35 @@ import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.j
 
 export type FutbahlLocomotionState =
   | "Idle"
+  | "Walk"
   | "Jog"
+  | "Run"
   | "Sprint"
+  | "ForwardLeft"
+  | "ForwardRight"
+  | "BackwardLeft"
+  | "BackwardRight"
   | "StrafeLeft"
   | "StrafeRight"
   | "Backpedal"
   | "TurnLeft"
   | "TurnRight"
   | "Stop";
+
+export type FutbahlAnimationState =
+  | FutbahlLocomotionState
+  | "DefensiveReady"
+  | "KeeperReady"
+  | "Pass"
+  | "Shot"
+  | "Header"
+  | "SlideTackle"
+  | "Block"
+  | "Catch"
+  | "KeeperDive"
+  | "Recovery"
+  | "PassRequest"
+  | "Celebrate";
 
 export type FutbahlPlayerAppearance = {
   playerId: string;
@@ -55,6 +76,13 @@ export type FutbahlMotionSample = {
   diveSide?: number;
   passRequestTimer?: number;
   celebrateTimer?: number;
+  tackleTimer?: number;
+  recoveryTimer?: number;
+  blockTimer?: number;
+  firstTouchTimer?: number;
+  isKeeper?: boolean;
+  defensive?: boolean;
+  keeperAction?: string;
   playerIndex?: number;
   possessionState?: string;
   distanceToBall?: number;
@@ -63,8 +91,14 @@ export type FutbahlMotionSample = {
 
 export const LOCOMOTION_CLIPS: Record<FutbahlLocomotionState, string> = {
   Idle: "Idle_Loop",
+  Walk: "Walk_Loop",
   Jog: "Jog_Fwd_Loop",
+  Run: "Jog_Fwd_Loop",
   Sprint: "Sprint_Loop",
+  ForwardLeft: "Jog_Fwd_Loop",
+  ForwardRight: "Jog_Fwd_Loop",
+  BackwardLeft: "Walk_Loop",
+  BackwardRight: "Walk_Loop",
   StrafeLeft: "Strafe_Left_Loop",
   StrafeRight: "Strafe_Right_Loop",
   Backpedal: "Jog_Back_Loop",
@@ -73,8 +107,50 @@ export const LOCOMOTION_CLIPS: Record<FutbahlLocomotionState, string> = {
   Stop: "Stop",
 };
 
+export const QUATERNIUS_CLIP_INVENTORY = [
+  "A_TPose", "Crouch_Fwd_Loop", "Crouch_Idle_Loop", "Dance_Loop", "Death01",
+  "Driving_Loop", "Fixing_Kneeling", "Hit_Chest", "Hit_Head", "Idle_Loop",
+  "Idle_Talking_Loop", "Idle_Torch_Loop", "Interact", "Jog_Fwd_Loop", "Jump_Land",
+  "Jump_Loop", "Jump_Start", "PickUp_Table", "Pistol_Aim_Down", "Pistol_Aim_Neutral",
+  "Pistol_Aim_Up", "Pistol_Idle_Loop", "Pistol_Reload", "Pistol_Shoot", "Punch_Cross",
+  "Punch_Enter", "Punch_Jab", "Push_Loop", "Roll", "Roll_RM", "Sitting_Enter",
+  "Sitting_Exit", "Sitting_Idle_Loop", "Sitting_Talking_Loop", "Spell_Simple_Enter",
+  "Spell_Simple_Exit", "Spell_Simple_Idle_Loop", "Spell_Simple_Shoot", "Sprint_Loop",
+  "Swim_Fwd_Loop", "Swim_Idle_Loop", "Sword_Attack", "Sword_Attack_RM", "Sword_Idle",
+  "Walk_Formal_Loop", "Walk_Loop",
+] as const;
+
+export const QUATERNIUS_UAL2_CLIP_INVENTORY = [
+  "A_TPose", "Chest_Open", "ClimbUp_1m", "Consume", "Farm_Harvest", "Farm_PlantSeed",
+  "Farm_Watering", "Hit_Knockback", "Idle_FoldArms_Loop", "Idle_Lantern_Loop",
+  "Idle_No_Loop", "Idle_Rail_Call", "Idle_Rail_Loop", "Idle_Shield_Break",
+  "Idle_Shield_Loop", "Idle_TalkingPhone_Loop", "LayToIdle", "Melee_Hook",
+  "Melee_Hook_Rec", "NinjaJump_Idle_Loop", "NinjaJump_Land", "NinjaJump_Start",
+  "OverhandThrow", "Shield_Dash", "Shield_OneShot", "Slide_Exit", "Slide_Loop",
+  "Slide_Start", "Sword_Block", "Sword_Dash", "Sword_Heavy_Combo", "Sword_Regular_A",
+  "Sword_Regular_A_Rec", "Sword_Regular_B", "Sword_Regular_B_Rec", "Sword_Regular_C",
+  "Sword_Regular_Combo", "TreeChopping_Loop", "Walk_Carry_Loop", "Yes",
+  "Zombie_Idle_Loop", "Zombie_Scratch", "Zombie_Walk_Fwd_Loop",
+] as const;
+
+export const FOOTBALL_ANIMATION_MAP = {
+  idle: ["Idle_Loop", "Idle_Talking_Loop"],
+  walk: ["Walk_Loop", "Walk_Formal_Loop"],
+  jogRun: ["Jog_Fwd_Loop"],
+  sprint: ["Sprint_Loop"],
+  defensiveReady: ["Crouch_Idle_Loop"],
+  defensiveMove: ["Crouch_Fwd_Loop"],
+  jumpHeader: ["Jump_Start", "Jump_Loop", "Jump_Land"],
+  contactReaction: ["Hit_Chest", "Hit_Head"],
+  passRequest: ["Interact"],
+  celebration: ["Dance_Loop"],
+  benchOnly: ["Sitting_Enter", "Sitting_Idle_Loop", "Sitting_Exit"],
+  proceduralFallbacks: ["Pass", "Shot", "SlideTackle", "Block", "Catch", "KeeperDive", "Shield"],
+} as const;
+
 export const FUTBAHL_CHARACTER_ASSETS = {
   animation: "/models/futbahl-locomotion-prototype.glb",
+  animationLibrary2: "/models/quaternius-ual2-standard.glb",
   male: "/models/futbahl-base-male.glb",
   wordmark: "/branding/futbahl-wordmark-white.png",
   hair: [
@@ -83,14 +159,21 @@ export const FUTBAHL_CHARACTER_ASSETS = {
   ],
   characterLicense: "/models/futbahl-base-characters.LICENSE.txt",
   animationLicense: "/models/futbahl-locomotion-prototype.LICENSE.txt",
-  source: "Quaternius Universal Base Characters and Universal Animation Library",
+  animationLibrary2License: "/models/quaternius-ual2-standard.LICENSE.txt",
+  source: "Quaternius Universal Base Characters, Universal Animation Library, and Universal Animation Library 2",
   license: "CC0 1.0",
 } as const;
 
 const FALLBACK_CLIPS: Record<FutbahlLocomotionState, string[]> = {
   Idle: ["Idle_Loop"],
+  Walk: ["Walk_Loop", "Jog_Fwd_Loop"],
   Jog: ["Jog_Fwd_Loop", "Walk_Loop"],
+  Run: ["Jog_Fwd_Loop", "Sprint_Loop"],
   Sprint: ["Sprint_Loop", "Jog_Fwd_Loop"],
+  ForwardLeft: ["Jog_Fwd_Loop", "Walk_Loop"],
+  ForwardRight: ["Jog_Fwd_Loop", "Walk_Loop"],
+  BackwardLeft: ["Walk_Loop", "Jog_Fwd_Loop"],
+  BackwardRight: ["Walk_Loop", "Jog_Fwd_Loop"],
   StrafeLeft: ["Jog_Fwd_Loop", "Walk_Loop"],
   StrafeRight: ["Jog_Fwd_Loop", "Walk_Loop"],
   Backpedal: ["Walk_Loop", "Jog_Fwd_Loop"],
@@ -172,6 +255,9 @@ const TARGET_BONE_BY_SOURCE = new Map(
     target,
   ]),
 );
+const TARGET_BONE_NAMES = new Map(
+  Object.keys(TARGET_TO_SOURCE_BONES).map((target) => [normalizedBoneName(target), target]),
+);
 
 function makeRetargetedAsset(base: GLTF, animation: GLTF): SharedCharacterAsset {
   const target = firstSkinnedMesh(base.scene);
@@ -179,7 +265,7 @@ function makeRetargetedAsset(base: GLTF, animation: GLTF): SharedCharacterAsset 
   if (!target || !source) {
     throw new Error("The licensed character or animation GLB does not contain a skinned mesh.");
   }
-  const sourceHip = source.skeleton.getBoneByName("DEF-hips");
+  const sourceHip = source.skeleton.getBoneByName("DEF-hips") ?? source.skeleton.getBoneByName("pelvis");
   const targetHip = target.skeleton.getBoneByName("pelvis");
   const clips = animation.animations.map((clip) => {
     const tracks = clip.tracks.flatMap((track) => {
@@ -187,7 +273,9 @@ function makeRetargetedAsset(base: GLTF, animation: GLTF): SharedCharacterAsset 
       if (propertySeparator < 0) return [];
       const sourceName = track.name.slice(0, propertySeparator);
       const propertyName = track.name.slice(propertySeparator + 1);
-      const targetName = TARGET_BONE_BY_SOURCE.get(normalizedBoneName(sourceName));
+      const normalizedSourceName = normalizedBoneName(sourceName);
+      const targetName = TARGET_BONE_BY_SOURCE.get(normalizedSourceName)
+        ?? TARGET_BONE_NAMES.get(normalizedSourceName);
       if (!targetName || targetName === "root" || propertyName === "scale") return [];
       if (propertyName === "position" && targetName !== "pelvis") return [];
 
@@ -217,6 +305,7 @@ function makeRetargetedAsset(base: GLTF, animation: GLTF): SharedCharacterAsset 
 function loadSharedAssets() {
   sharedAssetsPromise ??= Promise.all([
     loader.loadAsync(FUTBAHL_CHARACTER_ASSETS.animation),
+    loader.loadAsync(FUTBAHL_CHARACTER_ASSETS.animationLibrary2),
     loader.loadAsync(FUTBAHL_CHARACTER_ASSETS.male),
     new THREE.TextureLoader().loadAsync(FUTBAHL_CHARACTER_ASSETS.wordmark).catch((error) => {
       warnOnce("wordmark", "[Futbahl player] Uniform wordmark failed to load; continuing without it.", error);
@@ -228,15 +317,19 @@ function loadSharedAssets() {
         warnOnce(`hair:${path}`, `[Futbahl player] Licensed hairstyle "${path}" failed to load; using the base hairstyle.`, error);
         return null;
       }))),
-  ]).then(([animation, male, wordmark, hair]) => {
+  ]).then(([animation, animationLibrary2, male, wordmark, hair]) => {
     if (wordmark) {
       wordmark.colorSpace = THREE.SRGBColorSpace;
       wordmark.generateMipmaps = false;
       wordmark.minFilter = THREE.LinearFilter;
       wordmark.magFilter = THREE.LinearFilter;
     }
+    const primary = makeRetargetedAsset(male, animation);
+    const secondary = makeRetargetedAsset(male, animationLibrary2);
+    const clipsByName = new Map(primary.clips.map((clip) => [clip.name, clip]));
+    secondary.clips.forEach((clip) => clipsByName.set(clip.name, clip));
     return {
-      male: makeRetargetedAsset(male, animation),
+      male: { scene: primary.scene, clips: [...clipsByName.values()] },
       hair,
       wordmark,
     };
@@ -479,16 +572,31 @@ function chooseState(
     if (angularVelocity < -0.42) return "TurnRight";
     return "Idle";
   }
+  if (localForward < -0.55 && Math.abs(localLateral) > 0.48) {
+    return localLateral < 0 ? "BackwardLeft" : "BackwardRight";
+  }
   if (localForward < -0.55 && Math.abs(localForward) > Math.abs(localLateral) * 0.78) return "Backpedal";
   if (Math.abs(localLateral) > 0.72 && Math.abs(localLateral) > Math.abs(localForward) * 1.08) {
     return localLateral < 0 ? "StrafeLeft" : "StrafeRight";
   }
-  return speed >= 7.35 ? "Sprint" : "Jog";
+  if (localForward > 0.4 && Math.abs(localLateral) > 0.48) {
+    return localLateral < 0 ? "ForwardLeft" : "ForwardRight";
+  }
+  if (speed < 2.15) return "Walk";
+  if (speed < 5.25) return "Jog";
+  if (speed < 8.15) return "Run";
+  return "Sprint";
 }
 
 function actionPlaybackSpeed(state: FutbahlLocomotionState, speed: number) {
   if (state === "Sprint") return THREE.MathUtils.clamp(speed / 9.4, 0.72, 1.35);
-  if (state === "Jog" || state === "StrafeLeft" || state === "StrafeRight" || state === "Backpedal") {
+  if (state === "Walk") return THREE.MathUtils.clamp(speed / 1.9, 0.55, 1.3);
+  if (
+    state === "Jog" || state === "Run"
+    || state === "ForwardLeft" || state === "ForwardRight"
+    || state === "BackwardLeft" || state === "BackwardRight"
+    || state === "StrafeLeft" || state === "StrafeRight" || state === "Backpedal"
+  ) {
     return THREE.MathUtils.clamp(speed / 4.8, 0.62, 1.42);
   }
   if (state === "TurnLeft" || state === "TurnRight") return 0.9;
@@ -510,7 +618,13 @@ export class FutbahlLocomotionController {
   private readonly forward = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
   private readonly bones: Record<string, THREE.Object3D | null>;
+  private readonly role: FutbahlPlayerAppearance["role"];
+  private readonly idleVariant: string;
+  private readonly idlePhase: number;
+  private readonly playbackVariation: number;
+  private readonly celebrationVariant: number;
   private state: FutbahlLocomotionState = "Idle";
+  private animationState: FutbahlAnimationState = "Idle";
   private currentAction: THREE.AnimationAction | null = null;
   private currentClip = "";
   private previousSpeed = 0;
@@ -538,6 +652,11 @@ export class FutbahlLocomotionController {
     this.host.add(this.visualRoot);
 
     const seed = stableHash(`${appearance.team}:${appearance.number}:${appearance.index}`);
+    this.role = appearance.role;
+    this.idleVariant = seed % 4 === 0 ? "Idle_Talking_Loop" : "Idle_Loop";
+    this.idlePhase = ((seed >>> 17) % 1000) / 1000;
+    this.playbackVariation = 0.96 + ((seed >>> 21) % 9) * 0.01;
+    this.celebrationVariant = (seed >>> 25) % 3;
     const skinTones = ["#f3c7a6", "#d79b73", "#a86643", "#6f412d"];
     const skinTone = skinTones[seed % skinTones.length];
     const height = 0.96 + ((seed >>> 5) % 9) * 0.01;
@@ -584,7 +703,7 @@ export class FutbahlLocomotionController {
       rightLeg: root.getObjectByName("thigh_r") ?? null,
       head: root.getObjectByName("Head") ?? null,
     };
-    this.transitionTo("Idle", 0);
+    this.transitionTo("Idle", 0, this.idleVariant);
   }
 
   static async create(
@@ -605,6 +724,14 @@ export class FutbahlLocomotionController {
     );
   }
 
+  get activeState() {
+    return this.animationState;
+  }
+
+  get activeClip() {
+    return this.currentClip;
+  }
+
   update(sample: FutbahlMotionSample) {
     if (this.disposed) return;
     const safeDt = THREE.MathUtils.clamp(sample.dt, 1 / 240, 0.05);
@@ -615,7 +742,7 @@ export class FutbahlLocomotionController {
     const localLateral = sample.velocity.dot(this.right);
     const acceleration = (speed - this.previousSpeed) / safeDt;
     const angularVelocity = shortestAngleDelta(this.previousHeading, sample.heading) / safeDt;
-    const nextState = chooseState(
+    let nextState = chooseState(
       speed,
       localForward,
       localLateral,
@@ -623,9 +750,29 @@ export class FutbahlLocomotionController {
       angularVelocity,
       this.previousSpeed,
     );
+    const criticalState = this.resolveCriticalState(sample);
+    if (!criticalState && speed < 0.38 && (sample.isKeeper || this.role === "keeper")) {
+      nextState = "Idle";
+    }
     if (nextState !== this.state) this.transitionTo(nextState, 0.18);
 
-    const playbackSpeed = actionPlaybackSpeed(this.state, speed);
+    this.animationState = criticalState
+      ?? ((sample.isKeeper || this.role === "keeper") && speed < 0.42 ? "KeeperReady"
+        : sample.defensive && speed < 0.42 ? "DefensiveReady"
+          : nextState);
+    const contextualClip = this.contextualClip(this.animationState, speed);
+    if (contextualClip && contextualClip !== this.currentClip) {
+      const contextualLoops = this.animationState === "Celebrate"
+        || this.animationState === "KeeperReady"
+        || this.animationState === "DefensiveReady"
+        || this.animationState === "SlideTackle";
+      this.transitionTo(nextState, 0.16, contextualClip, contextualLoops);
+    } else if (!contextualClip && this.currentClip !== this.resolveClip(nextState)) {
+      const idleClip = nextState === "Idle" ? this.idleVariant : "";
+      this.transitionTo(nextState, 0.18, idleClip);
+    }
+
+    const playbackSpeed = actionPlaybackSpeed(this.state, speed) * this.playbackVariation;
     if (this.currentAction) this.currentAction.timeScale = playbackSpeed;
     const forwardLean = THREE.MathUtils.clamp(-acceleration * 0.0065, -0.13, 0.09);
     const lateralLean = THREE.MathUtils.clamp(-localLateral * 0.014, -0.1, 0.1);
@@ -646,7 +793,7 @@ export class FutbahlLocomotionController {
     const updateInterval = (sample.distanceToCamera ?? 0) > 92 ? 1 / 30 : 0;
     if (updateInterval === 0 || this.mixerAccumulator >= updateInterval) {
       this.mixer.update(this.mixerAccumulator);
-      this.applyActionOverlay(sample);
+      this.applyActionOverlay(sample, speed, safeDt);
       this.mixerAccumulator = 0;
     }
 
@@ -689,31 +836,111 @@ export class FutbahlLocomotionController {
     this.previousSpeed = 0;
   }
 
-  private applyActionOverlay(sample: FutbahlMotionSample) {
-    const kick = THREE.MathUtils.clamp((sample.kickTimer ?? 0) / 0.34, 0, 1);
+  private resolveCriticalState(sample: FutbahlMotionSample): FutbahlAnimationState | null {
+    if ((sample.diveTimer ?? 0) > 0) return "KeeperDive";
+    if ((sample.tackleTimer ?? 0) > 0) return "SlideTackle";
+    if ((sample.recoveryTimer ?? 0) > 0) return "Recovery";
+    if ((sample.kickTimer ?? 0) > 0) return (sample.kickTimer ?? 0) > 0.46 ? "Shot" : "Pass";
+    if ((sample.headerTimer ?? 0) > 0) return "Header";
+    if ((sample.catchTimer ?? 0) > 0) return "Catch";
+    if ((sample.blockTimer ?? 0) > 0) return "Block";
+    if ((sample.celebrateTimer ?? 0) > 0) return "Celebrate";
+    if ((sample.passRequestTimer ?? 0) > 0) return "PassRequest";
+    return null;
+  }
+
+  private contextualClip(state: FutbahlAnimationState, speed: number) {
+    if (state === "SlideTackle" && this.availableClips.has("Slide_Loop")) return "Slide_Loop";
+    if (state === "Recovery" && this.availableClips.has("Slide_Exit")) return "Slide_Exit";
+    if (state === "Header" && this.availableClips.has("Jump_Start")) return "Jump_Start";
+    if (state === "Celebrate" && this.availableClips.has("Dance_Loop")) return "Dance_Loop";
+    if ((state === "KeeperReady" || state === "DefensiveReady") && this.availableClips.has("Crouch_Idle_Loop")) {
+      return "Crouch_Idle_Loop";
+    }
+    if (state === "PassRequest" && speed < 0.35 && this.availableClips.has("Interact")) return "Interact";
+    return "";
+  }
+
+  private applyActionOverlay(sample: FutbahlMotionSample, speed: number, dt: number) {
+    const kickTimer = sample.kickTimer ?? 0;
+    const kickDuration = kickTimer > 0.46 ? 0.54 : 0.46;
+    const kickProgress = THREE.MathUtils.clamp(1 - kickTimer / kickDuration, 0, 1);
+    // Gameplay applies the impulse when kickTimer starts. Begin on the visible
+    // contact pose and use the remaining timer for a clean follow-through so
+    // the foot and ball never disagree about the contact frame.
+    const kick = kickTimer > 0 ? Math.cos(kickProgress * Math.PI * 0.5) : 0;
     const header = THREE.MathUtils.clamp((sample.headerTimer ?? 0) / 0.55, 0, 1);
     const catchAmount = THREE.MathUtils.clamp((sample.catchTimer ?? 0) / 0.62, 0, 1);
+    const tackleAmount = THREE.MathUtils.clamp((sample.tackleTimer ?? 0) / 0.58, 0, 1);
+    const recoveryAmount = THREE.MathUtils.clamp((sample.recoveryTimer ?? 0) / 0.72, 0, 1);
+    const blockAmount = THREE.MathUtils.clamp((sample.blockTimer ?? 0) / 0.5, 0, 1);
+    const diveAmount = THREE.MathUtils.clamp((sample.diveTimer ?? 0) / 0.62, 0, 1);
     const celebrate = THREE.MathUtils.clamp((sample.celebrateTimer ?? 0) / 2.2, 0, 1);
     const request = sample.passRequestTimer ?? 0;
     if (kick > 0 && this.bones.rightLeg) {
-      this.bones.rightLeg.rotation.x += Math.sin(kick * Math.PI) * 0.9;
-      if (this.bones.spine) this.bones.spine.rotation.x -= Math.sin(kick * Math.PI) * 0.13;
+      this.bones.rightLeg.rotation.x += kick * 1.05;
+      if (this.bones.leftLeg) this.bones.leftLeg.rotation.x -= kick * 0.2;
+      if (this.bones.spine) {
+        this.bones.spine.rotation.x -= kick * 0.16;
+        this.bones.spine.rotation.y += kick * 0.08;
+      }
+    }
+    if (diveAmount > 0) {
+      const dive = Math.sin((1 - diveAmount) * Math.PI);
+      const side = Math.sign(sample.diveSide ?? 0) || 1;
+      if (this.bones.leftArm) {
+        this.bones.leftArm.rotation.x -= 1.04 * dive;
+        this.bones.leftArm.rotation.z += side * 0.5 * dive;
+      }
+      if (this.bones.rightArm) {
+        this.bones.rightArm.rotation.x -= 1.04 * dive;
+        this.bones.rightArm.rotation.z += side * 0.5 * dive;
+      }
+      if (this.bones.spine) this.bones.spine.rotation.z += side * 0.36 * dive;
+      this.visualRoot.position.y = 0.1 * dive;
     }
     if (header > 0 && this.bones.spine) {
       this.bones.spine.rotation.x += Math.sin(header * Math.PI * 2) * 0.28;
     }
-    if (catchAmount > 0) {
+    if (diveAmount > 0) {
+      // Keeper dive pose above has priority over every lower-body contextual pose.
+    } else if (tackleAmount > 0) {
+      const lunge = Math.sin((1 - tackleAmount) * Math.PI);
+      if (this.bones.rightLeg) this.bones.rightLeg.rotation.x += 1.25 * lunge;
+      if (this.bones.leftLeg) this.bones.leftLeg.rotation.x -= 0.48 * lunge;
+      if (this.bones.spine) this.bones.spine.rotation.x -= 0.42 * lunge;
+      this.visualRoot.position.y = -0.16 * lunge;
+      this.visualRoot.rotation.x = damp(this.visualRoot.rotation.x, -0.34 * lunge, 14, dt);
+    } else if (recoveryAmount > 0) {
+      const recover = Math.sin(recoveryAmount * Math.PI);
+      if (this.bones.spine) this.bones.spine.rotation.x -= 0.22 * recover;
+      this.visualRoot.position.y = -0.08 * recover;
+    } else if (catchAmount > 0) {
       const armRaise = -1.1 * Math.sin(catchAmount * Math.PI);
       if (this.bones.leftArm) this.bones.leftArm.rotation.x += armRaise;
       if (this.bones.rightArm) this.bones.rightArm.rotation.x += armRaise;
-    } else if (request > 0 && this.bones.rightArm) {
+    } else if (blockAmount > 0) {
+      const block = Math.sin(blockAmount * Math.PI);
+      if (this.bones.leftLeg) this.bones.leftLeg.rotation.x += 0.62 * block;
+      if (this.bones.rightArm) this.bones.rightArm.rotation.z -= 0.46 * block;
+    } else if (request > 0 && speed < 7.2 && this.bones.rightArm) {
       this.bones.rightArm.rotation.z -= 1.18;
     }
     if (celebrate > 0) {
-      if (this.bones.leftArm) this.bones.leftArm.rotation.z += 1.08;
-      if (this.bones.rightArm) this.bones.rightArm.rotation.z -= 1.08;
-      this.visualRoot.position.y = Math.max(0, Math.sin(celebrate * Math.PI * 5)) * 0.08;
-    } else {
+      const pulse = Math.sin(celebrate * Math.PI * (this.celebrationVariant === 1 ? 6 : 4));
+      if (this.celebrationVariant === 0) {
+        if (this.bones.leftArm) this.bones.leftArm.rotation.z += 1.08;
+        if (this.bones.rightArm) this.bones.rightArm.rotation.z -= 1.08;
+      } else if (this.celebrationVariant === 1) {
+        if (this.bones.leftArm) this.bones.leftArm.rotation.x -= 0.72 + pulse * 0.18;
+        if (this.bones.rightArm) this.bones.rightArm.rotation.x -= 0.72 - pulse * 0.18;
+      } else {
+        if (this.bones.leftArm) this.bones.leftArm.rotation.z += 0.72;
+        if (this.bones.rightArm) this.bones.rightArm.rotation.x -= 0.8;
+        if (this.bones.spine) this.bones.spine.rotation.y += pulse * 0.16;
+      }
+      this.visualRoot.position.y = Math.max(0, pulse) * (this.celebrationVariant === 1 ? 0.12 : 0.06);
+    } else if (diveAmount <= 0 && tackleAmount <= 0 && recoveryAmount <= 0) {
       this.visualRoot.position.y = 0;
     }
   }
@@ -724,18 +951,25 @@ export class FutbahlLocomotionController {
     return FALLBACK_CLIPS[state].find((clipName) => this.availableClips.has(clipName)) ?? "";
   }
 
-  private transitionTo(state: FutbahlLocomotionState, fadeDuration: number) {
-    const clipName = this.resolveClip(state);
+  private transitionTo(
+    state: FutbahlLocomotionState,
+    fadeDuration: number,
+    forcedClip = "",
+    loop = true,
+  ) {
+    const clipName = forcedClip && this.availableClips.has(forcedClip) ? forcedClip : this.resolveClip(state);
     const clip = this.availableClips.get(clipName);
     if (!clip) return;
     let nextAction = this.actions.get(clipName);
     if (!nextAction) {
       nextAction = this.mixer.clipAction(clip);
-      nextAction.setLoop(THREE.LoopRepeat, Number.POSITIVE_INFINITY);
       this.actions.set(clipName, nextAction);
     }
+    nextAction.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Number.POSITIVE_INFINITY : 1);
+    nextAction.clampWhenFinished = !loop;
     if (nextAction !== this.currentAction) {
       nextAction.reset().fadeIn(fadeDuration).play();
+      if (loop && state === "Idle") nextAction.time = clip.duration * this.idlePhase;
       this.currentAction?.fadeOut(fadeDuration);
       this.currentAction = nextAction;
     }

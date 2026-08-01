@@ -9949,6 +9949,17 @@ function celebrateGoal(active: MatchRuntime, concedingTeam: TeamId, scoredBy: Te
     player.celebrateTimer = 0;
     player.supportRunTimer = 0;
   });
+  const scorer = active.players.find((player) => player.id === active.lastTouchPlayerId && player.team === scoredBy) ?? null;
+  if (scorer) {
+    scorer.celebrateTimer = 2.55;
+    active.players
+      .filter((player) => player.team === scoredBy && player.id !== scorer.id && !player.sentOff)
+      .sort((left, right) => left.pos.distanceToSquared(scorer.pos) - right.pos.distanceToSquared(scorer.pos))
+      .slice(0, 3)
+      .forEach((player, index) => {
+        player.celebrateTimer = 1.55 + index * 0.18;
+      });
+  }
 }
 
 type ManualRestartOption = {
@@ -12599,11 +12610,35 @@ function animatePlayer(player: PlayerBody, dt: number, camera?: THREE.Camera, ac
       diveSide: player.diveSide,
       passRequestTimer: player.passRequestTimer,
       celebrateTimer: player.celebrateTimer,
+      tackleTimer: player.tackleTimer,
+      recoveryTimer: player.recoveryTimer,
+      blockTimer: player.blockTimer,
+      firstTouchTimer: player.firstTouchTimer,
+      isKeeper: player.role === "keeper",
+      defensive: Boolean(active?.ballOwnerId)
+        && active?.players.find((candidate) => candidate.id === active.ballOwnerId)?.team !== player.team,
+      keeperAction: player.keeperAction,
       playerIndex: active?.players.indexOf(player) ?? -1,
       possessionState: active?.ballOwnerId === player.id ? "owner" : active?.ballState ?? "unknown",
       distanceToBall: active ? player.pos.distanceTo(active.ballPos.clone().setY(0)) : 0,
       controlTargetDistance,
     });
+    if (
+      active
+      && typeof window !== "undefined"
+      && new URLSearchParams(window.location.search).has("locomotionDebug")
+      && (player.kickTimer > 0 || player.tackleTimer > 0 || player.headerTimer > 0 || player.diveTimer > 0 || player.catchTimer > 0)
+    ) {
+      active.renderer.domElement.dataset.lastCriticalAnimationPlayer = player.id;
+      active.renderer.domElement.dataset.lastCriticalAnimationState = player.locomotionController.activeState;
+      active.renderer.domElement.dataset.lastCriticalAnimationClip = player.locomotionController.activeClip;
+      const criticalToken = `${player.locomotionController.activeState}:${player.locomotionController.activeClip}`;
+      const observedCriticalAnimations = new Set(
+        (active.renderer.domElement.dataset.observedCriticalAnimations ?? "").split("|").filter(Boolean),
+      );
+      observedCriticalAnimations.add(criticalToken);
+      active.renderer.domElement.dataset.observedCriticalAnimations = [...observedCriticalAnimations].join("|");
+    }
     return;
   }
   const speed = Math.max(player.vel.length(), player.animationSpeed);

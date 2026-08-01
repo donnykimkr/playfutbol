@@ -87,7 +87,7 @@ Audio begins only after the player presses Kickoff. Active audio sources are sto
 
 ## Character Animation Asset
 
-The single-player skeletal locomotion prototype uses the Quaternius Universal Animation Library Standard Mannequin under CC0 1.0. The source and license are recorded in `public/models/futbahl-locomotion-prototype.LICENSE.txt`.
+The shared player animation controller uses Quaternius Universal Animation Library Standard and Universal Animation Library 2 Standard under CC0 1.0. Source and license records are in `public/models/futbahl-locomotion-prototype.LICENSE.txt` and `public/models/quaternius-ual2-standard.LICENSE.txt`; the verified clip mapping is documented in `docs/quaternius-animation-system.md`.
 
 The short instanced grass edge detail uses Quaternius `Grass2.obj` from the Simple Nature Pack under CC0 1.0. The unmodified source geometry and attribution are stored in `public/models/quaternius-grass/`.
 
