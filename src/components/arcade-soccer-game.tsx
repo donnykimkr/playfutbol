@@ -10,7 +10,6 @@ import {
   type FutbahlPlayerAppearance,
 } from "@/lib/futbahl-locomotion";
 import { attachLicensedBallVisual } from "@/lib/futbahl-ball-visual";
-import { attachLicensedPitchGrass } from "@/lib/futbahl-grass";
 import {
   BODY_PRESETS as ANONYMOUS_BODY_PRESETS,
   changeFormation,
@@ -554,10 +553,10 @@ const GOAL_SCORE_Z = GOAL_FRONT_Z + BALL_RADIUS;
 const GOAL_BACK_Z = GOAL_FRONT_Z + GOAL_DEPTH;
 const GOAL_SIDE_POST_INSET = 0.26;
 const ADAPTIVE_TOUCHLINE_CAMERA = {
-  normalCameraDistance: 28,
-  nearTouchlineMaximumOutwardDistance: 36,
-  normalCameraHeight: 44,
-  maximumAdditionalHeight: 5,
+  normalCameraDistance: 10,
+  nearTouchlineMaximumOutwardDistance: 28,
+  normalCameraHeight: 22,
+  maximumAdditionalHeight: 4,
   lookAtLateralFollowStrength: 0.64,
   nearTouchlineActivationThreshold: 22,
   nearTouchlineFullEffectDistance: 4,
@@ -646,9 +645,9 @@ const AD_BOARD_BRAND_DURATION = 30;
 const AD_BOARD_TRANSITION_DURATION = 1.2;
 const AD_BOARD_TEXTURE_WIDTH = 2048;
 const AD_BOARD_TEXTURE_HEIGHT = 64;
-const GRASS_DARK_COLOR = "#176b37";
-const GRASS_LIGHT_COLOR = "#218247";
-const OUTER_GRASS_COLOR = "#12552f";
+const GRASS_DARK_COLOR = "#1d6f3d";
+const GRASS_LIGHT_COLOR = "#2b824a";
+const OUTER_GRASS_COLOR = "#155531";
 const GRASS_STRIPE_WIDTH = 8;
 const FLOOR_LAYER_MIN_SEPARATION = 0.05;
 const STADIUM_BASE_TOP_Y = -0.055;
@@ -659,7 +658,7 @@ const LANDING_MARKER_Y = 0.135;
 const RECORDED_CROWD_AMBIENT_PATH = "/audio/stadium-ambience.m4a";
 const RECORDED_CROWD_SWELL_PATH = "/audio/stadium-swell.m4a";
 const RECORDED_CROWD_GOAL_PATH = "/audio/stadium-goal-roar.m4a";
-const RECORDED_REFEREE_WHISTLE_PATH = "/audio/referee-whistle.mp3";
+const RECORDED_REFEREE_WHISTLE_PATH = "/audio/referee-whistle-from-crowd.m4a";
 const CROWD_AMBIENCE_CROSSFADE_SECONDS = 4;
 const CROWD_AMBIENCE_LAYER_GAIN = 0.92;
 const CROWD_MASTER_GAIN = 0.24;
@@ -2476,79 +2475,94 @@ function addPitch(scene: THREE.Scene) {
   scene.add(grassBase);
 
   const stripeCount = Math.ceil(grassLength / GRASS_STRIPE_WIDTH);
+  const textureWidth = 384;
+  const textureHeight = 576;
   const grassCanvas = document.createElement("canvas");
-  grassCanvas.width = 256;
-  grassCanvas.height = stripeCount * 32;
+  const normalCanvas = document.createElement("canvas");
+  const roughnessCanvas = document.createElement("canvas");
+  grassCanvas.width = normalCanvas.width = roughnessCanvas.width = textureWidth;
+  grassCanvas.height = normalCanvas.height = roughnessCanvas.height = textureHeight;
   const grassContext = grassCanvas.getContext("2d");
-  if (grassContext) {
-    for (let stripe = 0; stripe < stripeCount; stripe += 1) {
-      grassContext.fillStyle = stripe % 2 === 0 ? GRASS_DARK_COLOR : GRASS_LIGHT_COLOR;
-      grassContext.fillRect(0, stripe * 32, grassCanvas.width, 32);
-      const sheen = grassContext.createLinearGradient(0, stripe * 32, grassCanvas.width, stripe * 32);
-      sheen.addColorStop(0, "rgba(255,255,255,0.018)");
-      sheen.addColorStop(0.5, "rgba(255,255,255,0.045)");
-      sheen.addColorStop(1, "rgba(0,0,0,0.025)");
-      grassContext.fillStyle = sheen;
-      grassContext.fillRect(0, stripe * 32, grassCanvas.width, 32);
+  const normalContext = normalCanvas.getContext("2d");
+  const roughnessContext = roughnessCanvas.getContext("2d");
+  const heightField = new Float32Array(textureWidth * textureHeight);
+  const noise = (x: number, y: number) => {
+    const value = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+    return value - Math.floor(value);
+  };
+  if (grassContext && normalContext && roughnessContext) {
+    const colorImage = grassContext.createImageData(textureWidth, textureHeight);
+    const normalImage = normalContext.createImageData(textureWidth, textureHeight);
+    const roughnessImage = roughnessContext.createImageData(textureWidth, textureHeight);
+    const dark = new THREE.Color(GRASS_DARK_COLOR);
+    const light = new THREE.Color(GRASS_LIGHT_COLOR);
+    for (let y = 0; y < textureHeight; y += 1) {
+      const stripe = Math.floor(y / textureHeight * stripeCount);
+      const stripeColor = stripe % 2 === 0 ? dark : light;
+      for (let x = 0; x < textureWidth; x += 1) {
+        const pixel = y * textureWidth + x;
+        const index = pixel * 4;
+        const fine = noise(x, y) - 0.5;
+        const broad = Math.sin(x * 0.031 + y * 0.014) * 0.5 + Math.sin(x * 0.011 - y * 0.023) * 0.5;
+        const centerWear = Math.exp(-Math.pow((x / textureWidth - 0.5) / 0.19, 2))
+          * Math.exp(-Math.pow((y / textureHeight - 0.5) / 0.32, 2));
+        const variation = fine * 0.055 + broad * 0.018 - centerWear * 0.026;
+        colorImage.data[index] = Math.round(clamp((stripeColor.r + variation) * 255, 0, 255));
+        colorImage.data[index + 1] = Math.round(clamp((stripeColor.g + variation * 1.12) * 255, 0, 255));
+        colorImage.data[index + 2] = Math.round(clamp((stripeColor.b + variation * 0.72) * 255, 0, 255));
+        colorImage.data[index + 3] = 255;
+        heightField[pixel] = fine * 0.55 + broad * 0.18;
+        const roughness = clamp(226 + fine * 18 + centerWear * 8, 196, 246);
+        roughnessImage.data[index] = roughness;
+        roughnessImage.data[index + 1] = roughness;
+        roughnessImage.data[index + 2] = roughness;
+        roughnessImage.data[index + 3] = 255;
+      }
     }
-    const addWear = (x: number, y: number, radiusX: number, radiusY: number, opacity: number) => {
-      grassContext.save();
-      grassContext.translate(x, y);
-      grassContext.scale(1, radiusY / radiusX);
-      const wear = grassContext.createRadialGradient(0, 0, 0, 0, 0, radiusX);
-      wear.addColorStop(0, `rgba(205,190,120,${opacity})`);
-      wear.addColorStop(0.55, `rgba(178,164,102,${opacity * 0.42})`);
-      wear.addColorStop(1, "rgba(178,164,102,0)");
-      grassContext.fillStyle = wear;
-      grassContext.fillRect(-radiusX, -radiusX, radiusX * 2, radiusX * 2);
-      grassContext.restore();
-    };
-    addWear(grassCanvas.width / 2, grassCanvas.height / 2, 34, 72, 0.055);
-    addWear(grassCanvas.width / 2, 34, 54, 24, 0.075);
-    addWear(grassCanvas.width / 2, grassCanvas.height - 34, 54, 24, 0.075);
+    for (let y = 0; y < textureHeight; y += 1) {
+      for (let x = 0; x < textureWidth; x += 1) {
+        const index = (y * textureWidth + x) * 4;
+        const left = heightField[y * textureWidth + Math.max(0, x - 1)];
+        const right = heightField[y * textureWidth + Math.min(textureWidth - 1, x + 1)];
+        const up = heightField[Math.max(0, y - 1) * textureWidth + x];
+        const down = heightField[Math.min(textureHeight - 1, y + 1) * textureWidth + x];
+        const nx = clamp((left - right) * 0.16, -1, 1);
+        const ny = clamp((up - down) * 0.16, -1, 1);
+        normalImage.data[index] = Math.round((nx * 0.5 + 0.5) * 255);
+        normalImage.data[index + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+        normalImage.data[index + 2] = 255;
+        normalImage.data[index + 3] = 255;
+      }
+    }
+    grassContext.putImageData(colorImage, 0, 0);
+    normalContext.putImageData(normalImage, 0, 0);
+    roughnessContext.putImageData(roughnessImage, 0, 0);
   }
   const grassTexture = new THREE.CanvasTexture(grassCanvas);
   grassTexture.colorSpace = THREE.SRGBColorSpace;
   grassTexture.wrapS = THREE.ClampToEdgeWrapping;
   grassTexture.wrapT = THREE.ClampToEdgeWrapping;
-  grassTexture.generateMipmaps = false;
-  grassTexture.minFilter = THREE.LinearFilter;
+  grassTexture.minFilter = THREE.LinearMipmapLinearFilter;
   grassTexture.magFilter = THREE.LinearFilter;
-  grassTexture.needsUpdate = true;
-
-  const microCanvas = document.createElement("canvas");
-  microCanvas.width = 128;
-  microCanvas.height = 128;
-  const microContext = microCanvas.getContext("2d");
-  if (microContext) {
-    const image = microContext.createImageData(microCanvas.width, microCanvas.height);
-    for (let index = 0; index < image.data.length; index += 4) {
-      const pixel = index / 4;
-      const x = pixel % microCanvas.width;
-      const y = Math.floor(pixel / microCanvas.width);
-      const grain = 122 + Math.round(Math.sin(x * 1.73 + y * 2.19) * 10 + Math.sin(x * 0.31 - y * 0.47) * 7);
-      image.data[index] = grain;
-      image.data[index + 1] = grain;
-      image.data[index + 2] = grain;
-      image.data[index + 3] = 255;
-    }
-    microContext.putImageData(image, 0, 0);
-  }
-  const microTexture = new THREE.CanvasTexture(microCanvas);
-  microTexture.wrapS = THREE.RepeatWrapping;
-  microTexture.wrapT = THREE.RepeatWrapping;
-  microTexture.repeat.set(34, 52);
-  microTexture.generateMipmaps = false;
-  microTexture.minFilter = THREE.LinearFilter;
-  microTexture.magFilter = THREE.LinearFilter;
+  const normalTexture = new THREE.CanvasTexture(normalCanvas);
+  normalTexture.wrapS = THREE.ClampToEdgeWrapping;
+  normalTexture.wrapT = THREE.ClampToEdgeWrapping;
+  normalTexture.minFilter = THREE.LinearMipmapLinearFilter;
+  normalTexture.magFilter = THREE.LinearFilter;
+  const roughnessTexture = new THREE.CanvasTexture(roughnessCanvas);
+  roughnessTexture.wrapS = THREE.ClampToEdgeWrapping;
+  roughnessTexture.wrapT = THREE.ClampToEdgeWrapping;
+  roughnessTexture.minFilter = THREE.LinearMipmapLinearFilter;
+  roughnessTexture.magFilter = THREE.LinearFilter;
   const pitch = new THREE.Mesh(
     new THREE.PlaneGeometry(grassWidth, grassLength, 1, 1),
     new THREE.MeshStandardMaterial({
       map: grassTexture,
       color: "#ffffff",
-      bumpMap: microTexture,
-      bumpScale: 0.028,
-      roughness: 0.9,
+      normalMap: normalTexture,
+      normalScale: new THREE.Vector2(0.16, 0.16),
+      roughnessMap: roughnessTexture,
+      roughness: 0.94,
       metalness: 0,
       side: THREE.FrontSide,
       transparent: false,
@@ -3509,15 +3523,16 @@ function addLightweightStadium(scene: THREE.Scene) {
   lowerBowlBacking.name = "stadium-lower-bowl-solid-backing";
   stadium.add(lowerBowlBacking);
 
-  // Close the low sideline void between the board chassis and the first terrace.
-  // These sit behind the boards, so they cannot occlude play or become coplanar.
+  // Bridge the full lower-bowl depth from the board chassis to the first terrace.
+  // The infill starts behind the boards and sits below the first seat row, avoiding
+  // both pitch occlusion and the near-coplanar surfaces that caused earlier flicker.
   for (const side of [-1, 1]) {
     const sideInfill = new THREE.Mesh(
-      new THREE.BoxGeometry(5.2, 2.45, straightSideBoardLength - 1.4),
+      new THREE.BoxGeometry(11.8, 3.05, straightSideBoardLength - 0.4),
       bowlBackingMaterial,
     );
-    sideInfill.position.set(side * (runoffWidth / 2 + 3.25), 1.21, 0);
-    sideInfill.name = `stadium-sideline-lower-void-infill-${side}`;
+    sideInfill.position.set(side * (runoffWidth / 2 + 5.9), 1.5, 0);
+    sideInfill.name = `stadium-sideline-continuous-lower-bowl-${side}`;
     sideInfill.castShadow = false;
     sideInfill.receiveShadow = false;
     stadium.add(sideInfill);
@@ -4302,7 +4317,10 @@ export function ArcadeSoccerGame() {
   const [minimapSnapshot, setMinimapSnapshot] = useState<MinimapSnapshot | null>(null);
   const [tutorialUi, setTutorialUi] = useState({ active: false, lessonIndex: 0, status: "active" as TutorialStatus });
   const [mobileTutorialNotice, setMobileTutorialNotice] = useState(false);
+  const [goalBannerTeam, setGoalBannerTeam] = useState<TeamId | null>(null);
   const scoreUiRef = useRef({ home: 0, away: 0 });
+  const previousRenderedScoreRef = useRef({ home: 0, away: 0 });
+  const goalBannerTimeoutRef = useRef<number | null>(null);
   const gameClockUiRef = useRef(0);
   const possessionUiRef = useRef({ home: 50, away: 50 });
   const phaseUiRef = useRef<PlayPhase>("kickoff");
@@ -4327,6 +4345,27 @@ export function ArcadeSoccerGame() {
   useEffect(() => {
     activeOfflineSettings = offlineSettings;
   }, [offlineSettings]);
+
+  useEffect(() => {
+    const previous = previousRenderedScoreRef.current;
+    const scoringTeam = score.home > previous.home
+      ? "home"
+      : score.away > previous.away
+        ? "away"
+        : null;
+    previousRenderedScoreRef.current = score;
+    if (!scoringTeam || matchState !== "playing") return;
+    setGoalBannerTeam(scoringTeam);
+    if (goalBannerTimeoutRef.current !== null) window.clearTimeout(goalBannerTimeoutRef.current);
+    goalBannerTimeoutRef.current = window.setTimeout(() => {
+      setGoalBannerTeam(null);
+      goalBannerTimeoutRef.current = null;
+    }, 2600);
+  }, [matchState, score]);
+
+  useEffect(() => () => {
+    if (goalBannerTimeoutRef.current !== null) window.clearTimeout(goalBannerTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     settingsOpenRef.current = settingsOpen;
@@ -4930,7 +4969,7 @@ export function ArcadeSoccerGame() {
     scene.background = new THREE.Color("#86cfff");
     scene.fog = new THREE.Fog("#9bd5f2", 150, 255);
 
-    const camera = new THREE.PerspectiveCamera(48, mount.clientWidth / mount.clientHeight, 0.1, 260);
+    const camera = new THREE.PerspectiveCamera(30, mount.clientWidth / mount.clientHeight, 0.1, 260);
     camera.position.set(BROADCAST_CAMERA_X, BROADCAST_CAMERA_Y, BROADCAST_CAMERA_Z);
     camera.up.set(0, 1, 0);
 
@@ -5131,15 +5170,7 @@ export function ArcadeSoccerGame() {
     scene.add(sun);
 
     addPitch(scene);
-    void attachLicensedPitchGrass(scene, FIELD_W, FIELD_L, PITCH_SURFACE_Y)
-      .then((grass) => {
-        renderer.domElement.dataset.licensedGrassLoaded = String(Boolean(grass));
-        renderer.domElement.dataset.licensedGrassInstances = String(grass?.count ?? 0);
-      })
-      .catch((error) => {
-        renderer.domElement.dataset.licensedGrassLoaded = "false";
-        if (process.env.NODE_ENV !== "production") console.warn("Optional pitch grass failed to load", error);
-      });
+    renderer.domElement.dataset.pitchSurface = "single-procedural-pbr-plane";
     const adBoardTexture = addLightweightStadium(scene);
 
     addGoal(scene, -1);
@@ -8311,24 +8342,26 @@ export function ArcadeSoccerGame() {
       <div ref={mountRef} className="absolute inset-0" aria-label="3D arcade soccer match" />
       {matchState === "playing" && !tutorialUi.active && (
       <section className="pointer-events-none fixed inset-x-0 top-0 z-40 flex justify-center px-2 pt-[calc(env(safe-area-inset-top)+0.45rem)] sm:px-4">
-        <div
-          aria-label="Match scoreboard"
-          className="futbahl-scoreboard"
-        >
-          <span className="futbahl-scoreboard__brand">
-            <Image src="/branding/futbahl-f-symbol-light.svg" width={18} height={18} alt="" aria-hidden />
-          </span>
-          <span className="futbahl-scoreboard__team futbahl-scoreboard__team--home">
-            <span className="hidden sm:inline">{offlineSettings.userTeam.name.toUpperCase()}</span>
-            <span className="sm:hidden">{offlineSettings.userTeam.name.slice(0, 3).toUpperCase()}</span>
-          </span>
-          <span className="futbahl-scoreboard__score futbahl-scoreboard__score--home">{score.home}</span>
-          <span className="futbahl-scoreboard__separator">-</span>
-          <span className="futbahl-scoreboard__score futbahl-scoreboard__score--away">{score.away}</span>
-          <span className="futbahl-scoreboard__team futbahl-scoreboard__team--away">
-            <span className="hidden sm:inline">{offlineSettings.aiTeam.name.toUpperCase()}</span>
-            <span className="sm:hidden">{offlineSettings.aiTeam.name.slice(0, 3).toUpperCase()}</span>
-          </span>
+        <div aria-label="Match scoreboard" className={`futbahl-scoreboard ${goalBannerTeam ? `futbahl-scoreboard--goal futbahl-scoreboard--goal-${goalBannerTeam}` : ""}`}>
+          <div
+            className={`futbahl-scoreboard__team futbahl-scoreboard__team--home ${goalBannerTeam === "home" ? "is-scoring" : ""}`}
+            style={{ backgroundColor: offlineSettings.homeColor }}
+          >
+            <span className="futbahl-scoreboard__team-name">{offlineSettings.userTeam.name.toUpperCase()}</span>
+            <span className="futbahl-scoreboard__goal-label">GOAL</span>
+          </div>
+          <div className="futbahl-scoreboard__score" aria-label={`${score.home} to ${score.away}`}>
+            <span>{score.home}</span>
+            <span className="futbahl-scoreboard__separator">-</span>
+            <span>{score.away}</span>
+          </div>
+          <div
+            className={`futbahl-scoreboard__team futbahl-scoreboard__team--away ${goalBannerTeam === "away" ? "is-scoring" : ""}`}
+            style={{ backgroundColor: AWAY_COLOR }}
+          >
+            <span className="futbahl-scoreboard__team-name">{offlineSettings.aiTeam.name.toUpperCase()}</span>
+            <span className="futbahl-scoreboard__goal-label">GOAL</span>
+          </div>
           <span className="futbahl-scoreboard__time">{formatSoccerClock(gameClock)}</span>
         </div>
       </section>
@@ -8595,13 +8628,13 @@ export function ArcadeSoccerGame() {
       )}
       {matchState !== "playing" && (
         <div className="absolute inset-0 z-20 grid place-items-center bg-[radial-gradient(circle_at_58%_48%,rgba(5,28,17,0.05),rgba(2,10,7,0.7)_92%)] p-4 sm:place-items-start sm:items-center sm:pl-[8vw]">
-          <div className="flex w-full max-w-[22rem] flex-col items-center rounded-md border border-white/15 bg-[#07130d]/72 px-6 py-7 text-center shadow-[0_26px_80px_rgba(0,0,0,0.42)] backdrop-blur-md sm:items-start sm:text-left">
+          <div className="flex w-full max-w-[22rem] flex-col items-center px-6 py-7 text-center sm:items-start sm:text-left">
             <SoccerBallLogo />
-            <h1 className="mt-4 text-4xl font-black tracking-normal text-white">Futbahl</h1>
+            <h1 className="mt-3 text-4xl font-black tracking-normal text-white">Futbahl</h1>
             <p className="mt-1 text-sm font-semibold text-emerald-50/60">Football, Made for the Web.</p>
             {matchState === "ended" && <p className="mt-2 text-lg font-black text-white/85">{resultText} {score.home}-{score.away}</p>}
             <button
-              className="mt-6 inline-flex w-full items-center justify-center gap-3 rounded-md bg-emerald-300 px-6 py-3.5 text-lg font-black text-slate-950 shadow-[0_10px_30px_rgba(110,231,183,0.18)] transition duration-200 hover:-translate-y-0.5 hover:bg-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-100 focus-visible:ring-offset-2 focus-visible:ring-offset-[#07130d] active:translate-y-0"
+              className="futbahl-kickoff-button mt-7 inline-flex w-full items-center justify-center gap-3 px-6 py-4 text-base font-black tracking-[0.08em] text-white transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-100 focus-visible:ring-offset-2 focus-visible:ring-offset-[#07130d]"
               onClick={() => startMatch()}
               disabled={matchPreparing
                 || (engineRequested && !sceneRef.current)
@@ -8609,7 +8642,7 @@ export function ArcadeSoccerGame() {
                 || !validateTeamSetup(offlineSettings.aiTeam).valid}
             >
               <Play size={24} />
-              {matchPreparing || (engineRequested && !sceneRef.current) ? "Preparing match..." : "Kickoff"}
+              {matchPreparing || (engineRequested && !sceneRef.current) ? "PREPARING..." : "KICK OFF"}
             </button>
             <button
               className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md border border-white/15 bg-white/[0.035] px-6 py-2.5 text-sm font-bold text-white/75 transition duration-200 hover:border-white/30 hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
@@ -18965,15 +18998,13 @@ function formatSoccerClock(value: number) {
 
 function SoccerBallLogo() {
   return (
-    <div className="grid h-20 w-20 place-items-center overflow-hidden rounded-md border border-white/15 bg-white/[0.06] shadow-xl">
-      <Image
-        src="/branding/futbahl-f-symbol.svg"
-        width={80}
-        height={80}
-        className="h-full w-full object-contain"
-        priority
-        alt="Futbahl"
-      />
-    </div>
+    <Image
+      src="/branding/futbahl-f-symbol.svg"
+      width={96}
+      height={96}
+      className="h-20 w-20 object-contain sm:h-24 sm:w-24"
+      priority
+      alt="Futbahl"
+    />
   );
 }

@@ -2,12 +2,12 @@
 
 ## Referee whistle
 
-- **Recording:** `Referee whistle blow, gymnasium.wav`
-- **Author:** SpliceSound
-- **Source:** https://freesound.org/people/SpliceSound/sounds/218318/
+- **Recording:** `Norwegian football match/soccer game ambience.WAV`
+- **Author:** habbis92
+- **Source:** https://freesound.org/people/habbis92/sounds/206003/
 - **License:** Creative Commons CC0 1.0 Universal
-- **Local derivative:** `referee-whistle.mp3` (Freesound high-quality preview;
-  trimmed at playback for event-specific whistle patterns)
+- **Local derivative:** `referee-whistle-from-crowd.m4a`, extracted from
+  164.36s-165.28s of the stadium recording, normalized, and given 45ms fades.
 
 The bundled outdoor stadium ambience, crowd swell, and goal roar are derived
 from verified CC0 football-stadium field recordings hosted by Freesound:
