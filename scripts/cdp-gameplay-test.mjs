@@ -118,7 +118,7 @@ const clickButtonText = async (text) => {
 
 await send("Runtime.enable");
 await send("Page.enable");
-if (mode === "mobile-presentation") {
+if (mode === "mobile-presentation" || mode === "mobile-input") {
   await send("Emulation.setDeviceMetricsOverride", {
     width: 390,
     height: 844,
@@ -305,6 +305,58 @@ if (mode === "presentation") {
 }
 
 const manualSamples = [];
+if (mode === "first-person") {
+  await dispatchKey("keyDown", "c", "KeyC");
+  await dispatchKey("keyUp", "c", "KeyC");
+  await sleep(900);
+  manualSamples.push(await evaluate(`(() => {
+    const canvas = document.querySelector('canvas');
+    return {
+      cameraMode: canvas?.dataset.cameraMode,
+      cameraX: canvas?.dataset.cameraX,
+      cameraY: canvas?.dataset.cameraY,
+      cameraZ: canvas?.dataset.cameraZ,
+      playerX: canvas?.dataset.controlledPlayerX,
+      playerZ: canvas?.dataset.controlledPlayerZ,
+    };
+  })()`));
+}
+if (mode === "mobile-input") {
+  const controls = await evaluate(`(() => {
+    const joystick = document.querySelector('[data-testid="mobile-joystick"]');
+    const shoot = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'SHOOT');
+    const canvas = document.querySelector('canvas');
+    if (!joystick || !shoot || !canvas) return null;
+    const j = joystick.getBoundingClientRect();
+    const s = shoot.getBoundingClientRect();
+    return {
+      joystick: { x: j.left + j.width / 2, y: j.top + j.height / 2, radius: j.width * 0.34 },
+      shoot: { x: s.left + s.width / 2, y: s.top + s.height / 2 },
+      before: { x: canvas.dataset.controlledPlayerX, z: canvas.dataset.controlledPlayerZ },
+    };
+  })()`);
+  if (controls) {
+    const joystickTouch = { x: controls.joystick.x, y: controls.joystick.y - controls.joystick.radius, radiusX: 8, radiusY: 8, force: 1, id: 1 };
+    const shootTouch = { x: controls.shoot.x, y: controls.shoot.y, radiusX: 8, radiusY: 8, force: 1, id: 2 };
+    await send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [joystickTouch] });
+    await sleep(350);
+    await send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [joystickTouch, shootTouch] });
+    await sleep(650);
+    await send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [joystickTouch] });
+    await sleep(550);
+    await send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    manualSamples.push(await evaluate(`(() => {
+      const canvas = document.querySelector('canvas');
+      return {
+        before: ${JSON.stringify(controls.before)},
+        after: { x: canvas?.dataset.controlledPlayerX, z: canvas?.dataset.controlledPlayerZ },
+        kickState: canvas?.dataset.kickContactState,
+        kickStyle: canvas?.dataset.lastKickStyle,
+        mobileControls: Boolean(document.querySelector('[data-testid="mobile-joystick"]')),
+      };
+    })()`));
+  }
+}
 if (mode === "central-dribble") {
   await sleep(250);
   const awayAttack = url.includes("away-attack");
@@ -350,13 +402,19 @@ const diagnostics = await evaluate(`(() => {
   if (!canvas) return { error: 'no canvas' };
   const keys = [
     'phase','ballState','ballOwner','ballX','ballY','ballZ','fps','averageFrameMs','frameP95Ms','frameP99Ms','frameMaxMs','rafLoops','sceneNodes','playerCount','colliderCount',
+    'cameraMode','cameraX','cameraY','cameraZ','cameraFocusZ',
+    'trajectoryTestsRequested','trajectoryTestsRemaining','trajectoryTestsPassed','trajectoryTestsFailed','trajectoryTestResults',
+    'kickReleaseTrajectoryEndpoint','kickReleasePosition','kickReleaseVelocity','kickReleaseCurve','kickContactState',
+    'headerTestsRequested','headerTestsRemaining','headerExpectedContacts','headerContacts','headerTestResults','headerRejectReason',
+    'passInputTestsRequested','passInputTestsRemaining','passInputTestsPassed','passInputTestsFailed','passInputTestResults','lastPassAttemptFailure',
+    'oneTouchTestsRequested','oneTouchTestsPassed','oneTouchTestsFailed','oneTouchTestResults','lastReceiveAction',
     'aerialReceptionTestsRequested','aerialReceptionTestsRemaining','aerialReceptionTestsPassed','aerialReceptionTestsFailed',
     'aerialFirstTouches','lastAerialFirstTouchType','lastAerialFirstTouchDistance','lastFirstTouchProbeType','lastFirstTouchProbeDistance','lastFirstTouchProbeRadius','aerialReceiverId','aerialReceiverX','aerialReceiverZ','aerialArrivalTime','aerialTouchPlan','aerialLandingX','aerialLandingZ',
     'defensiveDangerPhase','defendersInsideTwelve','outfieldInsideTwentyEight','nearCarrierDefenders','closeCarrierDefenders',
     'primaryPresserId','secondaryCoverId','deepestThreatId','deepestMarkerId','deepestMarkerDistance','deepestMarkerGoalSide',
     'dangerousUnmarkedCount','duplicateMarkCount','unassignedDefenderCount','laneBlockerCount','defensiveRoles','manualControlledHasAiRole',
     'collisionResolutionsThisFrame','maxCollisionCorrection','maxDefenderFrameDisplacement','abnormalMovementClamps','maxDefenderSpeed',
-    'tackleTestsRequested','tackleTestsPassed','tackleTestsFailed','interceptionTestsRequested','interceptionTestsPassed','interceptionTestsFailed',
+    'tackleTestsRequested','tackleTestsPassed','tackleTestsFailed','tackleTestResults','interceptionTestsRequested','interceptionTestsPassed','interceptionTestsFailed',
     'keeperHandsTestsRequested','keeperHandsTestsPassed','keeperHandsTestsFailed','keeperBuildupTestsRequested','keeperBuildupTestsPassed','keeperBuildupTestsFailed',
     'looseBallTestsRequested','looseBallTestsPassed','looseBallTestsFailed','looseBallTestResults','lastLooseBallReactionMs',
     'loftedPassTestsRequested','loftedPassTestsPassed','loftedPassTestsFailed','goalMouthTestsRequested','goalMouthTestsPassed','goalMouthTestsFailed',
@@ -379,7 +437,7 @@ const diagnostics = await evaluate(`(() => {
     'attackingPossessionTeam','attackingPossessionSeconds','primaryGoalSideProgress','primaryLaneOffset','primaryPositionGoalSideProgress','primaryPositionLaneOffset',
     'centralRouteProtected','attackingMidfieldersFinalThird','attackingFullbacksAdvanced','attackingCenterBackLineProgress',
     'rendererCount','canvasBackingWidth','canvasBackingHeight','effectiveDpr','matchUpdatesThisFrame','matchGeneration','fullTimeHandled','fullTimeTransitions',
-    'recordedCrowdAudio','licensedBallLoaded','worldUnitsPerMeter','pitchMeters','goalMeters','outfieldTopSpeedMps',
+    'recordedCrowdAudio','licensedBallLoaded','worldUnitsPerMeter','pitchMeters','goalMeters','outfieldTopSpeedMps','lastWhistleEvent','lastWhistleCount',
     'adBrand','adBrandSeconds','adBrandTransition','stadiumDiagnostics',
     'goalKickTestsRequested','goalKickTestsRemaining','goalKickCount','goalKickState','goalKickReceiver','goalKickKeeperTeam','goalKickTargetTeam',
     'goalKickTargetSlot','goalKickTargetLine','goalKickSafetyScore','goalKickTargetDistance','goalKickLaneBlockers','goalKickReceiverPressure',
