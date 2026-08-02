@@ -28,6 +28,7 @@ export type FutbahlAnimationState =
   | "Header"
   | "SlideTackle"
   | "Block"
+  | "Receive"
   | "Catch"
   | "KeeperDive"
   | "Recovery"
@@ -93,18 +94,18 @@ export const LOCOMOTION_CLIPS: Record<FutbahlLocomotionState, string> = {
   Idle: "Idle_Loop",
   Walk: "Walk_Loop",
   Jog: "Jog_Fwd_Loop",
-  Run: "Jog_Fwd_Loop",
+  Run: "Sprint_Loop",
   Sprint: "Sprint_Loop",
   ForwardLeft: "Jog_Fwd_Loop",
   ForwardRight: "Jog_Fwd_Loop",
   BackwardLeft: "Walk_Loop",
   BackwardRight: "Walk_Loop",
-  StrafeLeft: "Strafe_Left_Loop",
-  StrafeRight: "Strafe_Right_Loop",
-  Backpedal: "Jog_Back_Loop",
-  TurnLeft: "Turn_Left",
-  TurnRight: "Turn_Right",
-  Stop: "Stop",
+  StrafeLeft: "Walk_Loop",
+  StrafeRight: "Walk_Loop",
+  Backpedal: "Walk_Loop",
+  TurnLeft: "Walk_Loop",
+  TurnRight: "Walk_Loop",
+  Stop: "Idle_Loop",
 };
 
 export const QUATERNIUS_CLIP_INVENTORY = [
@@ -754,7 +755,7 @@ export class FutbahlLocomotionController {
     if (!criticalState && speed < 0.38 && (sample.isKeeper || this.role === "keeper")) {
       nextState = "Idle";
     }
-    if (nextState !== this.state) this.transitionTo(nextState, 0.18);
+    if (nextState !== this.state) this.transitionTo(nextState, 0.11);
 
     this.animationState = criticalState
       ?? ((sample.isKeeper || this.role === "keeper") && speed < 0.42 ? "KeeperReady"
@@ -766,10 +767,10 @@ export class FutbahlLocomotionController {
         || this.animationState === "KeeperReady"
         || this.animationState === "DefensiveReady"
         || this.animationState === "SlideTackle";
-      this.transitionTo(nextState, 0.16, contextualClip, contextualLoops);
+      this.transitionTo(nextState, 0.11, contextualClip, contextualLoops);
     } else if (!contextualClip && this.currentClip !== this.resolveClip(nextState)) {
       const idleClip = nextState === "Idle" ? this.idleVariant : "";
-      this.transitionTo(nextState, 0.18, idleClip);
+      this.transitionTo(nextState, 0.11, idleClip);
     }
 
     const playbackSpeed = actionPlaybackSpeed(this.state, speed) * this.playbackVariation;
@@ -843,6 +844,7 @@ export class FutbahlLocomotionController {
     if ((sample.kickTimer ?? 0) > 0) return (sample.kickTimer ?? 0) > 0.46 ? "Shot" : "Pass";
     if ((sample.headerTimer ?? 0) > 0) return "Header";
     if ((sample.catchTimer ?? 0) > 0) return "Catch";
+    if ((sample.firstTouchTimer ?? 0) > 0) return "Receive";
     if ((sample.blockTimer ?? 0) > 0) return "Block";
     if ((sample.celebrateTimer ?? 0) > 0) return "Celebrate";
     if ((sample.passRequestTimer ?? 0) > 0) return "PassRequest";
@@ -865,24 +867,27 @@ export class FutbahlLocomotionController {
     const kickTimer = sample.kickTimer ?? 0;
     const kickDuration = kickTimer > 0.46 ? 0.54 : 0.46;
     const kickProgress = THREE.MathUtils.clamp(1 - kickTimer / kickDuration, 0, 1);
-    // Gameplay applies the impulse when kickTimer starts. Begin on the visible
-    // contact pose and use the remaining timer for a clean follow-through so
-    // the foot and ball never disagree about the contact frame.
-    const kick = kickTimer > 0 ? Math.cos(kickProgress * Math.PI * 0.5) : 0;
+    const kickBackswing = kickTimer > 0 && kickProgress < 0.27
+      ? Math.sin(THREE.MathUtils.clamp(kickProgress / 0.27, 0, 1) * Math.PI * 0.5)
+      : 0;
+    const kickFollowThrough = kickTimer > 0 && kickProgress >= 0.2
+      ? Math.sin(THREE.MathUtils.clamp((kickProgress - 0.2) / 0.8, 0, 1) * Math.PI)
+      : 0;
     const header = THREE.MathUtils.clamp((sample.headerTimer ?? 0) / 0.55, 0, 1);
     const catchAmount = THREE.MathUtils.clamp((sample.catchTimer ?? 0) / 0.62, 0, 1);
+    const receiveAmount = THREE.MathUtils.clamp((sample.firstTouchTimer ?? 0) / 0.24, 0, 1);
     const tackleAmount = THREE.MathUtils.clamp((sample.tackleTimer ?? 0) / 0.58, 0, 1);
     const recoveryAmount = THREE.MathUtils.clamp((sample.recoveryTimer ?? 0) / 0.72, 0, 1);
     const blockAmount = THREE.MathUtils.clamp((sample.blockTimer ?? 0) / 0.5, 0, 1);
     const diveAmount = THREE.MathUtils.clamp((sample.diveTimer ?? 0) / 0.62, 0, 1);
     const celebrate = THREE.MathUtils.clamp((sample.celebrateTimer ?? 0) / 2.2, 0, 1);
     const request = sample.passRequestTimer ?? 0;
-    if (kick > 0 && this.bones.rightLeg) {
-      this.bones.rightLeg.rotation.x += kick * 1.05;
-      if (this.bones.leftLeg) this.bones.leftLeg.rotation.x -= kick * 0.2;
+    if ((kickBackswing > 0 || kickFollowThrough > 0) && this.bones.rightLeg) {
+      this.bones.rightLeg.rotation.x += kickFollowThrough * 1.12 - kickBackswing * 0.48;
+      if (this.bones.leftLeg) this.bones.leftLeg.rotation.x -= kickFollowThrough * 0.2;
       if (this.bones.spine) {
-        this.bones.spine.rotation.x -= kick * 0.16;
-        this.bones.spine.rotation.y += kick * 0.08;
+        this.bones.spine.rotation.x -= kickFollowThrough * 0.16;
+        this.bones.spine.rotation.y += kickFollowThrough * 0.08;
       }
     }
     if (diveAmount > 0) {
@@ -919,6 +924,11 @@ export class FutbahlLocomotionController {
       const armRaise = -1.1 * Math.sin(catchAmount * Math.PI);
       if (this.bones.leftArm) this.bones.leftArm.rotation.x += armRaise;
       if (this.bones.rightArm) this.bones.rightArm.rotation.x += armRaise;
+    } else if (receiveAmount > 0) {
+      const cushion = Math.sin(receiveAmount * Math.PI);
+      if (this.bones.rightLeg) this.bones.rightLeg.rotation.x += 0.42 * cushion;
+      if (this.bones.leftLeg) this.bones.leftLeg.rotation.x -= 0.12 * cushion;
+      if (this.bones.spine) this.bones.spine.rotation.x -= 0.08 * cushion;
     } else if (blockAmount > 0) {
       const block = Math.sin(blockAmount * Math.PI);
       if (this.bones.leftLeg) this.bones.leftLeg.rotation.x += 0.62 * block;
