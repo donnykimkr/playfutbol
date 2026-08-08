@@ -4,6 +4,12 @@ import * as THREE from "three";
 import { simulateBallTrajectory, stepBallPhysics } from "../src/lib/futbahl-ball-physics.ts";
 import { sweptMovingSphereContact } from "../src/lib/futbahl-contact.ts";
 import { kickAnimationPhase, kickAnimationProfile } from "../src/lib/futbahl-animation-contact.ts";
+import {
+  LOCOMOTION_CLIPS,
+  locomotionPlaybackRate,
+  selectFutbahlLocomotionState,
+} from "../src/lib/futbahl-locomotion.ts";
+import { receivePassReadiness } from "../src/lib/futbahl-receive-readiness.ts";
 
 const constants = {
   radius: 0.11,
@@ -87,4 +93,67 @@ test("kick animation exposes preparation, contact and follow-through phases", ()
   assert.equal(kickAnimationPhase(0, profile), "preparation");
   assert.equal(kickAnimationPhase(profile.contactAfter, profile), "contact");
   assert.equal(kickAnimationPhase(profile.contactAfter + 0.08, profile), "follow-through");
+});
+
+test("run and sprint use distinct locomotion clips", () => {
+  assert.equal(LOCOMOTION_CLIPS.Run, "Jog_Fwd_Loop");
+  assert.equal(LOCOMOTION_CLIPS.Sprint, "Sprint_Loop");
+});
+
+test("locomotion hysteresis keeps a runner stable near a speed threshold", () => {
+  assert.equal(selectFutbahlLocomotionState({
+    speed: 4.92,
+    localForward: 4.92,
+    localLateral: 0,
+    acceleration: 0.1,
+    angularVelocity: 0,
+    previousSpeed: 4.88,
+    previousState: "Run",
+    defensive: false,
+  }), "Run");
+  assert.equal(selectFutbahlLocomotionState({
+    speed: 4.3,
+    localForward: -3.2,
+    localLateral: 0.4,
+    acceleration: 0,
+    angularVelocity: 2.8,
+    previousSpeed: 4.3,
+    previousState: "Run",
+    defensive: false,
+  }), "TurnAround");
+});
+
+test("locomotion playback follows movement direction and speed", () => {
+  assert.ok(locomotionPlaybackRate("Run", 6.8) > locomotionPlaybackRate("Run", 4.9));
+  assert.ok(locomotionPlaybackRate("Backpedal", 2.5) < 0);
+});
+
+test("clean controlled reception permits an intentional one-touch pass", () => {
+  const result = receivePassReadiness({
+    incomingSpeed: 16,
+    receiverSpeed: 2.2,
+    ballHeight: 0.18,
+    contactDistance: 0.78,
+    targetFacingDot: 0.82,
+    redirectionDot: 0.38,
+    pressureDistance: 3.5,
+    passStyle: "short",
+  });
+  assert.equal(result.oneTouchAllowed, true);
+  assert.ok(result.requiredControlTime < 0.2);
+});
+
+test("fast awkward reception requires control before another pass", () => {
+  const result = receivePassReadiness({
+    incomingSpeed: 33,
+    receiverSpeed: 7.2,
+    ballHeight: 1.05,
+    contactDistance: 1.2,
+    targetFacingDot: -0.55,
+    redirectionDot: -0.7,
+    pressureDistance: 0.9,
+    passStyle: "through",
+  });
+  assert.equal(result.oneTouchAllowed, false);
+  assert.ok(result.requiredControlTime >= 0.4);
 });

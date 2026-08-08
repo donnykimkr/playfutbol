@@ -1,0 +1,18 @@
+Futbahl referee whistle audio
+=============================
+
+Asset: referee-whistle-cc0.mp3
+Title: Referee whistle sound.wav
+Creator: Rosa-Orenes256
+Original source page: https://freesound.org/people/Rosa-Orenes256/sounds/538422/
+Imported official preview: 538422_11966684-hq.mp3
+Exact license: Creative Commons Zero 1.0 Universal (CC0 1.0)
+License URL: https://creativecommons.org/publicdomain/zero/1.0/
+Download date: 2026-08-08
+Bundled format: mono MP3, 48 kHz, approximately 0.58 seconds
+Modifications: no offline pitch shifting or time stretching. Futbahl applies
+short runtime fades and a 0.36 peak gain to balance repeated referee-event
+patterns against stadium ambience and prevent clipping.
+
+The source page identifies the recording as CC0. It may be copied, modified,
+distributed, performed, and used commercially without permission.

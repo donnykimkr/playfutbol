@@ -19,10 +19,6 @@ Futbahl stadium crowd audio
    with adjacent ambience using 180ms crossfades. Runtime playback overlaps complete
    recordings with a four-second crossfade instead of using a hard loop.
 
-   The clearest whistle at 164.36-165.28 seconds was also extracted as
-   referee-whistle-from-crowd.m4a, normalized, and given 45ms start/end fades.
-   That derivative is triggered only by existing referee-event state changes.
-
 2. stadium-swell.m4a
    Title: Goal.wav
    Creator: Sandermotions

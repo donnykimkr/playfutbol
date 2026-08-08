@@ -8,6 +8,8 @@ export type FutbahlLocomotionState =
   | "Jog"
   | "Run"
   | "Sprint"
+  | "Accelerate"
+  | "Decelerate"
   | "ForwardLeft"
   | "ForwardRight"
   | "BackwardLeft"
@@ -17,18 +19,32 @@ export type FutbahlLocomotionState =
   | "Backpedal"
   | "TurnLeft"
   | "TurnRight"
+  | "SharpTurnLeft"
+  | "SharpTurnRight"
+  | "TurnAround"
   | "Stop";
 
 export type FutbahlAnimationState =
   | FutbahlLocomotionState
   | "DefensiveReady"
   | "KeeperReady"
+  | "Dribble"
+  | "CloseControl"
   | "Pass"
+  | "ShortPass"
+  | "FirmPass"
+  | "LongPass"
+  | "ThroughPass"
   | "Shot"
+  | "PowerShot"
   | "Header"
   | "SlideTackle"
+  | "StandingTackle"
   | "Block"
+  | "Interception"
   | "Receive"
+  | "MovingReceive"
+  | "FastReceive"
   | "Catch"
   | "KeeperDive"
   | "Recovery"
@@ -50,6 +66,7 @@ export type FutbahlPlayerAppearance = {
 
 export type FutbahlLocomotionDebugSnapshot = {
   state: FutbahlLocomotionState;
+  animationState: FutbahlAnimationState;
   clip: string;
   totalSpeed: number;
   localForwardSpeed: number;
@@ -66,11 +83,16 @@ export type FutbahlLocomotionDebugSnapshot = {
 
 export type FutbahlMotionSample = {
   velocity: THREE.Vector3;
+  visualSpeed?: number;
   heading: number;
   turnRate: number;
   dt: number;
   distanceToCamera?: number;
   kickTimer?: number;
+  kickStyle?: string | null;
+  kickDuration?: number;
+  kickContactAfter?: number;
+  preferredFoot?: "left" | "right";
   headerTimer?: number;
   catchTimer?: number;
   diveTimer?: number;
@@ -81,6 +103,12 @@ export type FutbahlMotionSample = {
   recoveryTimer?: number;
   blockTimer?: number;
   firstTouchTimer?: number;
+  firstTouchType?: "foot" | "thigh" | "chest" | null;
+  receiveIncomingSpeed?: number;
+  carryingBall?: boolean;
+  closeControl?: boolean;
+  standingTackle?: boolean;
+  interception?: boolean;
   isKeeper?: boolean;
   defensive?: boolean;
   keeperAction?: string;
@@ -94,17 +122,22 @@ export const LOCOMOTION_CLIPS: Record<FutbahlLocomotionState, string> = {
   Idle: "Idle_Loop",
   Walk: "Walk_Loop",
   Jog: "Jog_Fwd_Loop",
-  Run: "Sprint_Loop",
+  Run: "Jog_Fwd_Loop",
   Sprint: "Sprint_Loop",
+  Accelerate: "Jog_Fwd_Loop",
+  Decelerate: "Jog_Fwd_Loop",
   ForwardLeft: "Jog_Fwd_Loop",
   ForwardRight: "Jog_Fwd_Loop",
   BackwardLeft: "Walk_Loop",
   BackwardRight: "Walk_Loop",
-  StrafeLeft: "Walk_Loop",
-  StrafeRight: "Walk_Loop",
+  StrafeLeft: "Crouch_Fwd_Loop",
+  StrafeRight: "Crouch_Fwd_Loop",
   Backpedal: "Walk_Loop",
   TurnLeft: "Walk_Loop",
   TurnRight: "Walk_Loop",
+  SharpTurnLeft: "Jog_Fwd_Loop",
+  SharpTurnRight: "Jog_Fwd_Loop",
+  TurnAround: "Jog_Fwd_Loop",
   Stop: "Idle_Loop",
 };
 
@@ -171,15 +204,20 @@ const FALLBACK_CLIPS: Record<FutbahlLocomotionState, string[]> = {
   Jog: ["Jog_Fwd_Loop", "Walk_Loop"],
   Run: ["Jog_Fwd_Loop", "Sprint_Loop"],
   Sprint: ["Sprint_Loop", "Jog_Fwd_Loop"],
+  Accelerate: ["Jog_Fwd_Loop", "Sprint_Loop"],
+  Decelerate: ["Jog_Fwd_Loop", "Walk_Loop"],
   ForwardLeft: ["Jog_Fwd_Loop", "Walk_Loop"],
   ForwardRight: ["Jog_Fwd_Loop", "Walk_Loop"],
   BackwardLeft: ["Walk_Loop", "Jog_Fwd_Loop"],
   BackwardRight: ["Walk_Loop", "Jog_Fwd_Loop"],
-  StrafeLeft: ["Jog_Fwd_Loop", "Walk_Loop"],
-  StrafeRight: ["Jog_Fwd_Loop", "Walk_Loop"],
+  StrafeLeft: ["Crouch_Fwd_Loop", "Jog_Fwd_Loop", "Walk_Loop"],
+  StrafeRight: ["Crouch_Fwd_Loop", "Jog_Fwd_Loop", "Walk_Loop"],
   Backpedal: ["Walk_Loop", "Jog_Fwd_Loop"],
   TurnLeft: ["Walk_Loop", "Idle_Loop"],
   TurnRight: ["Walk_Loop", "Idle_Loop"],
+  SharpTurnLeft: ["Jog_Fwd_Loop", "Walk_Loop"],
+  SharpTurnRight: ["Jog_Fwd_Loop", "Walk_Loop"],
+  TurnAround: ["Jog_Fwd_Loop", "Walk_Loop"],
   Stop: ["Idle_Loop", "Walk_Loop"],
 };
 
@@ -559,49 +597,102 @@ function damp(current: number, target: number, smoothing: number, dt: number) {
   return THREE.MathUtils.lerp(current, target, 1 - Math.exp(-smoothing * dt));
 }
 
-function chooseState(
-  speed: number,
-  localForward: number,
-  localLateral: number,
-  acceleration: number,
-  angularVelocity: number,
-  previousSpeed: number,
-): FutbahlLocomotionState {
-  if (speed < 0.14) {
-    if (previousSpeed > 0.85 && acceleration < -1.6) return "Stop";
-    if (angularVelocity > 0.42) return "TurnLeft";
-    if (angularVelocity < -0.42) return "TurnRight";
-    return "Idle";
-  }
-  if (localForward < -0.55 && Math.abs(localLateral) > 0.48) {
-    return localLateral < 0 ? "BackwardLeft" : "BackwardRight";
-  }
-  if (localForward < -0.55 && Math.abs(localForward) > Math.abs(localLateral) * 0.78) return "Backpedal";
-  if (Math.abs(localLateral) > 0.72 && Math.abs(localLateral) > Math.abs(localForward) * 1.08) {
-    return localLateral < 0 ? "StrafeLeft" : "StrafeRight";
-  }
-  if (localForward > 0.4 && Math.abs(localLateral) > 0.48) {
-    return localLateral < 0 ? "ForwardLeft" : "ForwardRight";
-  }
-  if (speed < 2.15) return "Walk";
-  if (speed < 5.25) return "Jog";
-  if (speed < 8.15) return "Run";
+export type FutbahlLocomotionSelectionInput = {
+  speed: number;
+  localForward: number;
+  localLateral: number;
+  acceleration: number;
+  angularVelocity: number;
+  previousSpeed: number;
+  previousState: FutbahlLocomotionState;
+  defensive: boolean;
+};
+
+function speedBandState(speed: number, previousState: FutbahlLocomotionState): FutbahlLocomotionState {
+  // Separate enter/exit thresholds prevent Walk/Jog/Run/Sprint from flickering
+  // when a player hovers around a boundary for several frames.
+  if (previousState === "Sprint" && speed >= 7.55) return "Sprint";
+  if ((previousState === "Run" || previousState === "Accelerate") && speed >= 4.75 && speed < 8.45) return "Run";
+  if ((previousState === "Jog" || previousState === "Decelerate") && speed >= 1.82 && speed < 5.55) return "Jog";
+  if (previousState === "Walk" && speed >= 0.12 && speed < 2.3) return "Walk";
+  if (speed < 0.18) return "Idle";
+  if (speed < 2.12) return "Walk";
+  if (speed < 5.18) return "Jog";
+  if (speed < 8.08) return "Run";
   return "Sprint";
 }
 
-function actionPlaybackSpeed(state: FutbahlLocomotionState, speed: number) {
-  if (state === "Sprint") return THREE.MathUtils.clamp(speed / 9.4, 0.72, 1.35);
-  if (state === "Walk") return THREE.MathUtils.clamp(speed / 1.9, 0.55, 1.3);
-  if (
-    state === "Jog" || state === "Run"
-    || state === "ForwardLeft" || state === "ForwardRight"
-    || state === "BackwardLeft" || state === "BackwardRight"
-    || state === "StrafeLeft" || state === "StrafeRight" || state === "Backpedal"
-  ) {
-    return THREE.MathUtils.clamp(speed / 4.8, 0.62, 1.42);
+export function selectFutbahlLocomotionState({
+  speed,
+  localForward,
+  localLateral,
+  acceleration,
+  angularVelocity,
+  previousSpeed,
+  previousState,
+  defensive,
+}: FutbahlLocomotionSelectionInput): FutbahlLocomotionState {
+  if (speed < 0.14) {
+    if (previousSpeed > 0.78 && acceleration < -1.35) return "Stop";
+    if (angularVelocity > 0.48) return "TurnLeft";
+    if (angularVelocity < -0.48) return "TurnRight";
+    return "Idle";
   }
-  if (state === "TurnLeft" || state === "TurnRight") return 0.9;
-  return 1;
+
+  const lateralMagnitude = Math.abs(localLateral);
+  const forwardMagnitude = Math.abs(localForward);
+  if (speed > 1.05 && Math.abs(angularVelocity) > 2.35) {
+    if (localForward < -speed * 0.46) return "TurnAround";
+    return angularVelocity > 0 ? "SharpTurnLeft" : "SharpTurnRight";
+  }
+  if (defensive && localForward < -0.5 && lateralMagnitude > 0.42) {
+    return localLateral < 0 ? "BackwardLeft" : "BackwardRight";
+  }
+  if (defensive && localForward < -0.5 && forwardMagnitude > lateralMagnitude * 0.72) return "Backpedal";
+  if (defensive && lateralMagnitude > 0.62 && lateralMagnitude > forwardMagnitude * 0.94) {
+    return localLateral < 0 ? "StrafeLeft" : "StrafeRight";
+  }
+  if (localForward > 0.38 && lateralMagnitude > 0.5 && speed < 7.8) {
+    return localLateral < 0 ? "ForwardLeft" : "ForwardRight";
+  }
+  if (acceleration > 3.25 && speed > 0.65 && speed < 8.35) return "Accelerate";
+  if (acceleration < -3.15 && speed > 0.5 && previousSpeed > speed) return "Decelerate";
+  return speedBandState(speed, previousState);
+}
+
+export function locomotionPlaybackRate(state: FutbahlLocomotionState, speed: number) {
+  if (state === "Sprint") return THREE.MathUtils.clamp(speed / 9.2, 0.76, 1.34);
+  if (state === "Walk" || state === "TurnLeft" || state === "TurnRight" || state === "Stop") {
+    return THREE.MathUtils.clamp(Math.max(speed, 0.72) / 1.85, 0.56, 1.24);
+  }
+  if (state === "StrafeLeft" || state === "StrafeRight") {
+    return THREE.MathUtils.clamp(speed / 3.25, 0.62, 1.28);
+  }
+  if (state === "Backpedal" || state === "BackwardLeft" || state === "BackwardRight") {
+    return -THREE.MathUtils.clamp(speed / 2.65, 0.62, 1.24);
+  }
+  if (state === "Accelerate") return THREE.MathUtils.clamp(speed / 4.65, 0.72, 1.48);
+  if (state === "Decelerate") return THREE.MathUtils.clamp(speed / 4.85, 0.58, 1.3);
+  if (state === "SharpTurnLeft" || state === "SharpTurnRight" || state === "TurnAround") {
+    return THREE.MathUtils.clamp(speed / 4.7, 0.7, 1.38);
+  }
+  return THREE.MathUtils.clamp(speed / 4.85, 0.64, state === "Run" ? 1.58 : 1.42);
+}
+
+const ACTION_TRANSITION_STATES = new Set<FutbahlAnimationState>([
+  "ShortPass", "FirmPass", "LongPass", "ThroughPass", "Shot", "PowerShot",
+  "Header", "SlideTackle", "StandingTackle", "Block", "Interception", "Receive",
+  "MovingReceive", "FastReceive", "Catch", "KeeperDive", "Recovery",
+]);
+
+function transitionDuration(from: FutbahlAnimationState, to: FutbahlAnimationState) {
+  if (from === to) return 0;
+  if (ACTION_TRANSITION_STATES.has(to)) return 0.065;
+  if (ACTION_TRANSITION_STATES.has(from)) return 0.14;
+  if (to === "Sprint" || from === "Sprint") return 0.14;
+  if (to === "Idle" || from === "Idle") return 0.18;
+  if (to.startsWith("SharpTurn") || to === "TurnAround") return 0.09;
+  return 0.12;
 }
 
 export class FutbahlLocomotionController {
@@ -618,6 +709,7 @@ export class FutbahlLocomotionController {
   private readonly debugElement: HTMLDivElement | null;
   private readonly forward = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
+  private readonly effectiveVelocity = new THREE.Vector3();
   private readonly bones: Record<string, THREE.Object3D | null>;
   private readonly role: FutbahlPlayerAppearance["role"];
   private readonly idleVariant: string;
@@ -630,6 +722,8 @@ export class FutbahlLocomotionController {
   private currentClip = "";
   private previousSpeed = 0;
   private previousHeading = 0;
+  private smoothedAcceleration = 0;
+  private stateAge = 0;
   private debugTimer = 0;
   private mixerAccumulator = 0;
   private disposed = false;
@@ -736,53 +830,88 @@ export class FutbahlLocomotionController {
   update(sample: FutbahlMotionSample) {
     if (this.disposed) return;
     const safeDt = THREE.MathUtils.clamp(sample.dt, 1 / 240, 0.05);
-    const speed = Math.hypot(sample.velocity.x, sample.velocity.z);
     this.forward.set(Math.sin(sample.heading), 0, Math.cos(sample.heading));
     this.right.set(Math.cos(sample.heading), 0, -Math.sin(sample.heading));
-    const localForward = sample.velocity.dot(this.forward);
-    const localLateral = sample.velocity.dot(this.right);
-    const acceleration = (speed - this.previousSpeed) / safeDt;
+    const measuredSpeed = Math.hypot(sample.velocity.x, sample.velocity.z);
+    const speed = Math.max(measuredSpeed, sample.visualSpeed ?? 0);
+    this.effectiveVelocity.copy(sample.velocity).setY(0);
+    if (measuredSpeed < 0.08 && speed > 0.14) this.effectiveVelocity.copy(this.forward).multiplyScalar(speed);
+    const localForward = this.effectiveVelocity.dot(this.forward);
+    const localLateral = this.effectiveVelocity.dot(this.right);
+    const rawAcceleration = (speed - this.previousSpeed) / safeDt;
+    this.smoothedAcceleration = damp(this.smoothedAcceleration, rawAcceleration, 10.5, safeDt);
+    const acceleration = this.smoothedAcceleration;
     const angularVelocity = shortestAngleDelta(this.previousHeading, sample.heading) / safeDt;
-    let nextState = chooseState(
+    this.stateAge += safeDt;
+    let nextState = selectFutbahlLocomotionState({
       speed,
       localForward,
       localLateral,
       acceleration,
       angularVelocity,
-      this.previousSpeed,
-    );
+      previousSpeed: this.previousSpeed,
+      previousState: this.state,
+      defensive: Boolean(sample.defensive),
+    });
     const criticalState = this.resolveCriticalState(sample);
     if (!criticalState && speed < 0.38 && (sample.isKeeper || this.role === "keeper")) {
       nextState = "Idle";
     }
-    if (nextState !== this.state) this.transitionTo(nextState, 0.11);
+    if (nextState !== this.state && (this.stateAge >= 0.075 || nextState === "Idle" || nextState === "Stop")) {
+      this.transitionTo(nextState, transitionDuration(this.animationState, nextState));
+      this.stateAge = 0;
+    } else {
+      nextState = this.state;
+    }
 
+    const previousAnimationState = this.animationState;
     this.animationState = criticalState
       ?? ((sample.isKeeper || this.role === "keeper") && speed < 0.42 ? "KeeperReady"
         : sample.defensive && speed < 0.42 ? "DefensiveReady"
+          : sample.carryingBall && speed < 3.15 ? "CloseControl"
+            : sample.carryingBall ? "Dribble"
           : nextState);
     const contextualClip = this.contextualClip(this.animationState, speed);
     if (contextualClip && contextualClip !== this.currentClip) {
       const contextualLoops = this.animationState === "Celebrate"
         || this.animationState === "KeeperReady"
-        || this.animationState === "DefensiveReady"
-        || this.animationState === "SlideTackle";
-      this.transitionTo(nextState, 0.11, contextualClip, contextualLoops);
+        || this.animationState === "DefensiveReady";
+      this.transitionTo(
+        nextState,
+        transitionDuration(previousAnimationState, this.animationState),
+        contextualClip,
+        contextualLoops,
+      );
     } else if (!contextualClip && this.currentClip !== this.resolveClip(nextState)) {
       const idleClip = nextState === "Idle" ? this.idleVariant : "";
-      this.transitionTo(nextState, 0.11, idleClip);
+      this.transitionTo(nextState, transitionDuration(previousAnimationState, this.animationState), idleClip);
     }
 
-    const playbackSpeed = actionPlaybackSpeed(this.state, speed) * this.playbackVariation;
-    if (this.currentAction) this.currentAction.timeScale = playbackSpeed;
+    let playbackSpeed = locomotionPlaybackRate(this.state, speed) * this.playbackVariation;
+    if (this.currentClip === "Jump_Start") playbackSpeed = 2.25;
+    else if (this.currentClip === "Slide_Start") playbackSpeed = 1.42;
+    else if (this.currentClip === "Slide_Exit") playbackSpeed = 0.92;
+    else if (this.currentClip === "Dance_Loop") playbackSpeed = 0.9 * this.playbackVariation;
+    if (this.currentAction) {
+      if (playbackSpeed < 0 && this.currentAction.time <= 0.025) {
+        this.currentAction.time = Math.max(0.03, this.currentAction.getClip().duration - 0.025);
+      }
+      this.currentAction.timeScale = playbackSpeed;
+    }
     const forwardLean = THREE.MathUtils.clamp(-acceleration * 0.0065, -0.13, 0.09);
     const lateralLean = THREE.MathUtils.clamp(-localLateral * 0.014, -0.1, 0.1);
+    const directionalYaw = sample.defensive && speed < 6.4
+      ? THREE.MathUtils.clamp(Math.atan2(localLateral, Math.max(0.35, Math.abs(localForward))) * 0.42, -0.54, 0.54)
+      : nextState === "SharpTurnLeft" ? 0.18
+        : nextState === "SharpTurnRight" ? -0.18
+          : 0;
     const diveTimer = sample.diveTimer ?? 0;
     const divePose = diveTimer > 0
       ? Math.sin((1 - THREE.MathUtils.clamp(diveTimer / 0.62, 0, 1)) * Math.PI)
       : 0;
     const diveLean = (sample.diveSide ?? 0) * 0.62 * divePose;
     this.visualRoot.rotation.x = damp(this.visualRoot.rotation.x, forwardLean, 8.5, safeDt);
+    this.visualRoot.rotation.y = damp(this.visualRoot.rotation.y, directionalYaw, 10.5, safeDt);
     this.visualRoot.rotation.z = damp(
       this.visualRoot.rotation.z,
       lateralLean + diveLean,
@@ -805,6 +934,7 @@ export class FutbahlLocomotionController {
       this.debugTimer = 0.1;
       this.renderDebug({
         state: this.state,
+        animationState: this.animationState,
         clip: this.currentClip,
         totalSpeed: speed,
         localForwardSpeed: localForward,
@@ -835,16 +965,31 @@ export class FutbahlLocomotionController {
     this.visualRoot.position.set(0, 0, 0);
     this.visualRoot.rotation.set(0, 0, 0);
     this.previousSpeed = 0;
+    this.smoothedAcceleration = 0;
+    this.stateAge = 0;
   }
 
   private resolveCriticalState(sample: FutbahlMotionSample): FutbahlAnimationState | null {
     if ((sample.diveTimer ?? 0) > 0) return "KeeperDive";
     if ((sample.tackleTimer ?? 0) > 0) return "SlideTackle";
     if ((sample.recoveryTimer ?? 0) > 0) return "Recovery";
-    if ((sample.kickTimer ?? 0) > 0) return (sample.kickTimer ?? 0) > 0.46 ? "Shot" : "Pass";
     if ((sample.headerTimer ?? 0) > 0) return "Header";
+    if ((sample.kickTimer ?? 0) > 0) {
+      if (sample.kickStyle === "short") return "ShortPass";
+      if (sample.kickStyle === "low-through") return "FirmPass";
+      if (sample.kickStyle === "through") return "ThroughPass";
+      if (sample.kickStyle === "long" || sample.kickStyle === "chip") return "LongPass";
+      if (sample.kickStyle === "driven" || sample.kickStyle === "finesse") return "PowerShot";
+      return sample.kickStyle === "shot" ? "Shot" : "Pass";
+    }
     if ((sample.catchTimer ?? 0) > 0) return "Catch";
-    if ((sample.firstTouchTimer ?? 0) > 0) return "Receive";
+    if (sample.standingTackle) return "StandingTackle";
+    if (sample.interception) return "Interception";
+    if ((sample.firstTouchTimer ?? 0) > 0) {
+      if ((sample.receiveIncomingSpeed ?? 0) > 21) return "FastReceive";
+      if ((sample.visualSpeed ?? 0) > 2.2) return "MovingReceive";
+      return "Receive";
+    }
     if ((sample.blockTimer ?? 0) > 0) return "Block";
     if ((sample.celebrateTimer ?? 0) > 0) return "Celebrate";
     if ((sample.passRequestTimer ?? 0) > 0) return "PassRequest";
@@ -852,7 +997,7 @@ export class FutbahlLocomotionController {
   }
 
   private contextualClip(state: FutbahlAnimationState, speed: number) {
-    if (state === "SlideTackle" && this.availableClips.has("Slide_Loop")) return "Slide_Loop";
+    if (state === "SlideTackle" && this.availableClips.has("Slide_Start")) return "Slide_Start";
     if (state === "Recovery" && this.availableClips.has("Slide_Exit")) return "Slide_Exit";
     if (state === "Header" && this.availableClips.has("Jump_Start")) return "Jump_Start";
     if (state === "Celebrate" && this.availableClips.has("Dance_Loop")) return "Dance_Loop";
@@ -865,29 +1010,40 @@ export class FutbahlLocomotionController {
 
   private applyActionOverlay(sample: FutbahlMotionSample, speed: number, dt: number) {
     const kickTimer = sample.kickTimer ?? 0;
-    const kickDuration = kickTimer > 0.46 ? 0.54 : 0.46;
-    const kickProgress = THREE.MathUtils.clamp(1 - kickTimer / kickDuration, 0, 1);
-    const kickBackswing = kickTimer > 0 && kickProgress < 0.27
-      ? Math.sin(THREE.MathUtils.clamp(kickProgress / 0.27, 0, 1) * Math.PI * 0.5)
+    const kickDuration = sample.kickDuration ?? 0.44;
+    const kickContactAfter = sample.kickContactAfter ?? 0.105;
+    const kickElapsed = THREE.MathUtils.clamp(kickDuration - kickTimer, 0, kickDuration);
+    const kickProgress = kickDuration > 0 ? THREE.MathUtils.clamp(kickElapsed / kickDuration, 0, 1) : 0;
+    const contactProgress = kickContactAfter > 0 ? THREE.MathUtils.clamp(kickElapsed / kickContactAfter, 0, 1.4) : 0;
+    const kickBackswing = kickTimer > 0 && contactProgress < 0.72
+      ? Math.sin(THREE.MathUtils.clamp(contactProgress / 0.72, 0, 1) * Math.PI * 0.5)
       : 0;
-    const kickFollowThrough = kickTimer > 0 && kickProgress >= 0.2
-      ? Math.sin(THREE.MathUtils.clamp((kickProgress - 0.2) / 0.8, 0, 1) * Math.PI)
+    const kickFollowThrough = kickTimer > 0 && contactProgress >= 0.58
+      ? Math.sin(THREE.MathUtils.clamp((kickProgress - kickContactAfter / kickDuration * 0.58) / 0.78, 0, 1) * Math.PI)
       : 0;
     const header = THREE.MathUtils.clamp((sample.headerTimer ?? 0) / 0.55, 0, 1);
     const catchAmount = THREE.MathUtils.clamp((sample.catchTimer ?? 0) / 0.62, 0, 1);
-    const receiveAmount = THREE.MathUtils.clamp((sample.firstTouchTimer ?? 0) / 0.24, 0, 1);
+    const receiveAmount = THREE.MathUtils.clamp((sample.firstTouchTimer ?? 0) / 0.42, 0, 1);
     const tackleAmount = THREE.MathUtils.clamp((sample.tackleTimer ?? 0) / 0.58, 0, 1);
     const recoveryAmount = THREE.MathUtils.clamp((sample.recoveryTimer ?? 0) / 0.72, 0, 1);
     const blockAmount = THREE.MathUtils.clamp((sample.blockTimer ?? 0) / 0.5, 0, 1);
     const diveAmount = THREE.MathUtils.clamp((sample.diveTimer ?? 0) / 0.62, 0, 1);
     const celebrate = THREE.MathUtils.clamp((sample.celebrateTimer ?? 0) / 2.2, 0, 1);
     const request = sample.passRequestTimer ?? 0;
-    if ((kickBackswing > 0 || kickFollowThrough > 0) && this.bones.rightLeg) {
-      this.bones.rightLeg.rotation.x += kickFollowThrough * 1.12 - kickBackswing * 0.48;
-      if (this.bones.leftLeg) this.bones.leftLeg.rotation.x -= kickFollowThrough * 0.2;
+    const shotAction = sample.kickStyle === "shot"
+      || sample.kickStyle === "driven"
+      || sample.kickStyle === "finesse"
+      || sample.kickStyle === "chip";
+    const kickingLeg = sample.preferredFoot === "left" ? this.bones.leftLeg : this.bones.rightLeg;
+    const plantLeg = sample.preferredFoot === "left" ? this.bones.rightLeg : this.bones.leftLeg;
+    if ((kickBackswing > 0 || kickFollowThrough > 0) && kickingLeg) {
+      const followAmplitude = shotAction ? 1.34 : sample.kickStyle === "long" ? 1.18 : 0.96;
+      const backswingAmplitude = shotAction ? 0.62 : 0.44;
+      kickingLeg.rotation.x += kickFollowThrough * followAmplitude - kickBackswing * backswingAmplitude;
+      if (plantLeg) plantLeg.rotation.x -= kickFollowThrough * (shotAction ? 0.22 : 0.14);
       if (this.bones.spine) {
-        this.bones.spine.rotation.x -= kickFollowThrough * 0.16;
-        this.bones.spine.rotation.y += kickFollowThrough * 0.08;
+        this.bones.spine.rotation.x -= kickFollowThrough * (shotAction ? 0.2 : 0.11);
+        this.bones.spine.rotation.y += (sample.preferredFoot === "left" ? -1 : 1) * kickFollowThrough * 0.1;
       }
     }
     if (diveAmount > 0) {
@@ -926,9 +1082,17 @@ export class FutbahlLocomotionController {
       if (this.bones.rightArm) this.bones.rightArm.rotation.x += armRaise;
     } else if (receiveAmount > 0) {
       const cushion = Math.sin(receiveAmount * Math.PI);
-      if (this.bones.rightLeg) this.bones.rightLeg.rotation.x += 0.42 * cushion;
-      if (this.bones.leftLeg) this.bones.leftLeg.rotation.x -= 0.12 * cushion;
-      if (this.bones.spine) this.bones.spine.rotation.x -= 0.08 * cushion;
+      const contactLeg = sample.preferredFoot === "left" ? this.bones.leftLeg : this.bones.rightLeg;
+      const supportLeg = sample.preferredFoot === "left" ? this.bones.rightLeg : this.bones.leftLeg;
+      if (sample.firstTouchType === "chest") {
+        if (this.bones.spine) this.bones.spine.rotation.x += 0.2 * cushion;
+        if (this.bones.leftArm) this.bones.leftArm.rotation.z -= 0.28 * cushion;
+        if (this.bones.rightArm) this.bones.rightArm.rotation.z += 0.28 * cushion;
+      } else {
+        if (contactLeg) contactLeg.rotation.x += (sample.firstTouchType === "thigh" ? 0.78 : 0.46) * cushion;
+        if (supportLeg) supportLeg.rotation.x -= 0.12 * cushion;
+        if (this.bones.spine) this.bones.spine.rotation.x -= (sample.firstTouchType === "thigh" ? 0.14 : 0.08) * cushion;
+      }
     } else if (blockAmount > 0) {
       const block = Math.sin(blockAmount * Math.PI);
       if (this.bones.leftLeg) this.bones.leftLeg.rotation.x += 0.62 * block;
@@ -993,6 +1157,7 @@ export class FutbahlLocomotionController {
       "Futbahl player debug",
       `player index: ${snapshot.playerIndex}`,
       `state: ${snapshot.state}`,
+      `action: ${snapshot.animationState}`,
       `clip: ${snapshot.clip}`,
       `speed: ${snapshot.totalSpeed.toFixed(2)}`,
       `forward: ${snapshot.localForwardSpeed.toFixed(2)}`,

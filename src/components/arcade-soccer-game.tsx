@@ -13,6 +13,7 @@ import { attachLicensedBallVisual } from "@/lib/futbahl-ball-visual";
 import { simulateBallTrajectory, stepBallPhysics } from "@/lib/futbahl-ball-physics";
 import { sweptMovingSphereContact } from "@/lib/futbahl-contact";
 import { kickAnimationProfile } from "@/lib/futbahl-animation-contact";
+import { receivePassReadiness } from "@/lib/futbahl-receive-readiness";
 import { FutbahlMobileControls } from "@/components/futbahl-mobile-controls";
 import {
   BODY_PRESETS as ANONYMOUS_BODY_PRESETS,
@@ -127,6 +128,7 @@ type PlayerBody = {
   locomotionBlend: number;
   animationSpeed: number;
   kickTimer: number;
+  animationKickStyle: KickStyle | null;
   actionCooldown: number;
   tackleTimer: number;
   tackleCooldown: number;
@@ -139,6 +141,9 @@ type PlayerBody = {
   headerSampleFrame: number;
   firstTouchTimer: number;
   firstTouchType: FirstTouchType | null;
+  receiveControlTimer: number;
+  receiveIncomingSpeed: number;
+  receiveControlQuality: number;
   blockTimer: number;
   passRequestTimer: number;
   celebrateTimer: number;
@@ -277,6 +282,9 @@ type PendingReceiveAction = {
   requestedAt: number;
   expiresAt: number;
   requestedBy: "user" | "ai";
+  estimatedIncomingSpeed?: number;
+  requiredControlTime?: number;
+  oneTouchEligible?: boolean;
 };
 
 type CrowdAudioBuffers = {
@@ -699,7 +707,7 @@ const LANDING_MARKER_Y = 0.135;
 const RECORDED_CROWD_AMBIENT_PATH = "/audio/stadium-ambience.m4a";
 const RECORDED_CROWD_SWELL_PATH = "/audio/stadium-swell.m4a";
 const RECORDED_CROWD_GOAL_PATH = "/audio/stadium-goal-roar.m4a";
-const RECORDED_REFEREE_WHISTLE_PATH = "/audio/referee-whistle-from-crowd.m4a";
+const RECORDED_REFEREE_WHISTLE_PATH = "/audio/referee-whistle-cc0.mp3";
 const CROWD_AMBIENCE_CROSSFADE_SECONDS = 4;
 const CROWD_AMBIENCE_LAYER_GAIN = 0.92;
 const CROWD_MASTER_GAIN = 0.24;
@@ -3878,6 +3886,7 @@ function createPlayer(id: string, team: TeamId, role: PlayerRole, line: PlayerLi
     locomotionBlend: 0,
     animationSpeed: 0,
     kickTimer: 0,
+    animationKickStyle: null,
     actionCooldown: 0,
     tackleTimer: 0,
     tackleCooldown: 0,
@@ -3890,6 +3899,9 @@ function createPlayer(id: string, team: TeamId, role: PlayerRole, line: PlayerLi
     headerSampleFrame: -1,
     firstTouchTimer: 0,
     firstTouchType: null,
+    receiveControlTimer: 0,
+    receiveIncomingSpeed: 0,
+    receiveControlQuality: 1,
     blockTimer: 0,
     passRequestTimer: 0,
     celebrateTimer: 0,
@@ -4552,6 +4564,7 @@ export function ArcadeSoccerGame() {
       player.locomotionBlend = 0;
       player.animationSpeed = 0;
       player.kickTimer = 0;
+      player.animationKickStyle = null;
       player.actionCooldown = 0;
       player.tackleTimer = 0;
       player.tackleCooldown = 0;
@@ -4562,6 +4575,9 @@ export function ArcadeSoccerGame() {
       player.headerTimer = 0;
       player.firstTouchTimer = 0;
       player.firstTouchType = null;
+      player.receiveControlTimer = 0;
+      player.receiveIncomingSpeed = 0;
+      player.receiveControlQuality = 1;
       player.blockTimer = 0;
       player.passRequestTimer = 0;
       player.celebrateTimer = 0;
@@ -9187,6 +9203,7 @@ function updateMatch(
       player.mesh.rotation.y = player.heading;
       player.mesh.position.copy(player.pos);
       player.kickTimer = Math.max(0, player.kickTimer - dt);
+      if (player.kickTimer === 0) player.animationKickStyle = null;
       player.actionCooldown = Math.max(0, player.actionCooldown - dt);
       player.tackleTimer = 0;
       player.tackleCooldown = Math.max(0, player.tackleCooldown - dt);
@@ -9278,6 +9295,7 @@ function updateMatch(
     const maxSpeed = (player.role === "keeper" ? keeperBurst ? 8.1 : 5.8 : 12.1) * (sprint ? 1.25 : 1);
     player.stamina = clamp(player.stamina + (sprint ? -0.42 : 0.24) * dt, 0, 1);
     player.kickTimer = Math.max(0, player.kickTimer - dt);
+    if (player.kickTimer === 0) player.animationKickStyle = null;
     player.actionCooldown = Math.max(0, player.actionCooldown - dt);
     player.tackleTimer = Math.max(0, player.tackleTimer - dt);
     player.tackleCooldown = Math.max(0, player.tackleCooldown - dt);
@@ -9291,6 +9309,10 @@ function updateMatch(
     player.headerTimer = Math.max(0, player.headerTimer - dt);
     player.firstTouchTimer = Math.max(0, player.firstTouchTimer - dt);
     if (player.firstTouchTimer === 0) player.firstTouchType = null;
+    player.receiveControlTimer = active.ballOwnerId === player.id
+      ? Math.max(0, player.receiveControlTimer - dt)
+      : 0;
+    if (player.receiveControlTimer === 0 && player.firstTouchTimer === 0) player.receiveIncomingSpeed = 0;
     player.blockTimer = Math.max(0, player.blockTimer - dt);
     player.ballContactCooldown = Math.max(0, player.ballContactCooldown - dt);
     player.challengeCommitTimer = Math.max(0, player.challengeCommitTimer - dt);
@@ -10817,6 +10839,7 @@ function executeSimpleGoalKick(active: MatchRuntime, actor: PlayerBody | null, m
   if (keeper) {
     syncGoalKickBallToKeeper(active, keeper);
     keeper.kickTimer = 0.5;
+    keeper.animationKickStyle = "long";
     keeper.actionCooldown = 0.42;
     active.ballIgnorePlayerId = keeper.id;
     active.goalKickLockPlayerId = keeper.id;
@@ -10896,6 +10919,7 @@ function executeManualCorner(active: MatchRuntime, actor: PlayerBody, option: Ma
   active.eventTimer = 0;
   active.cooldown = 0.28;
   actor.kickTimer = 0.54;
+  actor.animationKickStyle = "long";
   actor.actionCooldown = 0.24;
   playKickSound(active, clamp(0.72 + charge * 0.22, 0.72, 0.94));
   active.renderer.domElement.dataset.lastManualCornerTarget = option.id;
@@ -11078,6 +11102,7 @@ function resumeRestart(active: MatchRuntime) {
   active.cooldown = 0.35;
   if (actor) {
     actor.kickTimer = 0.5;
+    actor.animationKickStyle = restartingPhase === "throw-in" ? null : restartingPhase === "corner" ? "long" : "short";
   }
   if (restartingPhase === "kickoff" && actor) {
     active.ballIgnorePlayerId = null;
@@ -11564,10 +11589,21 @@ function prepareAiReceiveAction(
   receiver: PlayerBody,
   style: KickStyle,
   arrivalTime: number,
+  incomingPower: number,
 ) {
   if (receiver.controlledBy === "p1" && !active.p1Autopilot) return;
   const incoming = receiver.pos.clone().sub(passer.pos).setY(0);
   const option = receiveActionTarget(receiver, passer, active, incoming);
+  const fallbackReadiness = receivePassReadiness({
+    incomingSpeed: incomingPower,
+    receiverSpeed: Math.max(receiver.vel.length(), receiver.animationSpeed),
+    ballHeight: BALL_RADIUS,
+    contactDistance: 0.9,
+    targetFacingDot: 0,
+    redirectionDot: -0.2,
+    pressureDistance: nearestOpponentDistance(receiver, active.players),
+    passStyle: style,
+  });
   if (!option) {
     active.pendingReceiveAction = {
       receiverId: receiver.id,
@@ -11575,11 +11611,27 @@ function prepareAiReceiveAction(
       requestedAt: performance.now(),
       expiresAt: performance.now() + Math.max(650, arrivalTime * 1000 + 350),
       requestedBy: "ai",
+      estimatedIncomingSpeed: incomingPower,
+      requiredControlTime: fallbackReadiness.requiredControlTime,
+      oneTouchEligible: false,
     };
     return;
   }
   const controllable = style === "short" || style === "low-through";
-  const oneTouch = controllable && option.alignment > 0.12 && option.distance < 27;
+  const targetDirection = option.direction.clone().setY(0).normalize();
+  const readiness = receivePassReadiness({
+    incomingSpeed: incomingPower,
+    receiverSpeed: Math.max(receiver.vel.length(), receiver.animationSpeed),
+    ballHeight: BALL_RADIUS,
+    contactDistance: 0.9,
+    targetFacingDot: facingDirection(receiver).dot(targetDirection),
+    redirectionDot: option.alignment,
+    pressureDistance: nearestOpponentDistance(receiver, active.players),
+    passStyle: style,
+  });
+  const oneTouch = controllable
+    && option.distance < 27
+    && readiness.oneTouchAllowed;
   active.pendingReceiveAction = {
     receiverId: receiver.id,
     action: oneTouch ? "oneTouchPass" : "quickPass",
@@ -11588,6 +11640,9 @@ function prepareAiReceiveAction(
     requestedAt: performance.now(),
     expiresAt: performance.now() + Math.max(750, arrivalTime * 1000 + 520),
     requestedBy: "ai",
+    estimatedIncomingSpeed: incomingPower,
+    requiredControlTime: readiness.requiredControlTime,
+    oneTouchEligible: oneTouch,
   };
 }
 
@@ -11602,6 +11657,8 @@ function executePendingReceiveAction(active: MatchRuntime, receiver: PlayerBody,
     return false;
   }
   if (immediateOnly && pending.action !== "oneTouchPass") return false;
+  if (immediateOnly && pending.oneTouchEligible === false) return false;
+  if (!immediateOnly && receiver.receiveControlTimer > 0) return false;
   const nextReceiver = pending.nextReceiverId
     ? active.players.find((candidate) => candidate.id === pending.nextReceiverId) ?? null
     : null;
@@ -11623,6 +11680,15 @@ function executePendingReceiveAction(active: MatchRuntime, receiver: PlayerBody,
   const resolvedTarget = style === "short"
     ? target
     : kickTargetForStyle(receiver, active, nextReceiver, style);
+  const strikeDirection = resolvedTarget.clone().sub(receiver.pos).setY(0);
+  if (!immediateOnly && strikeDirection.lengthSq() > 0.1) {
+    const targetHeading = headingFromDirection(strikeDirection);
+    const facingDot = facingDirection(receiver).dot(strikeDirection.normalize());
+    if (facingDot < 0.1) {
+      setPlayerHeading(receiver, targetHeading, 1 / 60, 10.5);
+      return false;
+    }
+  }
   const kicked = kickTowardPoint(
     receiver,
     resolvedTarget,
@@ -11649,7 +11715,7 @@ function updatePendingReceiveAction(active: MatchRuntime) {
   }
   if (pending.action !== "quickPass" || active.ballOwnerId !== pending.receiverId) return;
   const receiver = active.players.find((candidate) => candidate.id === pending.receiverId) ?? null;
-  if (!receiver || receiver.carryTimer < 0.08) return;
+  if (!receiver || receiver.carryTimer < 0.08 || receiver.receiveControlTimer > 0) return;
   executePendingReceiveAction(active, receiver);
 }
 
@@ -11699,7 +11765,7 @@ function beginPassIntent(
   active.renderer.domElement.dataset.passIntentStyle = passType;
   active.renderer.domElement.dataset.passIntentDirectionX = direction.x.toFixed(4);
   active.renderer.domElement.dataset.passIntentDirectionZ = direction.z.toFixed(4);
-  prepareAiReceiveAction(active, passer, receiver, style, predictedArrivalTime);
+  prepareAiReceiveAction(active, passer, receiver, style, predictedArrivalTime, power);
 }
 
 function predictGroundPassReception(receiver: PlayerBody, active: MatchRuntime, fallbackTarget: THREE.Vector3) {
@@ -12868,16 +12934,24 @@ function strideLengthForLocomotion(
 
 function animatePlayer(player: PlayerBody, dt: number, camera?: THREE.Camera, active?: MatchRuntime) {
   if (player.locomotionController) {
+    const activeKickStyle = player.animationKickStyle
+      ?? (active?.pendingKickContact?.playerId === player.id ? active.pendingKickContact.style : null);
+    const activeKickProfile = kickAnimationProfile(activeKickStyle ?? "short");
     const controlTargetDistance = active?.ballOwnerId === player.id
       ? active.ballPos.distanceTo(controlledBallPoint(player))
       : 0;
     player.locomotionController.update({
       velocity: player.vel,
+      visualSpeed: player.animationSpeed,
       heading: player.heading,
       turnRate: player.turnRate,
       dt,
       distanceToCamera: camera ? player.pos.distanceTo(camera.position) : 0,
       kickTimer: player.kickTimer,
+      kickStyle: activeKickStyle,
+      kickDuration: activeKickProfile.duration,
+      kickContactAfter: activeKickProfile.contactAfter,
+      preferredFoot: player.preferredFoot,
       headerTimer: player.headerTimer,
       catchTimer: player.catchTimer,
       diveTimer: player.diveTimer,
@@ -12888,6 +12962,12 @@ function animatePlayer(player: PlayerBody, dt: number, camera?: THREE.Camera, ac
       recoveryTimer: player.recoveryTimer,
       blockTimer: player.blockTimer,
       firstTouchTimer: player.firstTouchTimer,
+      firstTouchType: player.firstTouchType,
+      receiveIncomingSpeed: player.receiveIncomingSpeed,
+      carryingBall: active?.ballOwnerId === player.id,
+      closeControl: active?.ballOwnerId === player.id && player.animationSpeed < 3.15,
+      standingTackle: player.challengeCommitTimer > 0.04 && player.tackleTimer <= 0,
+      interception: player.postWinState === "WIN_BALL_CONTROL" && player.postWinTimer > 0,
       isKeeper: player.role === "keeper",
       defensive: Boolean(active?.ballOwnerId)
         && active?.players.find((candidate) => candidate.id === active.ballOwnerId)?.team !== player.team,
@@ -13649,8 +13729,10 @@ function playRecordedWhistleBlast(active: MatchRuntime, duration: number, delayM
     const gain = audio.createGain();
     source.buffer = buffer;
     gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.linearRampToValueAtTime(0.52, start + 0.012);
-    gain.gain.setValueAtTime(0.52, Math.max(start + 0.014, start + playbackDuration - 0.045));
+    // This short close-miked recording needs less gain than the old whistle
+    // extracted from crowd ambience, especially in two/three-blast patterns.
+    gain.gain.linearRampToValueAtTime(0.36, start + 0.01);
+    gain.gain.setValueAtTime(0.36, Math.max(start + 0.012, start + playbackDuration - 0.04));
     gain.gain.linearRampToValueAtTime(0.0001, start + playbackDuration);
     source.connect(gain);
     gain.connect(audio.destination);
@@ -14375,7 +14457,8 @@ function aiInput(player: PlayerBody, active: MatchRuntime) {
       const plannedStyle = passStyle === "through" ? "through" : passStyle === "long" ? "long" : "short";
       return performValidatedAiPass(player, active, passTarget, plannedStyle, plannedPassKind);
     };
-    const hasControlledTouch = player.carryTimer > (player.role === "keeper" ? 0.85 : pressured ? 0.5 : 0.72);
+    const hasControlledTouch = player.receiveControlTimer <= 0
+      && player.carryTimer > (player.role === "keeper" ? 0.85 : pressured ? 0.5 : 0.72);
     const passOpportunity = Boolean(passTarget && usefulPass && hasControlledTouch && (pressured || openReceiver > 4.6 || player.carryTimer > 1.05));
     const rearPressure = player.role === "keeper" ? 0 : rearPressureCount(player, active.players, 4.8);
     const furthestForward = active.players
@@ -14425,7 +14508,7 @@ function aiInput(player: PlayerBody, active: MatchRuntime) {
     const poorWideShot = player.role !== "keeper" && poorWideShotAngle(player, goalDistance, blockers);
     const wideCrossTarget = poorWideShot ? chooseWideCrossTarget(player, active) : null;
     const cutbackTarget = poorWideShot ? chooseCutbackTarget(player, active) : null;
-    if (player.decisionCooldown <= 0) {
+    if (player.decisionCooldown <= 0 && player.receiveControlTimer <= 0) {
       let acted = false;
       const ownGoalDistance = Math.abs(teamGoalZ(player.team, active.half) - player.pos.z);
       if (player.role !== "keeper" && goalDistance < 20 && player.carryTimer > 0.2) {
@@ -18022,6 +18105,8 @@ function takePossession(player: PlayerBody, active: MatchRuntime, verifiedFirstT
     );
     return false;
   }
+  const incomingBallSpeed = active.ballVel.length();
+  const incomingBallHeight = active.ballPos.y;
   const incomingBallVelocity = active.ballVel.clone().setY(0);
   const previousBallState = active.ballState;
   const previousTouchTeam = active.lastTouchTeam;
@@ -18097,7 +18182,58 @@ function takePossession(player: PlayerBody, active: MatchRuntime, verifiedFirstT
     active.restartProtectionTimer = Math.min(active.restartProtectionTimer, 0.85);
   }
   active.ballCurve.set(0, 0, 0);
-  if (completedPassIntent && incomingBallVelocity.lengthSq() > 0.08) {
+  const pendingPassTarget = pendingAtContact?.targetPosition?.clone()
+    ?? (pendingAtContact?.nextReceiverId
+      ? active.players.find((candidate) => candidate.id === pendingAtContact.nextReceiverId)?.pos.clone()
+      : undefined);
+  const outgoingDirection = pendingPassTarget?.sub(player.pos).setY(0) ?? facingDirection(player);
+  if (outgoingDirection.lengthSq() < 0.05) outgoingDirection.copy(facingDirection(player));
+  else outgoingDirection.normalize();
+  const incomingTravelDirection = incomingBallVelocity.lengthSq() > 0.05
+    ? incomingBallVelocity.clone().normalize()
+    : facingDirection(player);
+  const receiveReadiness = receivePassReadiness({
+    incomingSpeed: incomingBallSpeed,
+    receiverSpeed: Math.max(player.vel.length(), player.animationSpeed),
+    ballHeight: incomingBallHeight,
+    contactDistance,
+    targetFacingDot: facingDirection(player).dot(outgoingDirection),
+    redirectionDot: incomingTravelDirection.dot(outgoingDirection),
+    pressureDistance: nearestOpponentDistance(player, active.players),
+    passStyle: pendingAtContact?.passStyle ?? interruptedIntent?.passType ?? "short",
+  });
+  player.receiveControlTimer = player.role === "keeper" ? 0 : receiveReadiness.requiredControlTime;
+  player.receiveIncomingSpeed = incomingBallSpeed;
+  player.receiveControlQuality = receiveReadiness.controlQuality;
+  active.renderer.domElement.dataset.lastReceiveControlTime = receiveReadiness.requiredControlTime.toFixed(3);
+  active.renderer.domElement.dataset.lastReceiveControlQuality = receiveReadiness.controlQuality.toFixed(3);
+  active.renderer.domElement.dataset.lastReceiveIncomingSpeed = incomingBallSpeed.toFixed(3);
+  active.renderer.domElement.dataset.lastReceiveOneTouchEligible = receiveReadiness.oneTouchAllowed ? "true" : "false";
+  if (player.role !== "keeper" && incomingBallSpeed > 3.2) {
+    const inferredTouch = verifiedFirstTouch?.type ?? firstTouchTypeAtHeight(incomingBallHeight);
+    player.firstTouchType = inferredTouch === "header" ? "chest" : inferredTouch;
+    player.firstTouchTimer = Math.max(
+      player.firstTouchTimer,
+      clamp(receiveReadiness.requiredControlTime + 0.1, 0.24, 0.42),
+    );
+  }
+  if (pendingAtContact?.action === "oneTouchPass") {
+    pendingAtContact.oneTouchEligible = pendingAtContact.oneTouchEligible !== false
+      && receiveReadiness.oneTouchAllowed;
+    pendingAtContact.requiredControlTime = receiveReadiness.requiredControlTime;
+    if (!pendingAtContact.oneTouchEligible) {
+      pendingAtContact.action = "quickPass";
+      pendingAtContact.expiresAt = Math.max(pendingAtContact.expiresAt, performance.now() + 760);
+    } else {
+      player.receiveControlTimer = 0;
+      setPlayerHeading(player, headingFromDirection(outgoingDirection), 1 / 30, 24);
+    }
+  }
+  if (
+    completedPassIntent
+    && incomingBallVelocity.lengthSq() > 0.08
+    && !(pendingAtContact?.action === "oneTouchPass" && pendingAtContact.oneTouchEligible)
+  ) {
     const incomingSourceDirection = incomingBallVelocity.normalize().multiplyScalar(-1);
     setPlayerHeading(player, headingFromDirection(incomingSourceDirection), 1 / 30, 22);
     active.renderer.domElement.dataset.lastReceptionFacingDot = facingDirection(player).dot(incomingSourceDirection).toFixed(4);
@@ -18127,7 +18263,7 @@ function takePossession(player: PlayerBody, active: MatchRuntime, verifiedFirstT
     }
   }
   autoSwitchToPossessor(active, player);
-  if (pendingAtContact?.action === "oneTouchPass") {
+  if (pendingAtContact?.action === "oneTouchPass" && pendingAtContact.oneTouchEligible) {
     executePendingReceiveAction(active, player, true);
   } else if (pendingAtContact?.action === "quickPass") {
     pendingAtContact.requestedAt = performance.now();
@@ -18346,6 +18482,7 @@ function kickTowardPoint(
       : "pass";
   const animationProfile = kickAnimationProfile(style);
   player.kickTimer = animationProfile.duration;
+  player.animationKickStyle = style;
   player.actionCooldown = style === "short" || style === "low-through" ? ACTION_COOLDOWN : 0.34;
   active.pendingKickContact = {
     playerId: player.id,

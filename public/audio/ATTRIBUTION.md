@@ -2,12 +2,13 @@
 
 ## Referee whistle
 
-- **Recording:** `Norwegian football match/soccer game ambience.WAV`
-- **Author:** habbis92
-- **Source:** https://freesound.org/people/habbis92/sounds/206003/
+- **Recording:** `Referee whistle sound.wav`
+- **Author:** Rosa-Orenes256
+- **Source:** https://freesound.org/people/Rosa-Orenes256/sounds/538422/
 - **License:** Creative Commons CC0 1.0 Universal
-- **Local derivative:** `referee-whistle-from-crowd.m4a`, extracted from
-  164.36s-165.28s of the stadium recording, normalized, and given 45ms fades.
+- **Bundled asset:** `referee-whistle-cc0.mp3`, the official Freesound HQ
+  preview downloaded on 2026-08-08. Runtime gain and short fades balance it
+  against the existing match ambience without altering pitch or timing.
 
 The bundled outdoor stadium ambience, crowd swell, and goal roar are derived
 from verified CC0 football-stadium field recordings hosted by Freesound:
