@@ -45,6 +45,7 @@ export type OfflineSettings = {
   userTeam: TeamSetup;
   aiTeam: TeamSetup;
   homeColor: string;
+  minimapEnabled: boolean;
   crowdVolume: number;
   commentaryVolume: number;
 };
@@ -277,6 +278,7 @@ export const DEFAULT_OFFLINE_SETTINGS: OfflineSettings = {
   userTeam: createTeamSetup("home", "Futbahl", "4-3-3"),
   aiTeam: createTeamSetup("away", "Rivals", "4-3-3"),
   homeColor: "#38bdf8",
+  minimapEnabled: false,
   crowdVolume: 0.45,
   commentaryVolume: 0,
 };
@@ -368,6 +370,7 @@ export function normalizeOfflineSettings(value: unknown): OfflineSettings {
     homeColor: typeof source.homeColor === "string" && /^#[0-9a-f]{6}$/i.test(source.homeColor)
       ? source.homeColor
       : DEFAULT_OFFLINE_SETTINGS.homeColor,
+    minimapEnabled: source.minimapEnabled === true,
     crowdVolume: Math.max(0, Math.min(1, Number(source.crowdVolume ?? DEFAULT_OFFLINE_SETTINGS.crowdVolume))),
     commentaryVolume: 0,
   };
