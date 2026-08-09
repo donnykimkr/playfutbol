@@ -102,9 +102,9 @@ export function FutbahlMobileControls({
       </div>
 
       <div className="pointer-events-auto absolute bottom-[calc(env(safe-area-inset-bottom)+1rem)] right-[calc(env(safe-area-inset-right)+1rem)] grid grid-cols-2 gap-2">
-        <button {...actionHandlers("KeyS")} className="h-16 w-16 rounded-full border-2 border-cyan-200/65 bg-cyan-700/55 text-xs font-black text-white shadow-lg">PASS</button>
+        <button {...actionHandlers("KeyS")} className="h-16 w-16 rounded-full border-2 border-cyan-200/65 bg-cyan-700/55 text-[10px] font-black text-white shadow-lg">PASS / SWITCH</button>
         <button {...actionHandlers("KeyD")} className="h-20 w-20 -translate-y-4 rounded-full border-2 border-rose-200/70 bg-rose-700/60 text-xs font-black text-white shadow-lg">SHOOT</button>
-        <button {...actionHandlers("KeyE")} className="h-14 w-14 rounded-full border-2 border-amber-200/60 bg-amber-700/55 text-[10px] font-black text-white shadow-lg">SWITCH</button>
+        <button {...actionHandlers("KeyE")} className="h-14 w-14 rounded-full border-2 border-amber-200/60 bg-amber-700/55 text-[10px] font-black text-white shadow-lg">SPRINT</button>
         <button {...actionHandlers("Space")} className="h-16 w-16 rounded-full border-2 border-emerald-200/60 bg-emerald-700/55 text-xs font-black text-white shadow-lg">TACKLE</button>
       </div>
 
