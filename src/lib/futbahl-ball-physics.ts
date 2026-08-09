@@ -136,6 +136,12 @@ export type BallTrajectoryResult = {
   samples: THREE.Vector3[];
 };
 
+export type BallisticLandingSolution = {
+  velocity: THREE.Vector3;
+  predictedLandingPoint: THREE.Vector3;
+  error: number;
+};
+
 export function simulateBallTrajectory(
   initial: BallPhysicsState,
   stepSeconds: number,
@@ -194,4 +200,80 @@ export function simulateBallTrajectory(
   }
 
   return { endpoint: state.position, landingPoint, samples };
+}
+
+/**
+ * Solves a collision-free launch velocity against the same integrator used by
+ * live play. Iterative landing correction accounts for drag, rather than
+ * relying on a vacuum-only parabola that visibly misses the selected marker.
+ */
+export function solveBallisticLandingVelocity(
+  origin: THREE.Vector3,
+  target: THREE.Vector3,
+  constants: BallPhysicsConstants,
+  options: {
+    minimumFlightTime?: number;
+    maximumFlightTime?: number;
+    preferredHorizontalSpeed?: number;
+    iterations?: number;
+  } = {},
+): BallisticLandingSolution {
+  const horizontalTarget = target.clone().sub(origin).setY(0);
+  const distance = horizontalTarget.length();
+  const direction = distance > 0.001
+    ? horizontalTarget.clone().multiplyScalar(1 / distance)
+    : new THREE.Vector3(0, 0, 1);
+  const minimumFlightTime = options.minimumFlightTime ?? 0.85;
+  const maximumFlightTime = options.maximumFlightTime ?? 5.5;
+  const preferredHorizontalSpeed = Math.max(1, options.preferredHorizontalSpeed ?? 27);
+  const reachRatio = constants.maxHorizontalSpeed
+    ? distance / constants.maxHorizontalSpeed
+    : 0;
+  const effectiveHorizontalSpeed = constants.maxHorizontalSpeed && reachRatio > 1.05
+    ? Math.min(preferredHorizontalSpeed, constants.maxHorizontalSpeed * 0.31)
+    : preferredHorizontalSpeed;
+  const flightTime = THREE.MathUtils.clamp(
+    distance / effectiveHorizontalSpeed + 0.42,
+    minimumFlightTime,
+    maximumFlightTime,
+  );
+  const velocity = direction.multiplyScalar(distance / flightTime);
+  velocity.y = Math.max(
+    2.8,
+    (target.y - origin.y + 0.5 * constants.gravity * flightTime * flightTime) / flightTime,
+  );
+
+  let predictedLandingPoint = origin.clone();
+  let error = Number.POSITIVE_INFINITY;
+  const correctionTime = Math.max(0.55, flightTime);
+  const correctionGain = reachRatio > 1.05 ? 2.2 : 1.5;
+  for (let iteration = 0; iteration < (options.iterations ?? 24); iteration += 1) {
+    const prediction = simulateBallTrajectory(
+      {
+        position: origin.clone(),
+        velocity: velocity.clone(),
+        angularVelocity: new THREE.Vector3(),
+        curve: new THREE.Vector3(),
+        grounded: false,
+      },
+      1 / 120,
+      constants,
+      { maxSteps: 720, stopAtFirstLanding: true, sampleEvery: 12 },
+    );
+    predictedLandingPoint = (prediction.landingPoint ?? prediction.endpoint).clone();
+    const correction = target.clone().sub(predictedLandingPoint).setY(0);
+    error = correction.length();
+    if (error <= 0.08) break;
+    velocity.addScaledVector(correction, correctionGain / correctionTime);
+    if (constants.maxHorizontalSpeed) {
+      const horizontalSpeed = Math.hypot(velocity.x, velocity.z);
+      if (horizontalSpeed > constants.maxHorizontalSpeed) {
+        const scale = constants.maxHorizontalSpeed / horizontalSpeed;
+        velocity.x *= scale;
+        velocity.z *= scale;
+      }
+    }
+  }
+
+  return { velocity, predictedLandingPoint, error };
 }

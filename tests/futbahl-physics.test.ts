@@ -1,7 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "three";
-import { simulateBallTrajectory, stepBallPhysics } from "../src/lib/futbahl-ball-physics.ts";
+import {
+  simulateBallTrajectory,
+  solveBallisticLandingVelocity,
+  stepBallPhysics,
+} from "../src/lib/futbahl-ball-physics.ts";
+import {
+  DEFAULT_OFFLINE_SETTINGS,
+  normalizeOfflineSettings,
+} from "../src/lib/anonymous-team-setup.ts";
 import { sweptMovingSphereContact } from "../src/lib/futbahl-contact.ts";
 import { kickAnimationPhase, kickAnimationProfile } from "../src/lib/futbahl-animation-contact.ts";
 import {
@@ -63,6 +71,33 @@ test("a rolling pass decelerates monotonically", () => {
     assert.ok(state.velocity.length() <= previous + 1e-9);
     previous = state.velocity.length();
   }
+});
+
+test("goal-kick landing solver reaches freely selected pitch targets", () => {
+  const origin = new THREE.Vector3(-4, constants.radius, 47);
+  const targets = [
+    new THREE.Vector3(-23, constants.radius, 25),
+    new THREE.Vector3(8, constants.radius, 5),
+    new THREE.Vector3(27, constants.radius, -18),
+  ];
+  targets.forEach((target) => {
+    const solution = solveBallisticLandingVelocity(origin, target, {
+      ...constants,
+      maxHorizontalSpeed: 52,
+    }, {
+      preferredHorizontalSpeed: 29,
+      iterations: 24,
+    });
+    assert.ok(solution.error < 0.45, `landing error ${solution.error.toFixed(3)}m for ${target.toArray()}`);
+    assert.ok(solution.predictedLandingPoint.distanceTo(target) < 0.45);
+  });
+});
+
+test("minimap defaults off and persists only an explicit opt-in", () => {
+  assert.equal(DEFAULT_OFFLINE_SETTINGS.minimapEnabled, false);
+  assert.equal(normalizeOfflineSettings({}).minimapEnabled, false);
+  assert.equal(normalizeOfflineSettings({ minimapEnabled: true }).minimapEnabled, true);
+  assert.equal(normalizeOfflineSettings({ minimapEnabled: false }).minimapEnabled, false);
 });
 
 test("moving head catches a fast crossed ball without tunnelling", () => {
