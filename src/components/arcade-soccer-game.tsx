@@ -13146,6 +13146,29 @@ function animatePlayer(player: PlayerBody, dt: number, camera?: THREE.Camera, ac
       distanceToBall: active ? player.pos.distanceTo(active.ballPos.clone().setY(0)) : 0,
       controlTargetDistance,
     });
+    if (active?.locomotionDebugElement) {
+      const direction = player.locomotionController.activeDirection;
+      const observedDirections = new Set(
+        (active.renderer.domElement.dataset.observedLocomotionDirections ?? "").split("|").filter(Boolean),
+      );
+      observedDirections.add(direction);
+      active.renderer.domElement.dataset.observedLocomotionDirections = [...observedDirections].join("|");
+      const observedDirectionalGaits = new Set(
+        (active.renderer.domElement.dataset.observedDirectionalGaits ?? "").split("|").filter(Boolean),
+      );
+      observedDirectionalGaits.add([
+        direction,
+        player.locomotionController.activeLocomotionState,
+        player.locomotionController.activeClip,
+        player.locomotionController.activePlaybackRate < 0 ? "reverse" : "forward",
+      ].join(":"));
+      active.renderer.domElement.dataset.observedDirectionalGaits = [...observedDirectionalGaits].join("|");
+      if (player.controlledBy === "p1") {
+        active.renderer.domElement.dataset.lastLocomotionDirection = direction;
+        active.renderer.domElement.dataset.lastLocomotionState = player.locomotionController.activeState;
+        active.renderer.domElement.dataset.lastLocomotionClip = player.locomotionController.activeClip;
+      }
+    }
     if (
       active
       && typeof window !== "undefined"
