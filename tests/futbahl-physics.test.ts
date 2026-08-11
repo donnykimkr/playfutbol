@@ -76,6 +76,26 @@ test("a rolling pass decelerates monotonically", () => {
   }
 });
 
+test("tuned airborne drag slows flight without changing the ground model", () => {
+  const createState = () => ({
+    position: new THREE.Vector3(0, 1.2, 0),
+    velocity: new THREE.Vector3(2, 12, 34),
+    angularVelocity: new THREE.Vector3(),
+    curve: new THREE.Vector3(),
+    grounded: false,
+  });
+  const baseline = createState();
+  const tuned = createState();
+  for (let index = 0; index < 60; index += 1) {
+    stepBallPhysics(baseline, 1 / 120, constants);
+    stepBallPhysics(tuned, 1 / 120, { ...constants, airDrag: 0.026 });
+  }
+  const baselineHorizontalSpeed = Math.hypot(baseline.velocity.x, baseline.velocity.z);
+  const tunedHorizontalSpeed = Math.hypot(tuned.velocity.x, tuned.velocity.z);
+  assert.ok(tunedHorizontalSpeed < baselineHorizontalSpeed * 0.91);
+  assert.equal(tuned.grounded, false);
+});
+
 test("goal-kick landing solver reaches freely selected pitch targets", () => {
   const origin = new THREE.Vector3(-4, constants.radius, 47);
   const targets = [
