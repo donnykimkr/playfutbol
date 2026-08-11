@@ -4572,6 +4572,16 @@ export function ArcadeSoccerGame() {
     const charge = kickChargeForHoldMilliseconds(holdMilliseconds);
     const inputKeys = new Set(keysRef.current);
     const controlled = active.players.find((player) => player.controlledBy === "p1") ?? null;
+    const defendingOpenPlay = active.phase === "open" && (
+      active.possession === "away"
+      || (active.possession === null && active.ballOwnerId === null)
+    );
+    if (defendingOpenPlay) {
+      switchToBestManualPlayer(active, "p1");
+      active.renderer.domElement.dataset.lastMobilePassGesture = "switch";
+      active.renderer.domElement.dataset.lastMobilePassStatus = "executed";
+      return;
+    }
 
     if (kind === "loft") {
       inputKeys.add("KeyA");
@@ -4590,14 +4600,6 @@ export function ArcadeSoccerGame() {
     }
 
     if (active.phase !== "open") return;
-    const defending = active.possession === "away"
-      || (active.possession === null && active.ballOwnerId === null);
-    if (defending) {
-      switchToBestManualPlayer(active, "p1");
-      active.renderer.domElement.dataset.lastMobilePassGesture = "switch";
-      active.renderer.domElement.dataset.lastMobilePassStatus = "executed";
-      return;
-    }
     active.passInputAttempts += 1;
     active.passInputDownAt = performance.now();
     active.renderer.domElement.dataset.passInputAttempts = String(active.passInputAttempts);
