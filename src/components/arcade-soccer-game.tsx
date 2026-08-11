@@ -566,7 +566,7 @@ const FULL_TIME_SECONDS = 90 * 60;
 const BALL_MAX_SPEED = 42 * WORLD_UNITS_PER_METER;
 const BALL_ROLLING_FRICTION = 0.7;
 const BALL_SLIDING_FRICTION = 2.7;
-const BALL_AIR_DRAG = 0.018;
+const BALL_AIR_DRAG = 0.026;
 const BALL_SPIN_DAMPING = 0.36;
 const BALL_MAGNUS = 0.0018;
 const BALL_STOP_SPEED = 0.035;
@@ -596,7 +596,7 @@ const ACTION_COOLDOWN = 0.22;
 const GOAL_KICK_CURSOR_SPEED = 24;
 const CAMERA_FOLLOW_DAMPING = 4.25;
 const CAMERA_TOUCHLINE_DAMPING = 5.2;
-const SHOT_VERTICAL_POWER_MULTIPLIER = 1.72;
+const SHOT_VERTICAL_POWER_MULTIPLIER = 2.05;
 const AI_RECEIVE_DECISION_DELAY = 0.92;
 const PLAYER_NORMAL_SPEED = 12.1;
 const SPRINT_SPEED = 15.5;
@@ -2541,23 +2541,6 @@ function addPitch(scene: THREE.Scene) {
   const grassWidth = FIELD_W;
   const grassLength = FIELD_L;
   const grassBaseHeight = 0.16;
-  const grassBase = new THREE.Mesh(
-    new THREE.BoxGeometry(FIELD_W + TOUCHLINE_RUNOFF * 2, grassBaseHeight, FIELD_L + GOAL_LINE_RUNOFF * 2),
-    new THREE.MeshLambertMaterial({
-      color: OUTER_GRASS_COLOR,
-      side: THREE.FrontSide,
-      transparent: false,
-      opacity: 1,
-      depthTest: true,
-      depthWrite: true,
-    }),
-  );
-  grassBase.name = "stadium-base-floor";
-  grassBase.position.y = STADIUM_BASE_TOP_Y - grassBaseHeight / 2;
-  grassBase.userData.floorSurfaceOffsetY = grassBaseHeight / 2;
-  grassBase.userData.outerGrassColor = OUTER_GRASS_COLOR;
-  scene.add(grassBase);
-
   const stripeCount = Math.ceil(grassLength / GRASS_STRIPE_WIDTH);
   const textureWidth = 384;
   const textureHeight = 576;
@@ -2638,22 +2621,35 @@ function addPitch(scene: THREE.Scene) {
   roughnessTexture.wrapT = THREE.ClampToEdgeWrapping;
   roughnessTexture.minFilter = THREE.LinearMipmapLinearFilter;
   roughnessTexture.magFilter = THREE.LinearFilter;
+  const grassMaterial = new THREE.MeshStandardMaterial({
+    map: grassTexture,
+    color: "#ffffff",
+    normalMap: normalTexture,
+    normalScale: new THREE.Vector2(0.16, 0.16),
+    roughnessMap: roughnessTexture,
+    roughness: 0.94,
+    metalness: 0,
+    side: THREE.FrontSide,
+    transparent: false,
+    opacity: 1,
+    depthTest: true,
+    depthWrite: true,
+  });
+  const grassBase = new THREE.Mesh(
+    new THREE.BoxGeometry(FIELD_W + TOUCHLINE_RUNOFF * 2, grassBaseHeight, FIELD_L + GOAL_LINE_RUNOFF * 2),
+    grassMaterial,
+  );
+  grassBase.name = "stadium-base-floor";
+  grassBase.position.y = STADIUM_BASE_TOP_Y - grassBaseHeight / 2;
+  grassBase.receiveShadow = true;
+  grassBase.userData.floorSurfaceOffsetY = grassBaseHeight / 2;
+  grassBase.userData.outerGrassColor = OUTER_GRASS_COLOR;
+  grassBase.userData.surfaceMaterial = "shared-procedural-pbr";
+  scene.add(grassBase);
+
   const pitch = new THREE.Mesh(
     new THREE.PlaneGeometry(grassWidth, grassLength, 1, 1),
-    new THREE.MeshStandardMaterial({
-      map: grassTexture,
-      color: "#ffffff",
-      normalMap: normalTexture,
-      normalScale: new THREE.Vector2(0.16, 0.16),
-      roughnessMap: roughnessTexture,
-      roughness: 0.94,
-      metalness: 0,
-      side: THREE.FrontSide,
-      transparent: false,
-      opacity: 1,
-      depthTest: true,
-      depthWrite: true,
-    }),
+    grassMaterial,
   );
   pitch.name = "grass-surface";
   pitch.rotation.x = -Math.PI / 2;
@@ -2666,6 +2662,7 @@ function addPitch(scene: THREE.Scene) {
   pitch.userData.darkGrass = GRASS_DARK_COLOR;
   pitch.userData.lightGrass = GRASS_LIGHT_COLOR;
   pitch.userData.outerGrass = OUTER_GRASS_COLOR;
+  pitch.userData.surfaceMaterial = "shared-procedural-pbr";
   scene.add(pitch);
 
   const markingMaterial = new THREE.MeshBasicMaterial({
@@ -3773,6 +3770,7 @@ function updateAdvertisingBoards(active: MatchRuntime, dt: number) {
   active.renderer.domElement.dataset.pitchDarkGrass = GRASS_DARK_COLOR;
   active.renderer.domElement.dataset.pitchLightGrass = GRASS_LIGHT_COLOR;
   active.renderer.domElement.dataset.outerGrassColor = OUTER_GRASS_COLOR;
+  active.renderer.domElement.dataset.outerGrassMaterial = "shared-procedural-pbr";
   active.renderer.domElement.dataset.locomotionStrideLengths = JSON.stringify(LOCOMOTION_STRIDE_LENGTHS);
   active.renderer.domElement.dataset.locomotionReferenceStepsPerSecond = JSON.stringify(Object.fromEntries(
     Object.entries(LOCOMOTION_STRIDE_LENGTHS).map(([state, stride]) => [
@@ -4398,9 +4396,6 @@ export function ArcadeSoccerGame() {
   const [gameClock, setGameClock] = useState(0);
   const [, setPossessionPercent] = useState({ home: 50, away: 50 });
   const [showTouchControls, setShowTouchControls] = useState(false);
-  const [staminaUi, setStaminaUi] = useState(1);
-  const [staminaGaugeVisible, setStaminaGaugeVisible] = useState(false);
-  const [staminaPosition, setStaminaPosition] = useState({ x: 0, y: 0 });
   const [phaseUi, setPhaseUi] = useState<PlayPhase>("kickoff");
   const [p1AiUi, setP1AiUi] = useState(false);
   const [keyboardGuideOpen, setKeyboardGuideOpen] = useState(false);
@@ -4417,8 +4412,6 @@ export function ArcadeSoccerGame() {
   const gameClockUiRef = useRef(0);
   const possessionUiRef = useRef({ home: 50, away: 50 });
   const phaseUiRef = useRef<PlayPhase>("kickoff");
-  const staminaUiRef = useRef(1);
-  const staminaGaugeVisibleRef = useRef(false);
   const p1AiUiRef = useRef(false);
   const tutorialUiRef = useRef({ active: false, lessonIndex: 0, status: "active" as TutorialStatus });
 
@@ -4569,6 +4562,62 @@ export function ArcadeSoccerGame() {
       bubbles: true,
       cancelable: true,
     }));
+  }, []);
+
+  const performMobilePassGesture = useCallback((kind: "ground" | "loft", holdMilliseconds: number) => {
+    if (settingsOpenRef.current) return;
+    const active = sceneRef.current;
+    if (!active || active.state !== "playing" || active.p1Autopilot) return;
+    noteP1Activity(active);
+    const charge = kickChargeForHoldMilliseconds(holdMilliseconds);
+    const inputKeys = new Set(keysRef.current);
+    const controlled = active.players.find((player) => player.controlledBy === "p1") ?? null;
+
+    if (kind === "loft") {
+      inputKeys.add("KeyA");
+      const loftPlayer = active.phase === "open"
+        ? controlled
+        : active.restartActorId
+          ? active.players.find((player) => player.id === active.restartActorId) ?? null
+          : null;
+      const started = Boolean(loftPlayer && beginLoftCharge(loftPlayer, active));
+      if (started) active.loftCharge = charge;
+      const executed = started && releaseLoftCharge(active, inputKeys);
+      active.renderer.domElement.dataset.lastMobilePassGesture = "loft";
+      active.renderer.domElement.dataset.lastMobilePassCharge = charge.toFixed(3);
+      active.renderer.domElement.dataset.lastMobilePassStatus = executed ? "executed" : "rejected";
+      return;
+    }
+
+    if (active.phase !== "open") return;
+    const defending = active.possession === "away"
+      || (active.possession === null && active.ballOwnerId === null);
+    if (defending) {
+      switchToBestManualPlayer(active, "p1");
+      active.renderer.domElement.dataset.lastMobilePassGesture = "switch";
+      active.renderer.domElement.dataset.lastMobilePassStatus = "executed";
+      return;
+    }
+    active.passInputAttempts += 1;
+    active.passInputDownAt = performance.now();
+    active.renderer.domElement.dataset.passInputAttempts = String(active.passInputAttempts);
+    const started = Boolean(
+      controlled
+      && active.ballOwnerId === controlled.id
+      && active.possession === "home"
+      && beginPassCharge(controlled, active),
+    );
+    if (started) active.passCharge = charge;
+    const buffered = !started && bufferUserPassBeforeReception(active, inputKeys);
+    const executed = started && releasePassCharge(active, inputKeys);
+    active.passInputDownAt = 0;
+    if (executed) active.passInputExecuted += 1;
+    else if (!buffered) active.passInputRejected += 1;
+    active.renderer.domElement.dataset.passInputExecuted = String(active.passInputExecuted);
+    active.renderer.domElement.dataset.passInputRejected = String(active.passInputRejected);
+    active.renderer.domElement.dataset.lastMobilePassGesture = "ground";
+    active.renderer.domElement.dataset.lastMobilePassCharge = charge.toFixed(3);
+    active.renderer.domElement.dataset.lastMobilePassStatus = executed ? "executed" : buffered ? "buffered" : "rejected";
   }, []);
 
   const resetPositions = useCallback((servingTeam: TeamId = "home") => {
@@ -4880,14 +4929,10 @@ export function ArcadeSoccerGame() {
     gameClockUiRef.current = 0;
     possessionUiRef.current = { home: 50, away: 50 };
     phaseUiRef.current = "kickoff";
-    staminaUiRef.current = 1;
-    staminaGaugeVisibleRef.current = false;
     setPhaseUi("kickoff");
     setScore({ home: 0, away: 0 });
     setGameClock(0);
     setPossessionPercent({ home: 50, away: 50 });
-    setStaminaUi(1);
-    setStaminaGaugeVisible(false);
     setMinimapSnapshot(null);
     tutorialUiRef.current = { active: false, lessonIndex: 0, status: "active" };
     setTutorialUi(tutorialUiRef.current);
@@ -4958,13 +5003,9 @@ export function ArcadeSoccerGame() {
     gameClockUiRef.current = 0;
     possessionUiRef.current = { home: 50, away: 50 };
     phaseUiRef.current = "kickoff";
-    staminaUiRef.current = 1;
-    staminaGaugeVisibleRef.current = false;
     setScore({ home: 0, away: 0 });
     setGameClock(0);
     setPossessionPercent({ home: 50, away: 50 });
-    setStaminaUi(1);
-    setStaminaGaugeVisible(false);
     resetPositions("home");
     tutorialUiRef.current = { active: false, lessonIndex: 0, status: "active" };
     setTutorialUi(tutorialUiRef.current);
@@ -8000,18 +8041,13 @@ export function ArcadeSoccerGame() {
         }
       }
 
-      const controlledPlayer = active.players.find((player) => player.controlledBy === "p1") ?? null;
-      const shouldShowStamina = Boolean(
-        controlledPlayer
-        && (keysRef.current.has("KeyE") || controlledPlayer.stamina < 0.995 || controlledPlayer.sprintExhausted),
-      );
       const displayedMatchSecond = Math.floor(active.gameClock);
       if (Math.floor(gameClockUiRef.current) !== displayedMatchSecond) {
         gameClockUiRef.current = displayedMatchSecond;
         setGameClock(displayedMatchSecond);
       }
       active.renderer.domElement.dataset.displayedMatchSecond = String(displayedMatchSecond);
-      const shouldUpdateHud = performance.now() - active.lastHudUpdate > (shouldShowStamina ? 60 : 180);
+      const shouldUpdateHud = performance.now() - active.lastHudUpdate > 180;
       if (shouldUpdateHud) {
         active.lastHudUpdate = performance.now();
         if (scoreUiRef.current.home !== active.score.home || scoreUiRef.current.away !== active.score.away) {
@@ -8030,16 +8066,6 @@ export function ArcadeSoccerGame() {
         if (phaseUiRef.current !== active.phase) {
           phaseUiRef.current = active.phase;
           setPhaseUi(active.phase);
-        }
-        const nextStamina = controlledPlayer?.stamina ?? 1;
-        if (Math.abs(staminaUiRef.current - nextStamina) > 0.01 || staminaGaugeVisibleRef.current !== shouldShowStamina) {
-          staminaUiRef.current = nextStamina;
-          staminaGaugeVisibleRef.current = shouldShowStamina;
-          setStaminaUi(nextStamina);
-          setStaminaGaugeVisible(shouldShowStamina);
-        }
-        if (controlledPlayer && shouldShowStamina) {
-          setStaminaPosition(playerScreenGaugePosition(active, controlledPlayer, 3.58));
         }
         syncP1AiUi(active.p1Autopilot);
         const nextTutorialUi = {
@@ -8662,18 +8688,6 @@ export function ArcadeSoccerGame() {
           )}
         </div>
       )}
-      {matchState === "playing" && staminaGaugeVisible && (
-        <div
-          aria-label="Sprint stamina"
-          className="pointer-events-none fixed z-20 h-1.5 w-[4.5rem] -translate-x-1/2 overflow-hidden rounded-sm border border-white/35 bg-black/60 shadow-[0_1px_3px_rgba(0,0,0,0.55)]"
-          style={{ left: staminaPosition.x, top: staminaPosition.y }}
-        >
-          <span
-            className="block h-full bg-emerald-300 transition-[width] duration-75"
-            style={{ width: `${Math.round(clamp(staminaUi, 0, 1) * 100)}%` }}
-          />
-        </div>
-      )}
       {matchState === "playing" && !tutorialUi.active && offlineSettings.minimapEnabled && minimapSnapshot && (
         <div
           className="pointer-events-none fixed right-3 top-[calc(env(safe-area-inset-top)+13rem)] z-20 h-16 w-28 rounded-md border border-white/25 bg-black/45 shadow-lg backdrop-blur-sm sm:left-1/2 sm:right-auto sm:top-[calc(env(safe-area-inset-top)+4.25rem)] sm:h-20 sm:w-36 sm:-translate-x-1/2 lg:h-24 lg:w-44"
@@ -8825,6 +8839,7 @@ export function ArcadeSoccerGame() {
           fullscreenAvailable={!isAppleMobile}
           fullscreenActive={isFullscreen}
           onKey={sendMobileKey}
+          onPassGesture={performMobilePassGesture}
           onToggleAi={() => performMobileAction("ai")}
           onToggleFullscreen={() => performMobileAction("fullscreen")}
           onOpenSettings={openSettings}
@@ -8931,6 +8946,17 @@ function advanceKickCharge(charge: number, dt: number) {
   // Fill quickly at first for responsive taps, then ease into the maximum. The
   // returned value is the single source of truth for both UI and kick physics.
   return clamp(charge + dt * (1.68 - charge * 0.58), 0, 1);
+}
+
+function kickChargeForHoldMilliseconds(holdMilliseconds: number) {
+  let charge = 0;
+  let remaining = clamp(holdMilliseconds / 1000, 0, 1.2);
+  while (remaining > 0) {
+    const step = Math.min(remaining, 1 / 120);
+    charge = advanceKickCharge(charge, step);
+    remaining -= step;
+  }
+  return clamp(charge, 0.08, 1);
 }
 
 function integrateFreeBallPhysics(active: MatchRuntime, frameDt: number) {
@@ -17808,15 +17834,6 @@ function prepareEmergencyShotBlockers(active: MatchRuntime) {
   });
 }
 
-function playerScreenGaugePosition(active: MatchRuntime, player: PlayerBody, worldHeight: number) {
-  const rect = active.renderer.domElement.getBoundingClientRect();
-  const projected = player.pos.clone().add(new THREE.Vector3(0, worldHeight, 0)).project(active.camera);
-  return {
-    x: rect.left + (projected.x * 0.5 + 0.5) * rect.width,
-    y: rect.top + (-projected.y * 0.5 + 0.5) * rect.height,
-  };
-}
-
 function beginShotCharge(player: PlayerBody, active: MatchRuntime) {
   if (active.phase !== "open") return false;
   if (active.shotInputLockTimer > 0) return false;
@@ -18127,16 +18144,16 @@ function sharedKickForce(style: KickStyle, distance: number, charge: number, own
   if (style === "short") lift = Math.max(lift, distance > 24 ? 0.65 : 0.25);
   if (style === "shot") {
     lift = clamp(
-      (lift + 0.85 + chargeResponse * 7.8) * SHOT_VERTICAL_POWER_MULTIPLIER,
-      4.8,
-      17.5,
+      (lift + 1.15 + chargeResponse * 8.8) * SHOT_VERTICAL_POWER_MULTIPLIER,
+      7.2,
+      22.5,
     );
   }
   if (style === "finesse") {
     lift = clamp(
-      (lift + 0.45 + chargeResponse * 4.15) * Math.min(SHOT_VERTICAL_POWER_MULTIPLIER, 1.2),
-      3.4,
-      10.6,
+      (lift + 0.72 + chargeResponse * 5.1) * Math.min(SHOT_VERTICAL_POWER_MULTIPLIER, 1.45),
+      5,
+      14.5,
     );
   }
   if (style === "driven") lift = Math.min(lift, 0.65);
@@ -19567,14 +19584,14 @@ function assistedManualShotPhysics(
   const desiredGoalHeight = style === "driven"
     ? 0.58
     : style === "finesse"
-      ? clamp(1.12 + normalizedCharge * 0.94, 1.12, 2.06)
+      ? clamp(1.55 + normalizedCharge * 0.93, 1.55, 2.48)
       : distance < 19
-        ? clamp(1.24 + normalizedCharge * 0.9, 1.24, 2.14)
-        : clamp(1.32 + normalizedCharge * 0.86, 1.32, 2.18);
+        ? clamp(1.65 + normalizedCharge * 1.05, 1.65, 2.7)
+        : clamp(1.72 + normalizedCharge, 1.72, 2.72);
   const lift = clamp(
     (desiredGoalHeight - active.ballPos.y + 0.5 * BALL_GRAVITY * travelTime * travelTime) / travelTime,
-    style === "driven" ? 0.42 : 3.6,
-    21.5,
+    style === "driven" ? 0.42 : 5.2,
+    24,
   );
   return { goalTarget, launchDirection, power, lift, curve, travelTime, desiredGoalHeight };
 }

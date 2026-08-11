@@ -7,6 +7,7 @@ type Props = {
   fullscreenAvailable: boolean;
   fullscreenActive: boolean;
   onKey: (code: string, pressed: boolean) => void;
+  onPassGesture: (kind: "ground" | "loft", holdMilliseconds: number) => void;
   onToggleAi: () => void;
   onToggleFullscreen: () => void;
   onOpenSettings: () => void;
@@ -19,13 +20,22 @@ export function FutbahlMobileControls({
   fullscreenAvailable,
   fullscreenActive,
   onKey,
+  onPassGesture,
   onToggleAi,
   onToggleFullscreen,
   onOpenSettings,
 }: Props) {
   const joystickPointer = useRef<number | null>(null);
+  const passGesture = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    startedAt: number;
+    loft: boolean;
+  } | null>(null);
   const activeDirections = useRef(new Set<string>());
   const [stick, setStick] = useState({ x: 0, y: 0 });
+  const [passGestureMode, setPassGestureMode] = useState<"ground" | "loft">("ground");
 
   const releaseDirections = () => {
     activeDirections.current.forEach((code) => onKey(code, false));
@@ -83,6 +93,43 @@ export function FutbahlMobileControls({
     onPointerCancel: () => onKey(code, false),
     onLostPointerCapture: () => onKey(code, false),
   });
+  const startPassGesture = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    passGesture.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startedAt: performance.now(),
+      loft: false,
+    };
+    setPassGestureMode("ground");
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const movePassGesture = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const gesture = passGesture.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - gesture.startX;
+    const deltaY = event.clientY - gesture.startY;
+    const shouldLoft = deltaX >= 28 && deltaX > Math.abs(deltaY) * 1.15;
+    if (gesture.loft === shouldLoft) return;
+    gesture.loft = shouldLoft;
+    setPassGestureMode(shouldLoft ? "loft" : "ground");
+  };
+  const finishPassGesture = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const gesture = passGesture.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const holdMilliseconds = performance.now() - gesture.startedAt;
+    const kind = gesture.loft ? "loft" : "ground";
+    passGesture.current = null;
+    setPassGestureMode("ground");
+    onPassGesture(kind, holdMilliseconds);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const cancelPassGesture = (event?: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event && passGesture.current?.pointerId !== event.pointerId) return;
+    passGesture.current = null;
+    setPassGestureMode("ground");
+  };
 
   return (
     <div className="pointer-events-none fixed inset-0 z-30 select-none touch-none" aria-label="Touch controls">
@@ -102,7 +149,19 @@ export function FutbahlMobileControls({
       </div>
 
       <div className="pointer-events-auto absolute bottom-[calc(env(safe-area-inset-bottom)+1rem)] right-[calc(env(safe-area-inset-right)+1rem)] grid grid-cols-2 gap-2">
-        <button {...actionHandlers("KeyS")} className="h-16 w-16 rounded-full border-2 border-cyan-200/65 bg-cyan-700/55 text-[10px] font-black text-white shadow-lg">PASS / SWITCH</button>
+        <button
+          data-testid="mobile-pass-button"
+          data-pass-gesture={passGestureMode}
+          aria-label="Pass; swipe right for a lofted pass"
+          onPointerDown={startPassGesture}
+          onPointerMove={movePassGesture}
+          onPointerUp={finishPassGesture}
+          onPointerCancel={cancelPassGesture}
+          onLostPointerCapture={cancelPassGesture}
+          className={`h-16 w-16 rounded-full border-2 text-[10px] font-black text-white shadow-lg ${passGestureMode === "loft" ? "border-sky-100 bg-sky-500/80" : "border-cyan-200/65 bg-cyan-700/55"}`}
+        >
+          {passGestureMode === "loft" ? "LOB" : "PASS / SWITCH"}
+        </button>
         <button {...actionHandlers("KeyD")} className="h-20 w-20 -translate-y-4 rounded-full border-2 border-rose-200/70 bg-rose-700/60 text-xs font-black text-white shadow-lg">SHOOT</button>
         <button {...actionHandlers("KeyE")} className="h-14 w-14 rounded-full border-2 border-amber-200/60 bg-amber-700/55 text-[10px] font-black text-white shadow-lg">SPRINT</button>
         <button {...actionHandlers("Space")} className="h-16 w-16 rounded-full border-2 border-emerald-200/60 bg-emerald-700/55 text-xs font-black text-white shadow-lg">TACKLE</button>
