@@ -14,7 +14,10 @@ import { sweptMovingSphereContact } from "../src/lib/futbahl-contact.ts";
 import { kickAnimationPhase, kickAnimationProfile } from "../src/lib/futbahl-animation-contact.ts";
 import {
   LOCOMOTION_CLIPS,
+  locomotionClipForMotion,
+  locomotionDirectionYaw,
   locomotionPlaybackRate,
+  selectFutbahlLocomotionDirection,
   selectFutbahlLocomotionState,
 } from "../src/lib/futbahl-locomotion.ts";
 import { receivePassReadiness } from "../src/lib/futbahl-receive-readiness.ts";
@@ -135,7 +138,7 @@ test("run and sprint use distinct locomotion clips", () => {
   assert.equal(LOCOMOTION_CLIPS.Sprint, "Sprint_Loop");
 });
 
-test("locomotion hysteresis keeps a runner stable near a speed threshold", () => {
+test("locomotion hysteresis keeps a runner stable and preserves reverse travel", () => {
   assert.equal(selectFutbahlLocomotionState({
     speed: 4.92,
     localForward: 4.92,
@@ -155,12 +158,89 @@ test("locomotion hysteresis keeps a runner stable near a speed threshold", () =>
     previousSpeed: 4.3,
     previousState: "Run",
     defensive: false,
-  }), "TurnAround");
+  }), "Backpedal");
 });
 
 test("locomotion playback follows movement direction and speed", () => {
   assert.ok(locomotionPlaybackRate("Run", 6.8) > locomotionPlaybackRate("Run", 4.9));
   assert.ok(locomotionPlaybackRate("Backpedal", 2.5) < 0);
+});
+
+test("Quaternius locomotion classifies all eight local movement directions", () => {
+  const directions = [
+    ["Forward", 4, 0],
+    ["ForwardRight", 4, 4],
+    ["Right", 0, 4],
+    ["BackwardRight", -4, 4],
+    ["Backward", -4, 0],
+    ["BackwardLeft", -4, -4],
+    ["Left", 0, -4],
+    ["ForwardLeft", 4, -4],
+  ] as const;
+  directions.forEach(([expected, localForward, localLateral]) => {
+    assert.equal(selectFutbahlLocomotionDirection({
+      speed: Math.hypot(localForward, localLateral),
+      localForward,
+      localLateral,
+      previousDirection: expected,
+    }), expected);
+  });
+});
+
+test("eight-way direction changes have boundary hysteresis", () => {
+  assert.equal(selectFutbahlLocomotionDirection({
+    speed: 4,
+    localForward: Math.cos(0.42) * 4,
+    localLateral: Math.sin(0.42) * 4,
+    previousDirection: "Forward",
+  }), "Forward");
+  assert.equal(selectFutbahlLocomotionDirection({
+    speed: 4,
+    localForward: Math.cos(0.52) * 4,
+    localLateral: Math.sin(0.52) * 4,
+    previousDirection: "Forward",
+  }), "ForwardRight");
+});
+
+test("eight-way states use speed-matched Quaternius gait clips", () => {
+  assert.equal(locomotionClipForMotion("StrafeRight", 1.7), "Walk_Loop");
+  assert.equal(locomotionClipForMotion("StrafeRight", 4.8), "Jog_Fwd_Loop");
+  assert.equal(locomotionClipForMotion("BackwardLeft", 8.4), "Sprint_Loop");
+  assert.ok(locomotionPlaybackRate("BackwardLeft", 4.8) < 0);
+  assert.ok(locomotionPlaybackRate("ForwardRight", 4.8) > 0);
+});
+
+test("eight-way stride yaw aligns forward, lateral and reverse sectors", () => {
+  assert.equal(locomotionDirectionYaw("Forward"), 0);
+  assert.equal(locomotionDirectionYaw("Backward"), 0);
+  assert.ok(Math.abs(locomotionDirectionYaw("Right") - Math.PI / 2) < 1e-9);
+  assert.ok(Math.abs(locomotionDirectionYaw("BackwardRight") + Math.PI / 4) < 1e-9);
+  assert.ok(Math.abs(locomotionDirectionYaw("BackwardLeft") - Math.PI / 4) < 1e-9);
+});
+
+test("non-defensive players enter directional locomotion instead of sliding", () => {
+  assert.equal(selectFutbahlLocomotionState({
+    speed: 4,
+    localForward: 0,
+    localLateral: 4,
+    acceleration: 0,
+    angularVelocity: 0,
+    previousSpeed: 4,
+    previousState: "Run",
+    defensive: false,
+    direction: "Right",
+  }), "StrafeRight");
+  assert.equal(selectFutbahlLocomotionState({
+    speed: 3.5,
+    localForward: -3.5,
+    localLateral: 0,
+    acceleration: 0,
+    angularVelocity: 0,
+    previousSpeed: 3.5,
+    previousState: "Run",
+    defensive: false,
+    direction: "Backward",
+  }), "Backpedal");
 });
 
 test("clean controlled reception permits an intentional one-touch pass", () => {

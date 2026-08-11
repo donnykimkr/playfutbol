@@ -24,6 +24,16 @@ export type FutbahlLocomotionState =
   | "TurnAround"
   | "Stop";
 
+export type FutbahlLocomotionDirection =
+  | "Forward"
+  | "ForwardRight"
+  | "Right"
+  | "BackwardRight"
+  | "Backward"
+  | "BackwardLeft"
+  | "Left"
+  | "ForwardLeft";
+
 export type FutbahlAnimationState =
   | FutbahlLocomotionState
   | "DefensiveReady"
@@ -66,6 +76,8 @@ export type FutbahlPlayerAppearance = {
 
 export type FutbahlLocomotionDebugSnapshot = {
   state: FutbahlLocomotionState;
+  direction: FutbahlLocomotionDirection;
+  directionYaw: number;
   animationState: FutbahlAnimationState;
   clip: string;
   totalSpeed: number;
@@ -126,12 +138,12 @@ export const LOCOMOTION_CLIPS: Record<FutbahlLocomotionState, string> = {
   Sprint: "Sprint_Loop",
   Accelerate: "Jog_Fwd_Loop",
   Decelerate: "Jog_Fwd_Loop",
-  ForwardLeft: "Jog_Fwd_Loop",
-  ForwardRight: "Jog_Fwd_Loop",
+  ForwardLeft: "Walk_Loop",
+  ForwardRight: "Walk_Loop",
   BackwardLeft: "Walk_Loop",
   BackwardRight: "Walk_Loop",
-  StrafeLeft: "Crouch_Fwd_Loop",
-  StrafeRight: "Crouch_Fwd_Loop",
+  StrafeLeft: "Walk_Loop",
+  StrafeRight: "Walk_Loop",
   Backpedal: "Walk_Loop",
   TurnLeft: "Walk_Loop",
   TurnRight: "Walk_Loop",
@@ -206,12 +218,12 @@ const FALLBACK_CLIPS: Record<FutbahlLocomotionState, string[]> = {
   Sprint: ["Sprint_Loop", "Jog_Fwd_Loop"],
   Accelerate: ["Jog_Fwd_Loop", "Sprint_Loop"],
   Decelerate: ["Jog_Fwd_Loop", "Walk_Loop"],
-  ForwardLeft: ["Jog_Fwd_Loop", "Walk_Loop"],
-  ForwardRight: ["Jog_Fwd_Loop", "Walk_Loop"],
+  ForwardLeft: ["Walk_Loop", "Jog_Fwd_Loop"],
+  ForwardRight: ["Walk_Loop", "Jog_Fwd_Loop"],
   BackwardLeft: ["Walk_Loop", "Jog_Fwd_Loop"],
   BackwardRight: ["Walk_Loop", "Jog_Fwd_Loop"],
-  StrafeLeft: ["Crouch_Fwd_Loop", "Jog_Fwd_Loop", "Walk_Loop"],
-  StrafeRight: ["Crouch_Fwd_Loop", "Jog_Fwd_Loop", "Walk_Loop"],
+  StrafeLeft: ["Walk_Loop", "Jog_Fwd_Loop"],
+  StrafeRight: ["Walk_Loop", "Jog_Fwd_Loop"],
   Backpedal: ["Walk_Loop", "Jog_Fwd_Loop"],
   TurnLeft: ["Walk_Loop", "Idle_Loop"],
   TurnRight: ["Walk_Loop", "Idle_Loop"],
@@ -597,6 +609,121 @@ function damp(current: number, target: number, smoothing: number, dt: number) {
   return THREE.MathUtils.lerp(current, target, 1 - Math.exp(-smoothing * dt));
 }
 
+const LOCOMOTION_DIRECTION_ORDER: readonly FutbahlLocomotionDirection[] = [
+  "Forward",
+  "ForwardRight",
+  "Right",
+  "BackwardRight",
+  "Backward",
+  "BackwardLeft",
+  "Left",
+  "ForwardLeft",
+];
+
+const LOCOMOTION_DIRECTION_ANGLE: Record<FutbahlLocomotionDirection, number> = {
+  Forward: 0,
+  ForwardRight: Math.PI / 4,
+  Right: Math.PI / 2,
+  BackwardRight: Math.PI * 3 / 4,
+  Backward: Math.PI,
+  BackwardLeft: -Math.PI * 3 / 4,
+  Left: -Math.PI / 2,
+  ForwardLeft: -Math.PI / 4,
+};
+
+const DIRECTIONAL_LOCOMOTION_STATES = new Set<FutbahlLocomotionState>([
+  "ForwardLeft",
+  "ForwardRight",
+  "BackwardLeft",
+  "BackwardRight",
+  "StrafeLeft",
+  "StrafeRight",
+  "Backpedal",
+]);
+
+const REVERSE_LOCOMOTION_STATES = new Set<FutbahlLocomotionState>([
+  "BackwardLeft",
+  "BackwardRight",
+  "Backpedal",
+]);
+
+export type FutbahlLocomotionDirectionInput = {
+  speed: number;
+  localForward: number;
+  localLateral: number;
+  previousDirection?: FutbahlLocomotionDirection;
+  hysteresisRadians?: number;
+};
+
+/**
+ * Quantizes local velocity into an eight-way blend-space sector. The small
+ * angular hysteresis prevents left/right foot cycles from flickering when a
+ * player runs close to a 22.5-degree sector boundary.
+ */
+export function selectFutbahlLocomotionDirection({
+  speed,
+  localForward,
+  localLateral,
+  previousDirection = "Forward",
+  hysteresisRadians = 0.07,
+}: FutbahlLocomotionDirectionInput): FutbahlLocomotionDirection {
+  if (speed < 0.14 || Math.hypot(localForward, localLateral) < 0.08) return previousDirection;
+  const angle = Math.atan2(localLateral, localForward);
+  const previousAngle = LOCOMOTION_DIRECTION_ANGLE[previousDirection];
+  if (Math.abs(shortestAngleDelta(previousAngle, angle)) <= Math.PI / 8 + hysteresisRadians) {
+    return previousDirection;
+  }
+  const sector = (Math.round(angle / (Math.PI / 4)) + LOCOMOTION_DIRECTION_ORDER.length)
+    % LOCOMOTION_DIRECTION_ORDER.length;
+  return LOCOMOTION_DIRECTION_ORDER[sector];
+}
+
+function directionFromLocomotionState(state: FutbahlLocomotionState): FutbahlLocomotionDirection {
+  if (state === "ForwardLeft") return "ForwardLeft";
+  if (state === "ForwardRight") return "ForwardRight";
+  if (state === "BackwardLeft") return "BackwardLeft";
+  if (state === "BackwardRight") return "BackwardRight";
+  if (state === "StrafeLeft") return "Left";
+  if (state === "StrafeRight") return "Right";
+  if (state === "Backpedal" || state === "TurnAround") return "Backward";
+  return "Forward";
+}
+
+function directionalState(direction: FutbahlLocomotionDirection): FutbahlLocomotionState | null {
+  if (direction === "ForwardLeft") return "ForwardLeft";
+  if (direction === "ForwardRight") return "ForwardRight";
+  if (direction === "BackwardLeft") return "BackwardLeft";
+  if (direction === "BackwardRight") return "BackwardRight";
+  if (direction === "Left") return "StrafeLeft";
+  if (direction === "Right") return "StrafeRight";
+  if (direction === "Backward") return "Backpedal";
+  return null;
+}
+
+/**
+ * The bundled Standard library supplies synchronized in-place Quaternius walk,
+ * jog and sprint cycles. This chooses the matching gait without restarting the
+ * cycle merely because its eight-way direction changed.
+ */
+export function locomotionClipForMotion(state: FutbahlLocomotionState, speed: number) {
+  if (!DIRECTIONAL_LOCOMOTION_STATES.has(state)) return LOCOMOTION_CLIPS[state];
+  if (speed >= 7.8) return "Sprint_Loop";
+  if (speed >= 2.2) return "Jog_Fwd_Loop";
+  return "Walk_Loop";
+}
+
+/**
+ * Rotates the lower-body gait toward travel while backward sectors reverse the
+ * synchronized cycle. The upper body is counter-rotated after mixer sampling.
+ */
+export function locomotionDirectionYaw(direction: FutbahlLocomotionDirection) {
+  if (direction === "ForwardRight" || direction === "BackwardLeft") return Math.PI / 4;
+  if (direction === "ForwardLeft" || direction === "BackwardRight") return -Math.PI / 4;
+  if (direction === "Right") return Math.PI / 2;
+  if (direction === "Left") return -Math.PI / 2;
+  return 0;
+}
+
 export type FutbahlLocomotionSelectionInput = {
   speed: number;
   localForward: number;
@@ -606,6 +733,7 @@ export type FutbahlLocomotionSelectionInput = {
   previousSpeed: number;
   previousState: FutbahlLocomotionState;
   defensive: boolean;
+  direction?: FutbahlLocomotionDirection;
 };
 
 function speedBandState(speed: number, previousState: FutbahlLocomotionState): FutbahlLocomotionState {
@@ -630,7 +758,7 @@ export function selectFutbahlLocomotionState({
   angularVelocity,
   previousSpeed,
   previousState,
-  defensive,
+  direction,
 }: FutbahlLocomotionSelectionInput): FutbahlLocomotionState {
   if (speed < 0.14) {
     if (previousSpeed > 0.78 && acceleration < -1.35) return "Stop";
@@ -639,21 +767,17 @@ export function selectFutbahlLocomotionState({
     return "Idle";
   }
 
-  const lateralMagnitude = Math.abs(localLateral);
-  const forwardMagnitude = Math.abs(localForward);
+  const movementDirection = direction ?? selectFutbahlLocomotionDirection({
+    speed,
+    localForward,
+    localLateral,
+    previousDirection: directionFromLocomotionState(previousState),
+  });
+  const eightWayState = directionalState(movementDirection);
+  if (eightWayState) return eightWayState;
+
   if (speed > 1.05 && Math.abs(angularVelocity) > 2.35) {
-    if (localForward < -speed * 0.46) return "TurnAround";
     return angularVelocity > 0 ? "SharpTurnLeft" : "SharpTurnRight";
-  }
-  if (defensive && localForward < -0.5 && lateralMagnitude > 0.42) {
-    return localLateral < 0 ? "BackwardLeft" : "BackwardRight";
-  }
-  if (defensive && localForward < -0.5 && forwardMagnitude > lateralMagnitude * 0.72) return "Backpedal";
-  if (defensive && lateralMagnitude > 0.62 && lateralMagnitude > forwardMagnitude * 0.94) {
-    return localLateral < 0 ? "StrafeLeft" : "StrafeRight";
-  }
-  if (localForward > 0.38 && lateralMagnitude > 0.5 && speed < 7.8) {
-    return localLateral < 0 ? "ForwardLeft" : "ForwardRight";
   }
   if (acceleration > 3.25 && speed > 0.65 && speed < 8.35) return "Accelerate";
   if (acceleration < -3.15 && speed > 0.5 && previousSpeed > speed) return "Decelerate";
@@ -665,11 +789,13 @@ export function locomotionPlaybackRate(state: FutbahlLocomotionState, speed: num
   if (state === "Walk" || state === "TurnLeft" || state === "TurnRight" || state === "Stop") {
     return THREE.MathUtils.clamp(Math.max(speed, 0.72) / 1.85, 0.56, 1.24);
   }
-  if (state === "StrafeLeft" || state === "StrafeRight") {
-    return THREE.MathUtils.clamp(speed / 3.25, 0.62, 1.28);
-  }
-  if (state === "Backpedal" || state === "BackwardLeft" || state === "BackwardRight") {
-    return -THREE.MathUtils.clamp(speed / 2.65, 0.62, 1.24);
+  if (DIRECTIONAL_LOCOMOTION_STATES.has(state)) {
+    const gaitRate = speed >= 7.8
+      ? THREE.MathUtils.clamp(speed / 9.2, 0.76, 1.34)
+      : speed >= 2.2
+        ? THREE.MathUtils.clamp(speed / 4.85, 0.64, 1.48)
+        : THREE.MathUtils.clamp(Math.max(speed, 0.72) / 1.85, 0.56, 1.24);
+    return REVERSE_LOCOMOTION_STATES.has(state) ? -gaitRate : gaitRate;
   }
   if (state === "Accelerate") return THREE.MathUtils.clamp(speed / 4.65, 0.72, 1.48);
   if (state === "Decelerate") return THREE.MathUtils.clamp(speed / 4.85, 0.58, 1.3);
@@ -717,12 +843,14 @@ export class FutbahlLocomotionController {
   private readonly playbackVariation: number;
   private readonly celebrationVariant: number;
   private state: FutbahlLocomotionState = "Idle";
+  private direction: FutbahlLocomotionDirection = "Forward";
   private animationState: FutbahlAnimationState = "Idle";
   private currentAction: THREE.AnimationAction | null = null;
   private currentClip = "";
   private previousSpeed = 0;
   private previousHeading = 0;
   private smoothedAcceleration = 0;
+  private directionYaw = 0;
   private stateAge = 0;
   private debugTimer = 0;
   private mixerAccumulator = 0;
@@ -827,6 +955,18 @@ export class FutbahlLocomotionController {
     return this.currentClip;
   }
 
+  get activeDirection() {
+    return this.direction;
+  }
+
+  get activeLocomotionState() {
+    return this.state;
+  }
+
+  get activePlaybackRate() {
+    return this.currentAction?.timeScale ?? 0;
+  }
+
   update(sample: FutbahlMotionSample) {
     if (this.disposed) return;
     const safeDt = THREE.MathUtils.clamp(sample.dt, 1 / 240, 0.05);
@@ -842,6 +982,12 @@ export class FutbahlLocomotionController {
     this.smoothedAcceleration = damp(this.smoothedAcceleration, rawAcceleration, 10.5, safeDt);
     const acceleration = this.smoothedAcceleration;
     const angularVelocity = shortestAngleDelta(this.previousHeading, sample.heading) / safeDt;
+    this.direction = selectFutbahlLocomotionDirection({
+      speed,
+      localForward,
+      localLateral,
+      previousDirection: this.direction,
+    });
     this.stateAge += safeDt;
     let nextState = selectFutbahlLocomotionState({
       speed,
@@ -852,13 +998,18 @@ export class FutbahlLocomotionController {
       previousSpeed: this.previousSpeed,
       previousState: this.state,
       defensive: Boolean(sample.defensive),
+      direction: this.direction,
     });
     const criticalState = this.resolveCriticalState(sample);
     if (!criticalState && speed < 0.38 && (sample.isKeeper || this.role === "keeper")) {
       nextState = "Idle";
     }
     if (nextState !== this.state && (this.stateAge >= 0.075 || nextState === "Idle" || nextState === "Stop")) {
-      this.transitionTo(nextState, transitionDuration(this.animationState, nextState));
+      this.transitionTo(
+        nextState,
+        transitionDuration(this.animationState, nextState),
+        this.resolveClip(nextState, speed),
+      );
       this.stateAge = 0;
     } else {
       nextState = this.state;
@@ -882,9 +1033,13 @@ export class FutbahlLocomotionController {
         contextualClip,
         contextualLoops,
       );
-    } else if (!contextualClip && this.currentClip !== this.resolveClip(nextState)) {
+    } else if (!contextualClip && this.currentClip !== this.resolveClip(nextState, speed)) {
       const idleClip = nextState === "Idle" ? this.idleVariant : "";
-      this.transitionTo(nextState, transitionDuration(previousAnimationState, this.animationState), idleClip);
+      this.transitionTo(
+        nextState,
+        transitionDuration(previousAnimationState, this.animationState),
+        idleClip || this.resolveClip(nextState, speed),
+      );
     }
 
     let playbackSpeed = locomotionPlaybackRate(this.state, speed) * this.playbackVariation;
@@ -900,18 +1055,22 @@ export class FutbahlLocomotionController {
     }
     const forwardLean = THREE.MathUtils.clamp(-acceleration * 0.0065, -0.13, 0.09);
     const lateralLean = THREE.MathUtils.clamp(-localLateral * 0.014, -0.1, 0.1);
-    const directionalYaw = sample.defensive && speed < 6.4
-      ? THREE.MathUtils.clamp(Math.atan2(localLateral, Math.max(0.35, Math.abs(localForward))) * 0.42, -0.54, 0.54)
-      : nextState === "SharpTurnLeft" ? 0.18
-        : nextState === "SharpTurnRight" ? -0.18
-          : 0;
+    const targetDirectionYaw = criticalState || speed < 0.14
+      ? 0
+      : locomotionDirectionYaw(this.direction);
+    this.directionYaw = damp(
+      this.directionYaw,
+      targetDirectionYaw,
+      criticalState ? 15 : speed > 6.5 ? 11.5 : 9.25,
+      safeDt,
+    );
     const diveTimer = sample.diveTimer ?? 0;
     const divePose = diveTimer > 0
       ? Math.sin((1 - THREE.MathUtils.clamp(diveTimer / 0.62, 0, 1)) * Math.PI)
       : 0;
     const diveLean = (sample.diveSide ?? 0) * 0.62 * divePose;
     this.visualRoot.rotation.x = damp(this.visualRoot.rotation.x, forwardLean, 8.5, safeDt);
-    this.visualRoot.rotation.y = damp(this.visualRoot.rotation.y, directionalYaw, 10.5, safeDt);
+    this.visualRoot.rotation.y = this.directionYaw;
     this.visualRoot.rotation.z = damp(
       this.visualRoot.rotation.z,
       lateralLean + diveLean,
@@ -923,6 +1082,7 @@ export class FutbahlLocomotionController {
     const updateInterval = (sample.distanceToCamera ?? 0) > 92 ? 1 / 30 : 0;
     if (updateInterval === 0 || this.mixerAccumulator >= updateInterval) {
       this.mixer.update(this.mixerAccumulator);
+      this.applyDirectionalUpperBodyPose(speed, criticalState !== null);
       this.applyActionOverlay(sample, speed, safeDt);
       this.mixerAccumulator = 0;
     }
@@ -934,6 +1094,8 @@ export class FutbahlLocomotionController {
       this.debugTimer = 0.1;
       this.renderDebug({
         state: this.state,
+        direction: this.direction,
+        directionYaw: this.directionYaw,
         animationState: this.animationState,
         clip: this.currentClip,
         totalSpeed: speed,
@@ -966,6 +1128,8 @@ export class FutbahlLocomotionController {
     this.visualRoot.rotation.set(0, 0, 0);
     this.previousSpeed = 0;
     this.smoothedAcceleration = 0;
+    this.direction = "Forward";
+    this.directionYaw = 0;
     this.stateAge = 0;
   }
 
@@ -1006,6 +1170,14 @@ export class FutbahlLocomotionController {
     }
     if (state === "PassRequest" && speed < 0.35 && this.availableClips.has("Interact")) return "Interact";
     return "";
+  }
+
+  private applyDirectionalUpperBodyPose(speed: number, actionLocked: boolean) {
+    if (actionLocked || speed < 0.14 || Math.abs(this.directionYaw) < 0.004) return;
+    const speedBlend = THREE.MathUtils.smoothstep(speed, 0.14, 3.2);
+    const counterYaw = -this.directionYaw * THREE.MathUtils.lerp(0.5, 0.6, speedBlend);
+    if (this.bones.spine) this.bones.spine.rotation.y += counterYaw;
+    if (this.bones.head) this.bones.head.rotation.y += -this.directionYaw * 0.14;
   }
 
   private applyActionOverlay(sample: FutbahlMotionSample, speed: number, dt: number) {
@@ -1119,8 +1291,8 @@ export class FutbahlLocomotionController {
     }
   }
 
-  private resolveClip(state: FutbahlLocomotionState) {
-    const expected = LOCOMOTION_CLIPS[state];
+  private resolveClip(state: FutbahlLocomotionState, speed = this.previousSpeed) {
+    const expected = locomotionClipForMotion(state, speed);
     if (this.availableClips.has(expected)) return expected;
     return FALLBACK_CLIPS[state].find((clipName) => this.availableClips.has(clipName)) ?? "";
   }
@@ -1157,6 +1329,8 @@ export class FutbahlLocomotionController {
       "Futbahl player debug",
       `player index: ${snapshot.playerIndex}`,
       `state: ${snapshot.state}`,
+      `direction: ${snapshot.direction}`,
+      `direction yaw: ${THREE.MathUtils.radToDeg(snapshot.directionYaw).toFixed(1)} deg`,
       `action: ${snapshot.animationState}`,
       `clip: ${snapshot.clip}`,
       `speed: ${snapshot.totalSpeed.toFixed(2)}`,
