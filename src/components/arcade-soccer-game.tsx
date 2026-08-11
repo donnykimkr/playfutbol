@@ -596,7 +596,8 @@ const ACTION_COOLDOWN = 0.22;
 const GOAL_KICK_CURSOR_SPEED = 24;
 const CAMERA_FOLLOW_DAMPING = 4.25;
 const CAMERA_TOUCHLINE_DAMPING = 5.2;
-const SHOT_VERTICAL_POWER_MULTIPLIER = 1.34;
+const SHOT_VERTICAL_POWER_MULTIPLIER = 1.72;
+const AI_RECEIVE_DECISION_DELAY = 0.92;
 const PLAYER_NORMAL_SPEED = 12.1;
 const SPRINT_SPEED = 15.5;
 const STAMINA_DRAIN_RATE = 0.34;
@@ -757,9 +758,9 @@ const AD_BOARD_BRAND_DURATION = 30;
 const AD_BOARD_TRANSITION_DURATION = 1.2;
 const AD_BOARD_TEXTURE_WIDTH = 2048;
 const AD_BOARD_TEXTURE_HEIGHT = 64;
-const GRASS_DARK_COLOR = "#1d6f3d";
-const GRASS_LIGHT_COLOR = "#2b824a";
-const OUTER_GRASS_COLOR = "#155531";
+const GRASS_DARK_COLOR = "#3b9858";
+const GRASS_LIGHT_COLOR = "#4bab68";
+const OUTER_GRASS_COLOR = GRASS_DARK_COLOR;
 const GRASS_STRIPE_WIDTH = 8;
 const FLOOR_LAYER_MIN_SEPARATION = 0.05;
 const STADIUM_BASE_TOP_Y = -0.055;
@@ -4397,9 +4398,6 @@ export function ArcadeSoccerGame() {
   const [gameClock, setGameClock] = useState(0);
   const [, setPossessionPercent] = useState({ home: 50, away: 50 });
   const [showTouchControls, setShowTouchControls] = useState(false);
-  const [shotChargeUi, setShotChargeUi] = useState(0);
-  const [shotGaugeVisible, setShotGaugeVisible] = useState(false);
-  const [shotChargePosition, setShotChargePosition] = useState({ x: 0, y: 0 });
   const [staminaUi, setStaminaUi] = useState(1);
   const [staminaGaugeVisible, setStaminaGaugeVisible] = useState(false);
   const [staminaPosition, setStaminaPosition] = useState({ x: 0, y: 0 });
@@ -4419,8 +4417,6 @@ export function ArcadeSoccerGame() {
   const gameClockUiRef = useRef(0);
   const possessionUiRef = useRef({ home: 50, away: 50 });
   const phaseUiRef = useRef<PlayPhase>("kickoff");
-  const shotChargeUiRef = useRef(0);
-  const shotGaugeVisibleRef = useRef(false);
   const staminaUiRef = useRef(1);
   const staminaGaugeVisibleRef = useRef(false);
   const p1AiUiRef = useRef(false);
@@ -4884,16 +4880,12 @@ export function ArcadeSoccerGame() {
     gameClockUiRef.current = 0;
     possessionUiRef.current = { home: 50, away: 50 };
     phaseUiRef.current = "kickoff";
-    shotChargeUiRef.current = 0;
-    shotGaugeVisibleRef.current = false;
     staminaUiRef.current = 1;
     staminaGaugeVisibleRef.current = false;
     setPhaseUi("kickoff");
     setScore({ home: 0, away: 0 });
     setGameClock(0);
     setPossessionPercent({ home: 50, away: 50 });
-    setShotChargeUi(0);
-    setShotGaugeVisible(false);
     setStaminaUi(1);
     setStaminaGaugeVisible(false);
     setMinimapSnapshot(null);
@@ -4966,18 +4958,13 @@ export function ArcadeSoccerGame() {
     gameClockUiRef.current = 0;
     possessionUiRef.current = { home: 50, away: 50 };
     phaseUiRef.current = "kickoff";
-    shotChargeUiRef.current = 0;
-    shotGaugeVisibleRef.current = false;
     staminaUiRef.current = 1;
     staminaGaugeVisibleRef.current = false;
     setScore({ home: 0, away: 0 });
     setGameClock(0);
     setPossessionPercent({ home: 50, away: 50 });
-    setShotChargeUi(0);
-    setShotGaugeVisible(false);
     setStaminaUi(1);
     setStaminaGaugeVisible(false);
-    setShotChargePosition({ x: 0, y: 0 });
     resetPositions("home");
     tutorialUiRef.current = { active: false, lessonIndex: 0, status: "active" };
     setTutorialUi(tutorialUiRef.current);
@@ -8013,9 +8000,6 @@ export function ArcadeSoccerGame() {
         }
       }
 
-      const chargingPlayer = active.shotChargingPlayerId
-        ? active.players.find((player) => player.id === active.shotChargingPlayerId)
-        : null;
       const controlledPlayer = active.players.find((player) => player.controlledBy === "p1") ?? null;
       const shouldShowStamina = Boolean(
         controlledPlayer
@@ -8027,7 +8011,7 @@ export function ArcadeSoccerGame() {
         setGameClock(displayedMatchSecond);
       }
       active.renderer.domElement.dataset.displayedMatchSecond = String(displayedMatchSecond);
-      const shouldUpdateHud = performance.now() - active.lastHudUpdate > (chargingPlayer ? 24 : shouldShowStamina ? 60 : 180);
+      const shouldUpdateHud = performance.now() - active.lastHudUpdate > (shouldShowStamina ? 60 : 180);
       if (shouldUpdateHud) {
         active.lastHudUpdate = performance.now();
         if (scoreUiRef.current.home !== active.score.home || scoreUiRef.current.away !== active.score.away) {
@@ -8047,15 +8031,6 @@ export function ArcadeSoccerGame() {
           phaseUiRef.current = active.phase;
           setPhaseUi(active.phase);
         }
-        const nextShotCharge = chargingPlayer ? active.shotCharge : 0;
-        const nextShotGaugeVisible = Boolean(chargingPlayer);
-        if (Math.abs(shotChargeUiRef.current - nextShotCharge) > 0.012 || shotGaugeVisibleRef.current !== nextShotGaugeVisible) {
-          shotChargeUiRef.current = nextShotCharge;
-          shotGaugeVisibleRef.current = nextShotGaugeVisible;
-          setShotChargeUi(nextShotCharge);
-          setShotGaugeVisible(nextShotGaugeVisible);
-        }
-        if (chargingPlayer) setShotChargePosition(playerScreenGaugePosition(active, chargingPlayer, 3.9));
         const nextStamina = controlledPlayer?.stamina ?? 1;
         if (Math.abs(staminaUiRef.current - nextStamina) > 0.01 || staminaGaugeVisibleRef.current !== shouldShowStamina) {
           staminaUiRef.current = nextStamina;
@@ -8685,18 +8660,6 @@ export function ArcadeSoccerGame() {
               ))}
             </div>
           )}
-        </div>
-      )}
-      {matchState === "playing" && shotGaugeVisible && (
-        <div
-          aria-label="Shot power"
-          className="pointer-events-none fixed z-20 h-2 w-24 -translate-x-1/2 bg-emerald-500 shadow-[0_1px_4px_rgba(0,0,0,0.65)]"
-          style={{ left: shotChargePosition.x, top: shotChargePosition.y }}
-        >
-          <span
-            className="absolute -top-0.5 h-3 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_2px_rgba(0,0,0,0.85)]"
-            style={{ left: `${Math.round(clamp(shotChargeUi, 0, 1) * 100)}%` }}
-          />
         </div>
       )}
       {matchState === "playing" && staminaGaugeVisible && (
@@ -11761,9 +11724,7 @@ function prepareAiReceiveAction(
   incomingPower: number,
 ) {
   if (receiver.controlledBy === "p1" && !active.p1Autopilot) return;
-  const incoming = receiver.pos.clone().sub(passer.pos).setY(0);
-  const option = receiveActionTarget(receiver, passer, active, incoming);
-  const fallbackReadiness = receivePassReadiness({
+  const readiness = receivePassReadiness({
     incomingSpeed: incomingPower,
     receiverSpeed: Math.max(receiver.vel.length(), receiver.animationSpeed),
     ballHeight: BALL_RADIUS,
@@ -11773,46 +11734,18 @@ function prepareAiReceiveAction(
     pressureDistance: nearestOpponentDistance(receiver, active.players),
     passStyle: style,
   });
-  if (!option) {
-    active.pendingReceiveAction = {
-      receiverId: receiver.id,
-      action: "control",
-      requestedAt: performance.now(),
-      expiresAt: performance.now() + Math.max(650, arrivalTime * 1000 + 350),
-      requestedBy: "ai",
-      estimatedIncomingSpeed: incomingPower,
-      requiredControlTime: fallbackReadiness.requiredControlTime,
-      oneTouchEligible: false,
-    };
-    return;
-  }
-  const controllable = style === "short" || style === "low-through";
-  const targetDirection = option.direction.clone().setY(0).normalize();
-  const readiness = receivePassReadiness({
-    incomingSpeed: incomingPower,
-    receiverSpeed: Math.max(receiver.vel.length(), receiver.animationSpeed),
-    ballHeight: BALL_RADIUS,
-    contactDistance: 0.9,
-    targetFacingDot: facingDirection(receiver).dot(targetDirection),
-    redirectionDot: option.alignment,
-    pressureDistance: nearestOpponentDistance(receiver, active.players),
-    passStyle: style,
-  });
-  const oneTouch = controllable
-    && option.distance < 27
-    && readiness.oneTouchAllowed;
   active.pendingReceiveAction = {
     receiverId: receiver.id,
-    action: oneTouch ? "oneTouchPass" : "quickPass",
-    nextReceiverId: option.candidate.id,
-    targetPosition: option.target.clone(),
+    action: "control",
     requestedAt: performance.now(),
-    expiresAt: performance.now() + Math.max(750, arrivalTime * 1000 + 520),
+    expiresAt: performance.now() + Math.max(700, arrivalTime * 1000 + 420),
     requestedBy: "ai",
     estimatedIncomingSpeed: incomingPower,
     requiredControlTime: readiness.requiredControlTime,
-    oneTouchEligible: oneTouch,
+    oneTouchEligible: false,
   };
+  active.renderer.domElement.dataset.aiReceiveContinuation = "control-first";
+  active.renderer.domElement.dataset.aiReceivePasser = passer.id;
 }
 
 function executePendingReceiveAction(active: MatchRuntime, receiver: PlayerBody, immediateOnly = false) {
@@ -17237,7 +17170,7 @@ function resolveManualPassAim(
     : MAX_IMMEDIATE_AIM_ASSIST_RADIANS;
   const passDistance = style === "long"
     ? clamp(24 + charge * 52, 28, 78)
-    : clamp(18 + charge * 34, 20, 56);
+    : clamp(22 + charge * 50, 26, 72);
   const freshReceiver = manualAimReceiver(player, active, rawAim, passDistance, style);
   const lockedReceiver = active.manualAimReceiverId
     ? active.players.find((candidate) => candidate.id === active.manualAimReceiverId && candidate.team === player.team && !candidate.sentOff) ?? null
@@ -18122,7 +18055,7 @@ function manualAimReceiver(
 
 function tacticalChargeForKick(style: KickStyle, distance: number) {
   const distanceBoost = clamp((distance - 12) / 52, 0, 0.22);
-  if (style === "short") return clamp(0.62 + distanceBoost, 0.62, 0.88);
+  if (style === "short") return clamp(0.68 + distanceBoost, 0.68, 0.94);
   if (style === "low-through") return clamp(0.62 + distanceBoost, 0.62, 0.82);
   if (style === "through") return clamp(0.68 + distanceBoost, 0.68, 0.9);
   if (style === "long") return clamp(0.68 + distanceBoost, 0.68, 0.88);
@@ -18135,7 +18068,7 @@ function sharedKickForce(style: KickStyle, distance: number, charge: number, own
   const possessionFactor = ownsBall ? 1 : 0.96;
   const basePower = clamp(14.5 + distance * 0.34, 18.5, 38.5);
   let power = style === "short"
-    ? clamp(27.5 + distance * 0.66, 30, 55)
+    ? clamp(31 + distance * 0.78, 34, 64)
     : style === "low-through"
       ? clamp(21 + distance * 0.38, 23, 37)
       : style === "through"
@@ -18151,7 +18084,7 @@ function sharedKickForce(style: KickStyle, distance: number, charge: number, own
               : clamp(23 + distance * 0.56, 29, 57);
   const chargeResponse = 1 - Math.pow(1 - normalized, 1.34);
   const chargeFactor = style === "short"
-    ? 0.82 + chargeResponse * 0.5
+    ? 0.9 + chargeResponse * 0.58
     : style === "low-through"
       ? 0.84 + chargeResponse * 0.42
       : style === "through"
@@ -18164,7 +18097,7 @@ function sharedKickForce(style: KickStyle, distance: number, charge: number, own
               ? 0.64 + chargeResponse * 1.08
               : 0.8 + chargeResponse * 0.66;
   const minPower = style === "short"
-    ? 28
+    ? 34
     : style === "low-through"
       ? 24
       : style === "through"
@@ -18177,7 +18110,7 @@ function sharedKickForce(style: KickStyle, distance: number, charge: number, own
             ? 24
             : 28;
   const maxPower = style === "short"
-    ? 72
+    ? 84
     : style === "low-through"
       ? 45
       : style === "through"
@@ -18226,10 +18159,10 @@ function loftedPassForce(distance: number, charge: number, base: { power: number
 function safeGroundPassSpeed(player: PlayerBody, target: THREE.Vector3, active: MatchRuntime, distance: number) {
   const attackSign = Math.sign(attackingGoalZ(player.team, active.half));
   const backward = (target.z - player.pos.z) * attackSign < -1.8;
-  const desiredArrival = clamp(0.48 + distance / 48, 0.58, 1.5);
-  const frictionAllowance = 1 + clamp(distance / 150, 0.04, 0.38);
-  const distanceFloor = clamp(distance / desiredArrival * frictionAllowance, 24, 54);
-  return backward ? Math.max(29, distanceFloor) : distanceFloor;
+  const desiredArrival = clamp(0.44 + distance / 58, 0.52, 1.38);
+  const frictionAllowance = 1 + clamp(distance / 138, 0.06, 0.44);
+  const distanceFloor = clamp(distance / desiredArrival * frictionAllowance, 30, 64);
+  return backward ? Math.max(34, distanceFloor) : distanceFloor;
 }
 
 function manualChargedShotPlan(player: PlayerBody, active: MatchRuntime, charge: number, keys?: Set<string>) {
@@ -18448,9 +18381,12 @@ function takePossession(player: PlayerBody, active: MatchRuntime, verifiedFirstT
     player.recoveryTimer = Math.max(player.recoveryTimer, 0.08);
     player.decisionCooldown = Math.max(player.decisionCooldown, 0.2);
   }
-  if (!player.controlledBy && player.role !== "keeper") {
-    player.decisionCooldown = Math.max(player.decisionCooldown, 0.34);
-    player.carryTimer = Math.max(player.carryTimer, 0.08);
+  if ((!player.controlledBy || active.p1Autopilot) && player.role !== "keeper") {
+    player.decisionCooldown = Math.max(
+      player.decisionCooldown,
+      completedPassIntent ? AI_RECEIVE_DECISION_DELAY : 0.34,
+    );
+    player.carryTimer = 0;
     const wonFromOpponent = previousTouchTeam !== player.team;
     const recoveredLooseBall = previousBallState === "loose" && previousReceiverId !== player.id;
     if (wonFromOpponent || recoveredLooseBall) {
@@ -19298,7 +19234,7 @@ function choosePassTarget(player: PlayerBody, active: MatchRuntime, style: "shor
         const directionScore = clamp(forward, -7, 7);
         const passDir = teammate.pos.clone().sub(player.pos).setY(0);
         const facingScore = passDir.lengthSq() > 0.1 ? facingDirection(player).dot(passDir.normalize()) * 4.2 : 0;
-        const distanceScore = 48 - Math.abs(distance - 22) * 1.05;
+        const distanceScore = 48 - Math.abs(distance - 28) * 0.92;
         const receiverRunScore = teammate.vel.lengthSq() > 0.3 ? teammate.vel.clone().setY(0).normalize().dot(new THREE.Vector3(0, 0, attackSign)) * 2.4 : 0;
         return {
           teammate,
@@ -19311,7 +19247,7 @@ function choosePassTarget(player: PlayerBody, active: MatchRuntime, style: "shor
           buildoutRisk,
         };
       })
-      .filter(({ distance, open, riskyBackPass, laneUsable, buildoutRisk }) => distance > 4.2 && distance < 50 && laneUsable && open > 1.2 && !riskyBackPass && buildoutRisk.score < 31)
+      .filter(({ distance, open, riskyBackPass, laneUsable, buildoutRisk }) => distance > 4.2 && distance < 62 && laneUsable && open > 1.2 && !riskyBackPass && buildoutRisk.score < 31)
       .sort((a, b) => b.score - a.score)[0]?.teammate
       ?? candidates
         .filter((teammate) => !teammate.sentOff)
@@ -19631,14 +19567,14 @@ function assistedManualShotPhysics(
   const desiredGoalHeight = style === "driven"
     ? 0.58
     : style === "finesse"
-      ? clamp(0.86 + normalizedCharge * 0.92, 0.86, 1.78)
+      ? clamp(1.12 + normalizedCharge * 0.94, 1.12, 2.06)
       : distance < 19
-        ? clamp(0.92 + normalizedCharge * 1.04, 0.92, 1.96)
-        : clamp(1.02 + normalizedCharge * 1.28, 1.02, 2.3);
+        ? clamp(1.24 + normalizedCharge * 0.9, 1.24, 2.14)
+        : clamp(1.32 + normalizedCharge * 0.86, 1.32, 2.18);
   const lift = clamp(
     (desiredGoalHeight - active.ballPos.y + 0.5 * BALL_GRAVITY * travelTime * travelTime) / travelTime,
-    style === "driven" ? 0.42 : 2.4,
-    17.5,
+    style === "driven" ? 0.42 : 3.6,
+    21.5,
   );
   return { goalTarget, launchDirection, power, lift, curve, travelTime, desiredGoalHeight };
 }
